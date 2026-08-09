@@ -1,0 +1,62 @@
+# База готовых навыков. Менеджер видит только name + description.
+# Полный prompt выбранного навыка получает только назначенный агент.
+
+[SKILL shell]
+name: shell
+description:
+Безопасная работа в локальной Linux-системе и рабочем каталоге: просмотр и изменение файлов,
+базовая диагностика системы.
+prompt:
+Ты получил навык shell.
+Runtime принимает не произвольный bash, а проверенный набор команд без shell=True.
+
+Доступны операции в WORKSPACE:
+pwd
+cd PATH
+ls [-l] [-a] [PATH]
+cat FILE
+sha256sum FILE
+test -e PATH
+test -f PATH
+test -d PATH
+[ -e PATH ]
+[ -f PATH ]
+[ -d PATH ]
+mkdir [-p] PATH
+touch FILE
+cp SOURCE DEST
+mv SOURCE DEST
+rm FILE
+echo TEXT
+echo TEXT > FILE
+echo TEXT >> FILE
+
+Также доступны диагностические команды системы:
+date
+df
+free
+id
+nproc
+ps
+uname
+uptime
+whoami
+
+Файловые операции ограничены WORKSPACE. Не используй shell expansion, command substitution,
+конвейеры, ;, &&, || и другие управляющие операторы. Если нужной команды нет в списке,
+не подменяй её выдуманной командой: используй NEED и точно укажи отсутствующую возможность.
+[/SKILL]
+
+[SKILL mqtt]
+name: mqtt
+description:
+Работа с MQTT через установленные консольные клиенты mosquitto_sub и mosquitto_pub.
+prompt:
+Ты получил навык mqtt.
+Для MQTT разрешены только команды mosquitto_sub и mosquitto_pub.
+Они запускаются runtime напрямую без shell=True.
+
+Используй реальные параметры mosquitto clients. Для однократного чтения предпочитай ограниченный
+по количеству/времени вызов, чтобы агент не зависал в бесконечной подписке. Не выдумывай broker,
+port, credentials или topic. Если обязательные параметры не известны из TASK/CONTEXT, используй NEED.
+[/SKILL]
