@@ -41,10 +41,6 @@ class PromptStore:
         workspace: Path,
     ) -> str:
         parts = [
-            "[TASK]",
-            task.strip(),
-            "[/TASK]",
-            "",
             "[WORKSPACE]",
             str(workspace),
             "[/WORKSPACE]",
@@ -68,6 +64,14 @@ class PromptStore:
                         "[/CONTEXT]",
                     ]
                 )
+        parts.extend(
+            [
+                "",
+                "[TASK]",
+                task.strip(),
+                "[/TASK]",
+            ]
+        )
         text = "\n".join(parts).rstrip() + "\n"
         index = self._agent_index(agent_id)
         (self.prompt_dir / f"prompt_agent_{index}.txt").write_text(text, encoding="utf-8")
