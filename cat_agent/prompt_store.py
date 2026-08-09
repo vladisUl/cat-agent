@@ -58,10 +58,26 @@ class PromptStore:
                     "[/SKILL]",
                 ]
             )
+            context = self._skill_context(skill.name)
+            if context:
+                parts.extend(
+                    [
+                        "",
+                        f"[CONTEXT {skill.name}]",
+                        context,
+                        "[/CONTEXT]",
+                    ]
+                )
         text = "\n".join(parts).rstrip() + "\n"
         index = self._agent_index(agent_id)
         (self.prompt_dir / f"prompt_agent_{index}.txt").write_text(text, encoding="utf-8")
         return text
+
+    def _skill_context(self, skill_name: str) -> str:
+        path = self.prompt_dir / f"{skill_name}.txt"
+        if not path.is_file():
+            return ""
+        return path.read_text(encoding="utf-8").strip()
 
     def _read(self, name: str) -> str:
         return (self.prompt_dir / name).read_text(encoding="utf-8").strip()
