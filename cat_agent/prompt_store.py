@@ -4,6 +4,8 @@ from pathlib import Path
 
 from .skills import Skill
 
+AGENT_BOOTSTRAP_ACK = "READY"
+
 
 class PromptStore:
     def __init__(self, prompt_dir: Path, agent_count: int) -> None:
@@ -33,10 +35,8 @@ class PromptStore:
         path.write_text(text.rstrip() + "\n", encoding="utf-8")
         return path
 
-    def build_agent_prompt(
+    def build_agent_bootstrap(
         self,
-        agent_id: str,
-        task: str,
         skills: tuple[Skill, ...],
         workspace: Path,
     ) -> str:
@@ -61,21 +61,42 @@ class PromptStore:
                         "",
                         f"[CONTEXT {skill.name}]",
                         context,
-                        "[/CONTEXT]",
+                        f"[/CONTEXT]",
                     ]
                 )
         parts.extend(
             [
                 "",
-                "[TASK]",
-                task.strip(),
-                "[/TASK]",
+                "[BOOTSTRAP]",
+                "Контекст агента загружен. Следующее сообщение user содержит TASK.",
+                f"Подтверди инициализацию словом {AGENT_BOOTSTRAP_ACK}.",
+                "[/BOOTSTRAP]",
             ]
         )
-        text = "\n".join(parts).rstrip() + "\n"
-        index = self._agent_index(agent_id)
-        (self.prompt_dir / f"prompt_agent_{index}.txt").write_text(text, encoding="utf-8")
+        return "\n".join(parts).rstrip() + "\n"
+
+    @staticmethod
+    def build_agent_task(task: str) -> str:
+        return f"[TASK]\n{task.strip()}\n[/TASK]\n"
+
+    def build_agent_prompt(
+        self,
+        agent_id: str,
+        task: str,
+        skills: tuple[Skill, ...],
+        workspace: Path,
+    ) -> str:
+        bootstrap = self.build_agent_bootstrap(skills, workspace)
+        task_prompt = self.build_agent_task(task)
+        text = bootstrap.rstrip() + "\n\n" + task_prompt
+        self.write_agent_prompt(agent_id, text)
         return text
+
+    def write_agent_prompt(self, agent_id: str, text: str) -> Path:
+        index = self._agent_index(agent_id)
+        path = self.prompt_dir / f"prompt_agent_{index}.txt"
+        path.write_text(text.rstrip() + "\n", encoding="utf-8")
+        return path
 
     def _skill_context(self, skill_name: str) -> str:
         path = self.prompt_dir / f"{skill_name}.txt"
