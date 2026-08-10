@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from cat_agent.prompt_store import PromptStore
+from cat_agent.prompt_store import AGENT_BOOTSTRAP_ACK, PromptStore
 from cat_agent.skills import Skill
 
 
@@ -31,7 +31,7 @@ class PromptStoreTest(unittest.TestCase):
             self.assertIn("broker: 192.168.0.21", prompt)
             self.assertIn("topic: zigbee2mqtt/temp_ulica", prompt)
 
-    def test_task_is_after_stable_skill_context(self) -> None:
+    def test_task_is_separate_from_stable_bootstrap(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             prompt_dir = Path(temp)
             (prompt_dir / "mqtt.txt").write_text(
@@ -41,17 +41,17 @@ class PromptStoreTest(unittest.TestCase):
             store = PromptStore(prompt_dir, agent_count=1)
             skill = Skill(name="mqtt", description="MQTT", prompt="Use MQTT.")
 
-            prompt = store.build_agent_prompt(
-                "agent1",
-                "Read aquarium temperature",
-                (skill,),
-                Path("/opt/model"),
-            )
+            bootstrap = store.build_agent_bootstrap((skill,), Path("/opt/model"))
+            task = store.build_agent_task("Read aquarium temperature")
 
-            self.assertLess(prompt.index("[WORKSPACE]"), prompt.index("[SKILL mqtt]"))
-            self.assertLess(prompt.index("[SKILL mqtt]"), prompt.index("[CONTEXT mqtt]"))
-            self.assertLess(prompt.index("[CONTEXT mqtt]"), prompt.index("[TASK]"))
-            self.assertTrue(prompt.rstrip().endswith("[/TASK]"))
+            self.assertIn("[WORKSPACE]", bootstrap)
+            self.assertIn("[SKILL mqtt]", bootstrap)
+            self.assertIn("[CONTEXT mqtt]", bootstrap)
+            self.assertIn("[BOOTSTRAP]", bootstrap)
+            self.assertIn(AGENT_BOOTSTRAP_ACK, bootstrap)
+            self.assertNotIn("[TASK]", bootstrap)
+            self.assertNotIn("Read aquarium temperature", bootstrap)
+            self.assertEqual(task, "[TASK]\nRead aquarium temperature\n[/TASK]\n")
 
     def test_missing_skill_context_is_optional(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -59,15 +59,10 @@ class PromptStoreTest(unittest.TestCase):
             store = PromptStore(prompt_dir, agent_count=1)
             skill = Skill(name="shell", description="Shell", prompt="Use shell.")
 
-            prompt = store.build_agent_prompt(
-                "agent1",
-                "List files",
-                (skill,),
-                Path("/opt/model"),
-            )
+            bootstrap = store.build_agent_bootstrap((skill,), Path("/opt/model"))
 
-            self.assertIn("[SKILL shell]\nUse shell.\n[/SKILL]", prompt)
-            self.assertNotIn("[CONTEXT shell]", prompt)
+            self.assertIn("[SKILL shell]\nUse shell.\n[/SKILL]", bootstrap)
+            self.assertNotIn("[CONTEXT shell]", bootstrap)
 
 
 if __name__ == "__main__":
