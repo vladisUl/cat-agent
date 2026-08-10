@@ -4,27 +4,18 @@ set -e
 
 : "${CAT_AGENT_MODEL:?CAT_AGENT_MODEL is not set}"
 
-cd /opt/llama.cpp
+MTP_MODEL=/opt/llama.cpp/models/gemma-4/mtp-gemma-4-E4B-it.gguf
 
-extra_args=()
-ctx_checkpoints=32
-case "$(basename "$CAT_AGENT_MODEL")" in
-  gemma-4-E4B-it-*.gguf)
-    ctx_checkpoints=0
-    mtp_model=/opt/llama.cpp/models/gemma-4/mtp-gemma-4-E4B-it.gguf
-    if [[ ! -f "$mtp_model" ]]; then
-      echo "MTP model not found: $mtp_model" >&2
-      exit 1
-    fi
-    extra_args+=(
-      --spec-type draft-mtp
-      --spec-draft-model "$mtp_model"
-      --spec-draft-device none
-      --spec-draft-ngl 0
-      --spec-draft-n-max 3
-    )
-    ;;
-esac
+if [[ ! -f "$MTP_MODEL" ]]; then
+  echo "MTP model not found: $MTP_MODEL" >&2
+  exit 1
+fi
+
+echo "Model: $CAT_AGENT_MODEL"
+echo "MTP: $MTP_MODEL (draft-mtp, n_max=3, CPU)"
+echo "Slots: 2, ctx-checkpoints=0, cache-prompt=on"
+
+cd /opt/llama.cpp
 
 exec ./build-vulkan/bin/llama-server \
   -m "$CAT_AGENT_MODEL" \
@@ -37,5 +28,9 @@ exec ./build-vulkan/bin/llama-server \
   --reasoning-budget 0 \
   --cache-prompt \
   --cache-ram 0 \
-  --ctx-checkpoints "$ctx_checkpoints" \
-  "${extra_args[@]}"
+  --ctx-checkpoints 0 \
+  --spec-type draft-mtp \
+  --spec-draft-model "$MTP_MODEL" \
+  --spec-draft-device none \
+  --spec-draft-ngl 0 \
+  --spec-draft-n-max 3
