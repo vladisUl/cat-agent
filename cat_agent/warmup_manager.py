@@ -21,10 +21,20 @@ def main() -> int:
         return 1
 
     response = runtime.client.chat(runtime.messages)
+    cached = response.cached_tokens
+    prompt_n = response.prompt_evaluated_tokens
+    prefill = response.prompt_eval_seconds
+    new = prompt_n if prompt_n is not None else response.prompt_tokens
+
     print(
         "manager warmup: "
         f"{response.elapsed_seconds:.3f}s, "
-        f"prompt_tokens={response.prompt_tokens if response.prompt_tokens is not None else '?'}"
+        f"cached={cached if cached is not None else '?'}, "
+        f"new={new if new is not None else '?'}, "
+        f"prefill={prefill:.3f}s" if prefill is not None else
+        f"manager warmup: {response.elapsed_seconds:.3f}s, "
+        f"cached={cached if cached is not None else '?'}, "
+        f"new={new if new is not None else '?'}, prefill=?"
     )
     return 0
 
