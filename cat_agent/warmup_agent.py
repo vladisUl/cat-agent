@@ -13,15 +13,6 @@ from .prompt_store import AGENT_BOOTSTRAP_ACK
 
 LOGGER = logging.getLogger(__name__)
 WARMUP_SKILLS = ("mqtt",)
-SENTINEL_A = "A_CAT_AGENT_TASK_BOUNDARY_9f3e"
-SENTINEL_B = "Я_CAT_AGENT_TASK_BOUNDARY_4c71"
-
-
-def _server_root(api_base_url: str) -> str:
-    root = api_base_url.rstrip("/")
-    if root.endswith("/v1"):
-        root = root[:-3]
-    return root.rstrip("/")
 
 
 def _post_json(url: str, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
@@ -47,52 +38,6 @@ def _post_json(url: str, payload: dict[str, Any], timeout: int) -> dict[str, Any
     return decoded
 
 
-def _apply_template(
-    root: str,
-    messages: list[dict[str, str]],
-    timeout: int,
-) -> str:
-    response = _post_json(
-        f"{root}/apply-template",
-        {"messages": messages},
-        timeout,
-    )
-    prompt = response.get("prompt")
-    if not isinstance(prompt, str):
-        raise RuntimeError(f"/apply-template returned no prompt: {response!r}")
-    return prompt
-
-
-def _tokenize(root: str, text: str, timeout: int) -> list[int]:
-    # /apply-template already returns the model-ready chat prompt, including
-    # the template's own special markers. Adding BOS here would create a
-    # different token sequence from /v1/chat/completions and make slot reuse
-    # fail from token zero.
-    response = _post_json(
-        f"{root}/tokenize",
-        {
-            "content": text,
-            "add_special": False,
-            "parse_special": True,
-        },
-        timeout,
-    )
-    tokens = response.get("tokens")
-    if not isinstance(tokens, list) or not all(isinstance(token, int) for token in tokens):
-        raise RuntimeError(f"/tokenize returned invalid tokens: {response!r}")
-    return tokens
-
-
-def _common_prefix(left: list[int], right: list[int]) -> list[int]:
-    size = min(len(left), len(right))
-    index = 0
-    while index < size and left[index] == right[index]:
-        index += 1
-    if index == 0:
-        raise RuntimeError("agent warmup prompts have no common token prefix")
-    return left[:index]
-
-
 def main() -> int:
     settings = Settings.from_env()
     logging.basicConfig(
@@ -104,61 +49,62 @@ def main() -> int:
     if not runtime.client.wait_until_ready(lambda: False):
         return 1
 
-    worker = runtime.pool.get("agent1")
-    if worker is None:
-        raise RuntimeError("agent1 not found")
-
     skills = runtime.skill_base.require(WARMUP_SKILLS)
     bootstrap = runtime.prompt_store.build_agent_bootstrap(skills, settings.workspace)
-    base_messages = [
+
+    # Use the exact same /v1/chat/completions path as the real agent.  The final
+    # user message is deliberately left open: a real task begins with the same
+    # [TASK] prefix and continues from this point.  With zero completion tokens
+    # the server only evaluates the prompt into slot 1; it generates nothing.
+    messages = [
         {
             "role": "system",
             "content": runtime.prompt_store.agent_system_prompt("agent1"),
         },
         {"role": "user", "content": bootstrap},
         {"role": "assistant", "content": AGENT_BOOTSTRAP_ACK},
+        {"role": "user", "content": "[TASK]"},
     ]
-
-    # Render two otherwise identical conversations whose TASK contents begin
-    # differently. Their token-level longest common prefix is therefore the
-    # exact immutable chat-template prefix immediately before variable TASK
-    # content. No fake task or generated answer is stored after that boundary.
-    messages_a = base_messages + [
-        {"role": "user", "content": runtime.prompt_store.build_agent_task(SENTINEL_A)}
-    ]
-    messages_b = base_messages + [
-        {"role": "user", "content": runtime.prompt_store.build_agent_task(SENTINEL_B)}
-    ]
-
-    root = _server_root(settings.api_base_url)
-    timeout = settings.http_timeout_seconds
-    prompt_a = _apply_template(root, messages_a, timeout)
-    prompt_b = _apply_template(root, messages_b, timeout)
-    tokens_a = _tokenize(root, prompt_a, timeout)
-    tokens_b = _tokenize(root, prompt_b, timeout)
-    prefix_tokens = _common_prefix(tokens_a, tokens_b)
 
     started = time.monotonic()
     response = _post_json(
-        f"{root}/completion",
+        f"{settings.api_base_url}/chat/completions",
         {
-            "prompt": prefix_tokens,
-            "n_predict": 0,
+            "model": settings.model,
+            "messages": messages,
+            "stream": False,
+            "max_completion_tokens": 0,
+            "temperature": settings.temperature,
+            "top_p": settings.top_p,
+            "reasoning_effort": settings.reasoning_effort,
             "id_slot": AGENT_SLOT,
             "cache_prompt": True,
+            "continue_final_message": True,
         },
-        timeout,
+        settings.http_timeout_seconds,
     )
     elapsed = time.monotonic() - started
 
-    tokens_cached = response.get("tokens_cached")
-    tokens_evaluated = response.get("tokens_evaluated")
+    timings = response.get("timings")
+    cache_n: int | None = None
+    prompt_n: int | None = None
+    prompt_ms: float | None = None
+    if isinstance(timings, dict):
+        if isinstance(timings.get("cache_n"), int):
+            cache_n = timings["cache_n"]
+        if isinstance(timings.get("prompt_n"), int):
+            prompt_n = timings["prompt_n"]
+        if isinstance(timings.get("prompt_ms"), (int, float)):
+            prompt_ms = float(timings["prompt_ms"])
+
     print(
         "agent warmup: "
         f"{elapsed:.3f}s, "
-        f"prefix_tokens={len(prefix_tokens)}, "
-        f"cached={tokens_cached if isinstance(tokens_cached, int) else '?'}, "
-        f"evaluated={tokens_evaluated if isinstance(tokens_evaluated, int) else '?'}"
+        f"cached={cache_n if cache_n is not None else '?'}, "
+        f"new={prompt_n if prompt_n is not None else '?'}, "
+        f"prefill={prompt_ms / 1000.0:.3f}s" if prompt_ms is not None else
+        f"agent warmup: {elapsed:.3f}s, cached={cache_n if cache_n is not None else '?'}, "
+        f"new={prompt_n if prompt_n is not None else '?'}, prefill=?"
     )
     return 0
 
