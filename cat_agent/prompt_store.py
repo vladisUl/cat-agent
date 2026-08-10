@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .skills import Skill
 
+MANAGER_BOOTSTRAP_ACK = "READY"
 AGENT_BOOTSTRAP_ACK = "READY"
 
 
