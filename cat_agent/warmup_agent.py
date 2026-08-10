@@ -64,11 +64,15 @@ def _apply_template(
 
 
 def _tokenize(root: str, text: str, timeout: int) -> list[int]:
+    # /apply-template already returns the model-ready chat prompt, including
+    # the template's own special markers. Adding BOS here would create a
+    # different token sequence from /v1/chat/completions and make slot reuse
+    # fail from token zero.
     response = _post_json(
         f"{root}/tokenize",
         {
             "content": text,
-            "add_special": True,
+            "add_special": False,
             "parse_special": True,
         },
         timeout,
