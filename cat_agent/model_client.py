@@ -20,6 +20,10 @@ class ChatResponse:
     prompt_tokens: int | None
     completion_tokens: int | None
     elapsed_seconds: float
+    cached_tokens: int | None = None
+    prompt_evaluated_tokens: int | None = None
+    prompt_seconds: float | None = None
+    generation_seconds: float | None = None
 
 
 class OpenAIChatClient:
@@ -138,9 +142,10 @@ class OpenAIChatClient:
                 f"by this agent: {message!r}"
             )
 
-        usage = response.get("usage")
         prompt_tokens: int | None = None
         completion_tokens: int | None = None
+        cached_tokens: int | None = None
+        usage = response.get("usage")
         if isinstance(usage, dict):
             prompt_value = usage.get("prompt_tokens")
             completion_value = usage.get("completion_tokens")
@@ -148,12 +153,39 @@ class OpenAIChatClient:
                 prompt_tokens = prompt_value
             if isinstance(completion_value, int):
                 completion_tokens = completion_value
+            details = usage.get("prompt_tokens_details")
+            if isinstance(details, dict):
+                cached_value = details.get("cached_tokens")
+                if isinstance(cached_value, int):
+                    cached_tokens = cached_value
+
+        prompt_evaluated_tokens: int | None = None
+        prompt_seconds: float | None = None
+        generation_seconds: float | None = None
+        timings = response.get("timings")
+        if isinstance(timings, dict):
+            cache_n = timings.get("cache_n")
+            prompt_n = timings.get("prompt_n")
+            prompt_ms = timings.get("prompt_ms")
+            predicted_ms = timings.get("predicted_ms")
+            if cached_tokens is None and isinstance(cache_n, int):
+                cached_tokens = cache_n
+            if isinstance(prompt_n, int):
+                prompt_evaluated_tokens = prompt_n
+            if isinstance(prompt_ms, (int, float)):
+                prompt_seconds = float(prompt_ms) / 1000.0
+            if isinstance(predicted_ms, (int, float)):
+                generation_seconds = float(predicted_ms) / 1000.0
 
         return ChatResponse(
             content=content,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             elapsed_seconds=elapsed,
+            cached_tokens=cached_tokens,
+            prompt_evaluated_tokens=prompt_evaluated_tokens,
+            prompt_seconds=prompt_seconds,
+            generation_seconds=generation_seconds,
         )
 
     def _send(self, http_request: request.Request) -> dict[str, Any]:
