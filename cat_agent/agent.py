@@ -115,12 +115,22 @@ class AgentWorker:
                 return AgentOutcome(self.agent_id, "FAILED", str(exc), step)
 
             LOGGER.info(
-                "%s step %d response in %.3f s: prompt_tokens=%s completion_tokens=%s content=%r",
+                "%s step %d response in %.3f s: prompt=%s cached=%s new=%s prefill=%s completion=%s generate=%s content=%r",
                 self.agent_id,
                 step,
                 response.elapsed_seconds,
                 response.prompt_tokens if response.prompt_tokens is not None else "?",
+                response.cached_tokens if response.cached_tokens is not None else "?",
+                response.prompt_evaluated_tokens
+                if response.prompt_evaluated_tokens is not None
+                else "?",
+                f"{response.prompt_seconds:.3f}s"
+                if response.prompt_seconds is not None
+                else "?",
                 response.completion_tokens if response.completion_tokens is not None else "?",
+                f"{response.generation_seconds:.3f}s"
+                if response.generation_seconds is not None
+                else "?",
                 " ".join(response.content.strip().split())[:300],
             )
             self._messages.append({"role": "assistant", "content": response.content})
