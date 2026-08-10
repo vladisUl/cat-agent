@@ -52,10 +52,12 @@ def main() -> int:
     skills = runtime.skill_base.require(WARMUP_SKILLS)
     bootstrap = runtime.prompt_store.build_agent_bootstrap(skills, settings.workspace)
 
-    # Use the exact same /v1/chat/completions path as the real agent.  The final
+    # Use the exact same /v1/chat/completions path as the real agent. The final
     # user message is deliberately left open: a real task begins with the same
-    # [TASK] prefix and continues from this point.  With zero completion tokens
-    # the server only evaluates the prompt into slot 1; it generates nothing.
+    # [TASK] prefix and continues from this point. Disable the template's normal
+    # assistant-generation suffix because it is mutually exclusive with
+    # continue_final_message. With zero completion tokens the server should only
+    # evaluate this prefix into slot 1 and generate nothing.
     messages = [
         {
             "role": "system",
@@ -80,6 +82,7 @@ def main() -> int:
             "id_slot": AGENT_SLOT,
             "cache_prompt": True,
             "continue_final_message": True,
+            "chat_template_kwargs": {"add_generation_prompt": False},
         },
         settings.http_timeout_seconds,
     )
