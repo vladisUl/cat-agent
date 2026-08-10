@@ -6,20 +6,27 @@ import sys
 from .config import Settings
 from .main import build_runtime
 
-LOGGER = logging.getLogger(__name__)
 MANAGER_SLOT = 0
 AGENT_SLOT = 1
 
 
-def _log_response(label: str, response) -> None:
-    LOGGER.info(
-        "%s response in %.3f s: prompt_tokens=%s completion_tokens=%s content=%r",
-        label,
-        response.elapsed_seconds,
-        response.prompt_tokens if response.prompt_tokens is not None else "?",
-        response.completion_tokens if response.completion_tokens is not None else "?",
-        " ".join(response.content.strip().split())[:300],
-    )
+def _fmt(value: float | None) -> str:
+    return "-" if value is None else f"{value:.3f}s"
+
+
+def _print_summary(results: list[tuple[str, object]]) -> None:
+    print("\nTIMINGS")
+    print("#  role/slot                  wall      prefill    generate   prompt  cached")
+    for index, (label, response) in enumerate(results, 1):
+        prompt_tokens = "-" if response.prompt_tokens is None else str(response.prompt_tokens)
+        cached_tokens = "-" if response.cached_tokens is None else str(response.cached_tokens)
+        print(
+            f"{index:<2} {label:<26} "
+            f"{response.elapsed_seconds:>8.3f}s  "
+            f"{_fmt(response.prompt_seconds):>9}  "
+            f"{_fmt(response.generation_seconds):>9}  "
+            f"{prompt_tokens:>6}  {cached_tokens:>6}"
+        )
 
 
 def main() -> int:
@@ -33,26 +40,24 @@ def main() -> int:
     if not runtime.client.wait_until_ready(lambda: False):
         return 1
 
-    print(
-        "CACHE PROBE: manager(slot0) -> manager(slot0) -> "
-        "agent(slot1) -> manager(slot0)"
-    )
+    print("CACHE PROBE: M0 -> M0 -> A1 -> A1 -> M0 -> A1")
+    results: list[tuple[str, object]] = []
 
-    # 1. Manager request #1: cold full manager context in slot 0.
+    # 1. Manager, cold slot 0.
     runtime.messages.append({"role": "user", "content": "привет"})
-    response1 = runtime.client.chat(runtime.messages, id_slot=MANAGER_SLOT)
-    _log_response("PROBE 1 MANAGER SLOT0", response1)
-    runtime.messages.append({"role": "assistant", "content": response1.content})
+    response = runtime.client.chat(runtime.messages, id_slot=MANAGER_SLOT)
+    results.append(("MANAGER slot0", response))
+    runtime.messages.append({"role": "assistant", "content": response.content})
 
-    # 2. Manager request #2: continue the same manager context in slot 0.
+    # 2. Manager again, same slot and conversation.
     runtime.messages.append(
         {"role": "user", "content": "Скажи только одно слово: готов"}
     )
-    response2 = runtime.client.chat(runtime.messages, id_slot=MANAGER_SLOT)
-    _log_response("PROBE 2 MANAGER SLOT0", response2)
-    runtime.messages.append({"role": "assistant", "content": response2.content})
+    response = runtime.client.chat(runtime.messages, id_slot=MANAGER_SLOT)
+    results.append(("MANAGER slot0", response))
+    runtime.messages.append({"role": "assistant", "content": response.content})
 
-    # 3. Agent request: a separate complete agent context pinned to slot 1.
+    # Build one independent agent conversation for slot 1.
     skills = runtime.skill_base.require(("mqtt",))
     agent_prompt = runtime.prompt_store.build_agent_prompt(
         "agent1",
@@ -70,17 +75,36 @@ def main() -> int:
     worker = runtime.pool.get("agent1")
     if worker is None:
         raise RuntimeError("agent1 not found")
-    response3 = worker.client.chat(agent_messages, id_slot=AGENT_SLOT)
-    _log_response("PROBE 3 AGENT SLOT1", response3)
 
-    # 4. Return to manager slot 0.  Slot 1 must not have displaced slot 0 KV.
+    # 3. Agent, cold slot 1.
+    response = worker.client.chat(agent_messages, id_slot=AGENT_SLOT)
+    results.append(("AGENT slot1", response))
+    agent_messages.append({"role": "assistant", "content": response.content})
+
+    # 4. Agent again, same slot and conversation.
+    agent_messages.append(
+        {"role": "user", "content": "Ответь DONE и одним словом: второй"}
+    )
+    response = worker.client.chat(agent_messages, id_slot=AGENT_SLOT)
+    results.append(("AGENT slot1", response))
+    agent_messages.append({"role": "assistant", "content": response.content})
+
+    # 5. Return to manager slot 0.
     runtime.messages.append(
         {"role": "user", "content": "Скажи только одно слово: снова"}
     )
-    response4 = runtime.client.chat(runtime.messages, id_slot=MANAGER_SLOT)
-    _log_response("PROBE 4 MANAGER SLOT0 AFTER AGENT", response4)
+    response = runtime.client.chat(runtime.messages, id_slot=MANAGER_SLOT)
+    results.append(("MANAGER slot0", response))
+    runtime.messages.append({"role": "assistant", "content": response.content})
 
-    print("CACHE PROBE DONE")
+    # 6. Return to agent slot 1.
+    agent_messages.append(
+        {"role": "user", "content": "Ответь DONE и одним словом: третий"}
+    )
+    response = worker.client.chat(agent_messages, id_slot=AGENT_SLOT)
+    results.append(("AGENT slot1", response))
+
+    _print_summary(results)
     return 0
 
 
