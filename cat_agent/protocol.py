@@ -72,13 +72,11 @@ def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirec
         skills_text = first[len("DELEGATE ") :].strip()
         if not skills_text:
             return ManagerDirective(None, "", error="DELEGATE requires at least one skill")
-        parsed_skills = tuple(item.strip() for item in skills_text.split(",") if item.strip())
-        if not parsed_skills or any(not _SKILL_RE.fullmatch(item) for item in parsed_skills):
+        skills = tuple(item.strip() for item in skills_text.split(",") if item.strip())
+        if not skills or any(not _SKILL_RE.fullmatch(item) for item in skills):
             return ManagerDirective(None, "", error="invalid DELEGATE skill list")
-        # Weak/local models sometimes repeat the same skill (for example
-        # "DELEGATE mqtt,mqtt"). Treat that as harmless redundancy rather than
-        # a protocol failure. dict.fromkeys preserves the model's original order.
-        skills = tuple(dict.fromkeys(parsed_skills))
+        if len(set(skills)) != len(skills):
+            return ManagerDirective(None, "", error="DELEGATE contains duplicate skills")
         if not body:
             return ManagerDirective(None, "", error="DELEGATE requires a task on following lines")
         return ManagerDirective(ManagerAction.DELEGATE, body, skills=skills)
