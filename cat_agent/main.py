@@ -13,8 +13,16 @@ from .skills import SkillBase
 
 LOGGER = logging.getLogger(__name__)
 
+MANAGER_SLOT = 0
+AGENT_SLOT = 1
 
-def _client(settings: Settings, *, max_output_tokens: int) -> OpenAIChatClient:
+
+def _client(
+    settings: Settings,
+    *,
+    max_output_tokens: int,
+    id_slot: int,
+) -> OpenAIChatClient:
     return OpenAIChatClient(
         api_base_url=settings.api_base_url,
         model=settings.model,
@@ -25,6 +33,7 @@ def _client(settings: Settings, *, max_output_tokens: int) -> OpenAIChatClient:
         temperature=settings.temperature,
         top_p=settings.top_p,
         reasoning_effort=settings.reasoning_effort,
+        id_slot=id_slot,
     )
 
 
@@ -33,8 +42,19 @@ def build_runtime(settings: Settings) -> ManagerRuntime:
     prompt_store.validate()
     skill_base = SkillBase(settings.prompt_dir / "prompt_base.txt")
 
-    manager_client = _client(settings, max_output_tokens=settings.manager_max_output_tokens)
-    agent_client = _client(settings, max_output_tokens=settings.agent_max_output_tokens)
+    # The runtime is sequential at the model level. The manager keeps slot 0;
+    # all neutral agent containers use the shared execution slot 1. Switching
+    # roles therefore does not evict the other role's KV cache.
+    manager_client = _client(
+        settings,
+        max_output_tokens=settings.manager_max_output_tokens,
+        id_slot=MANAGER_SLOT,
+    )
+    agent_client = _client(
+        settings,
+        max_output_tokens=settings.agent_max_output_tokens,
+        id_slot=AGENT_SLOT,
+    )
 
     workers = [
         AgentWorker(
@@ -69,6 +89,7 @@ def main() -> int:
     LOGGER.info("Prompt dir: %s", settings.prompt_dir)
     LOGGER.info("Model endpoint: %s model=%s", settings.api_base_url, settings.model)
     LOGGER.info("Agent containers: %d", settings.agent_count)
+    LOGGER.info("Model slots: manager=%d agent=%d", MANAGER_SLOT, AGENT_SLOT)
     LOGGER.info("Model reasoning effort request: %s", settings.reasoning_effort)
 
     runtime = build_runtime(settings)
