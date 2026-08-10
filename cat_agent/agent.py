@@ -49,6 +49,7 @@ class AgentWorker:
         self.command_timeout_seconds = command_timeout_seconds
         self.state = AgentState.FREE
         self._messages: list[dict[str, str]] | None = None
+        self._session_bootstrap: str | None = None
         self._runtime: CommandRuntime | None = None
         self._skills: tuple[Skill, ...] = ()
         self._steps_used = 0
@@ -65,15 +66,23 @@ class AgentWorker:
             bootstrap.rstrip() + "\n\n" + task_prompt,
         )
 
-        # Keep the large, stable environment/skill prefix in complete chat turns.
-        # TASK is always a new user turn, so changing the task does not rewrite
-        # the bootstrap prefix stored in the dedicated agent llama-server slot.
-        self._messages = [
-            {"role": "system", "content": self.prompt_store.agent_system_prompt(self.agent_id)},
-            {"role": "user", "content": bootstrap},
-            {"role": "assistant", "content": AGENT_BOOTSTRAP_ACK},
-            {"role": "user", "content": task_prompt},
-        ]
+        if self._messages is not None and self._session_bootstrap == bootstrap:
+            # Same environment/skills: continue the existing model history.
+            # This is append-only for llama-server and avoids an SWA rewind.
+            self._messages.append({"role": "user", "content": task_prompt})
+        else:
+            # New environment/skill profile: create a fresh stable bootstrap.
+            self._messages = [
+                {
+                    "role": "system",
+                    "content": self.prompt_store.agent_system_prompt(self.agent_id),
+                },
+                {"role": "user", "content": bootstrap},
+                {"role": "assistant", "content": AGENT_BOOTSTRAP_ACK},
+                {"role": "user", "content": task_prompt},
+            ]
+            self._session_bootstrap = bootstrap
+
         self._runtime = CommandRuntime(
             self.workspace,
             tuple(skill.name for skill in skills),
@@ -102,7 +111,7 @@ class AgentWorker:
             try:
                 response = self.client.chat(self._messages)
             except ModelClientError as exc:
-                self._release()
+                self._release(preserve_session=False)
                 return AgentOutcome(self.agent_id, "FAILED", str(exc), step)
 
             LOGGER.info(
@@ -125,7 +134,7 @@ class AgentWorker:
 
             if directive.action is AgentAction.DONE:
                 text = directive.body
-                self._release()
+                self._release(preserve_session=True)
                 return AgentOutcome(self.agent_id, "OK", text, step)
 
             if directive.action is AgentAction.NEED:
@@ -145,7 +154,7 @@ class AgentWorker:
             signature = (directive.command, result.exit_code, result.stdout, result.stderr)
             repeated[signature] = repeated.get(signature, 0) + 1
             if repeated[signature] > 2:
-                self._release()
+                self._release(preserve_session=False)
                 return AgentOutcome(
                     self.agent_id,
                     "FAILED",
@@ -155,7 +164,7 @@ class AgentWorker:
             self._messages.append({"role": "user", "content": self._runtime.format_result(result)})
 
         used = self._steps_used
-        self._release()
+        self._release(preserve_session=False)
         return AgentOutcome(
             self.agent_id,
             "FAILED",
@@ -163,9 +172,11 @@ class AgentWorker:
             used,
         )
 
-    def _release(self) -> None:
+    def _release(self, *, preserve_session: bool) -> None:
         self.state = AgentState.FREE
-        self._messages = None
+        if not preserve_session:
+            self._messages = None
+            self._session_bootstrap = None
         self._runtime = None
         self._skills = ()
         self._steps_used = 0
