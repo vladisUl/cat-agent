@@ -19,9 +19,6 @@ class ChatResponse:
     content: str
     prompt_tokens: int | None
     completion_tokens: int | None
-    cached_tokens: int | None
-    prompt_seconds: float | None
-    generation_seconds: float | None
     elapsed_seconds: float
 
 
@@ -30,6 +27,10 @@ class OpenAIChatClient:
 
     It deliberately does not send tools/tool_choice and does not consume
     tool_calls. The model server is used only as a text-generation backend.
+
+    When ``id_slot`` is set, llama-server requests are pinned to that slot and
+    prompt caching is enabled for the slot. This keeps independent long-lived
+    KV caches for the manager and agent roles.
     """
 
     def __init__(
@@ -43,6 +44,7 @@ class OpenAIChatClient:
         temperature: float,
         top_p: float,
         reasoning_effort: str,
+        id_slot: int | None = None,
     ) -> None:
         self.api_base_url = api_base_url.rstrip("/")
         self.model = model
@@ -53,6 +55,7 @@ class OpenAIChatClient:
         self.temperature = temperature
         self.top_p = top_p
         self.reasoning_effort = reasoning_effort
+        self.id_slot = id_slot
 
     @property
     def chat_url(self) -> str:
@@ -92,12 +95,7 @@ class OpenAIChatClient:
                 time.sleep(interval)
         return False
 
-    def chat(
-        self,
-        messages: list[dict[str, str]],
-        *,
-        id_slot: int | None = None,
-    ) -> ChatResponse:
+    def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -107,9 +105,8 @@ class OpenAIChatClient:
             "top_p": self.top_p,
             "reasoning_effort": self.reasoning_effort,
         }
-
-        if id_slot is not None:
-            payload["id_slot"] = id_slot
+        if self.id_slot is not None:
+            payload["id_slot"] = self.id_slot
             payload["cache_prompt"] = True
 
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -141,10 +138,9 @@ class OpenAIChatClient:
                 f"by this agent: {message!r}"
             )
 
+        usage = response.get("usage")
         prompt_tokens: int | None = None
         completion_tokens: int | None = None
-        cached_tokens: int | None = None
-        usage = response.get("usage")
         if isinstance(usage, dict):
             prompt_value = usage.get("prompt_tokens")
             completion_value = usage.get("completion_tokens")
@@ -152,30 +148,11 @@ class OpenAIChatClient:
                 prompt_tokens = prompt_value
             if isinstance(completion_value, int):
                 completion_tokens = completion_value
-            details = usage.get("prompt_tokens_details")
-            if isinstance(details, dict):
-                cached_value = details.get("cached_tokens")
-                if isinstance(cached_value, int):
-                    cached_tokens = cached_value
-
-        prompt_seconds: float | None = None
-        generation_seconds: float | None = None
-        timings = response.get("timings")
-        if isinstance(timings, dict):
-            prompt_ms = timings.get("prompt_ms")
-            predicted_ms = timings.get("predicted_ms")
-            if isinstance(prompt_ms, (int, float)):
-                prompt_seconds = float(prompt_ms) / 1000.0
-            if isinstance(predicted_ms, (int, float)):
-                generation_seconds = float(predicted_ms) / 1000.0
 
         return ChatResponse(
             content=content,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            cached_tokens=cached_tokens,
-            prompt_seconds=prompt_seconds,
-            generation_seconds=generation_seconds,
             elapsed_seconds=elapsed,
         )
 
