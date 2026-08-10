@@ -99,6 +99,13 @@ class OpenAIChatClient:
             "top_p": self.top_p,
             "reasoning_effort": self.reasoning_effort,
         }
+
+        # TEMP DEBUG: expose the exact logical request sent to the model server.
+        LOGGER.info(
+            "MODEL REQUEST BEGIN\n%s\nMODEL REQUEST END",
+            json.dumps(payload, ensure_ascii=False, indent=2),
+        )
+
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         http_request = request.Request(
             self.chat_url,
@@ -110,6 +117,12 @@ class OpenAIChatClient:
         started = time.monotonic()
         response = self._send(http_request)
         elapsed = time.monotonic() - started
+
+        # TEMP DEBUG: expose the complete raw JSON response before parsing it.
+        LOGGER.info(
+            "MODEL RESPONSE BEGIN\n%s\nMODEL RESPONSE END",
+            json.dumps(response, ensure_ascii=False, indent=2),
+        )
 
         try:
             message = response["choices"][0]["message"]
