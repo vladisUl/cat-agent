@@ -17,11 +17,10 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(item.skills, ("shell", "mqtt"))
         self.assertEqual(item.body, "Сделай задачу")
 
-    def test_manager_delegate_deduplicates_skills(self) -> None:
+    def test_manager_delegate_rejects_duplicate_skills(self) -> None:
         item = parse_manager_output("DELEGATE mqtt,mqtt\nПолучи температуру")
-        self.assertEqual(item.action, ManagerAction.DELEGATE)
-        self.assertEqual(item.skills, ("mqtt",))
-        self.assertIsNone(item.error)
+        self.assertIsNone(item.action)
+        self.assertEqual(item.error, "DELEGATE contains duplicate skills")
 
     def test_manager_continue(self) -> None:
         item = parse_manager_output("CONTINUE agent2\nbroker=127.0.0.1")
