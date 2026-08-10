@@ -78,6 +78,46 @@ class IntegrationTest(unittest.TestCase):
             self.assertIn("[TASK]", first_agent_call[3]["content"])
             self.assertIn("Посмотри список файлов", first_agent_call[3]["content"])
 
+    def test_repeated_matching_agent_tasks_append_to_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prompt_dir = root / "prompts"
+            shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+
+            client = FakeClient(
+                [
+                    "DONE\nПервая задача выполнена.",
+                    "DONE\nВторая задача выполнена.",
+                ]
+            )
+            store = PromptStore(prompt_dir, 3)
+            store.validate()
+            worker = AgentWorker(
+                "agent1",
+                client,  # type: ignore[arg-type]
+                store,
+                workspace,
+                max_steps=4,
+                max_file_bytes=1024,
+                command_timeout_seconds=2,
+            )
+            mqtt = SkillBase(prompt_dir / "prompt_base.txt").require(("mqtt",))
+
+            first = worker.start("Посмотри температуру на улице.", mqtt)
+            self.assertEqual(first.status, "OK")
+            self.assertEqual(worker.state.value, "FREE")
+
+            first_call = client.calls[0]
+            second = worker.start("Посмотри температуру в аквариуме.", mqtt)
+            self.assertEqual(second.status, "OK")
+            second_call = client.calls[1]
+
+            self.assertEqual(second_call[: len(first_call)], first_call)
+            self.assertEqual(second_call[len(first_call)]["role"], "user")
+            self.assertIn("температуру в аквариуме", second_call[len(first_call)]["content"])
+
     def test_need_ask_continue_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
