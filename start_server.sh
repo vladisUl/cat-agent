@@ -7,8 +7,10 @@ set -e
 cd /opt/llama.cpp
 
 extra_args=()
+ctx_checkpoints=32
 case "$(basename "$CAT_AGENT_MODEL")" in
   gemma-4-E4B-it-*.gguf)
+    ctx_checkpoints=0
     mtp_model=/opt/llama.cpp/models/gemma-4/mtp-gemma-4-E4B-it.gguf
     if [[ ! -f "$mtp_model" ]]; then
       echo "MTP model not found: $mtp_model" >&2
@@ -35,5 +37,5 @@ exec ./build-vulkan/bin/llama-server \
   --reasoning-budget 0 \
   --cache-prompt \
   --cache-ram 0 \
-  --ctx-checkpoints 0 \
+  --ctx-checkpoints "$ctx_checkpoints" \
   "${extra_args[@]}"
