@@ -89,8 +89,13 @@ class OpenAIChatClient:
                 time.sleep(interval)
         return False
 
-    def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
-        payload = {
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        id_slot: int | None = None,
+    ) -> ChatResponse:
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "stream": False,
@@ -99,6 +104,12 @@ class OpenAIChatClient:
             "top_p": self.top_p,
             "reasoning_effort": self.reasoning_effort,
         }
+
+        # llama-server extension used only when a caller explicitly requests it.
+        # Normal OpenAI-compatible calls remain unchanged.
+        if id_slot is not None:
+            payload["id_slot"] = id_slot
+            payload["cache_prompt"] = True
 
         # TEMP DEBUG: expose the exact logical request sent to the model server.
         LOGGER.info(
