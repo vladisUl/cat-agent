@@ -30,6 +30,21 @@ llama-server \
   --ctx-checkpoints 0
 ```
 
+## Warmup
+
+After `llama-server` is ready, the two persistent role slots can be prefilled before the interactive application starts:
+
+```bash
+python3 -m cat_agent.warmup_manager
+python3 -m cat_agent.warmup_agent
+```
+
+The manager warmup evaluates its normal bootstrap in slot `0`.
+
+The agent warmup evaluates only the immutable MQTT agent prefix in slot `1`. It asks llama-server to apply the active chat template to two tasks with deliberately different contents, finds their token-level common prefix, and submits exactly that prefix to `/completion` with `n_predict=0`. No fake TASK or generated answer remains after the warmup boundary.
+
+Real agent conversations use complete stable bootstrap turns followed by TASK as a separate user turn. Changing only TASK therefore does not rewrite the large workspace/skill/context prefix.
+
 ## Run
 
 Python 3.10 or newer is required. The project has no Python package dependencies.
