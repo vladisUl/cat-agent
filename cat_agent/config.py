@@ -51,6 +51,10 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         project_root = Path(__file__).resolve().parent.parent
+        model = os.getenv("CAT_AGENT_MODEL", "").strip()
+        if not model:
+            raise ValueError("CAT_AGENT_MODEL must be set")
+
         reasoning_effort = os.getenv("CAT_AGENT_REASONING_EFFORT", "none").strip().lower()
         allowed_reasoning = {"none", "minimal", "low", "medium", "high", "xhigh"}
         if reasoning_effort not in allowed_reasoning:
@@ -65,10 +69,7 @@ class Settings:
             api_base_url=os.getenv(
                 "CAT_AGENT_API_BASE_URL", "http://127.0.0.1:9380/v1"
             ).rstrip("/"),
-            model=os.getenv(
-                "CAT_AGENT_MODEL",
-                "/opt/llama.cpp/models/gemma-4/gemma-4-E4B-it-Q4_K_M.gguf",
-            ),
+            model=model,
             agent_count=_env_int("CAT_AGENT_AGENT_COUNT", 3, minimum=1),
             max_manager_steps=_env_int("CAT_AGENT_MAX_MANAGER_STEPS", 12, minimum=1),
             max_agent_steps=_env_int("CAT_AGENT_MAX_AGENT_STEPS", 12, minimum=1),
