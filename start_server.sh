@@ -2,10 +2,12 @@
 
 set -e
 
+: "${CAT_AGENT_MODEL:?CAT_AGENT_MODEL is not set}"
+
 cd /opt/llama.cpp
 
 exec ./build-vulkan/bin/llama-server \
-  -m /opt/llama.cpp/models/gemma-4/gemma-4-E4B-it-Q4_K_M.gguf \
+  -m "$CAT_AGENT_MODEL" \
   --host 0.0.0.0 \
   --port 9380 \
   --parallel 2 \
@@ -21,4 +23,3 @@ exec ./build-vulkan/bin/llama-server \
   --spec-draft-device none \
   --spec-draft-ngl 0 \
   --spec-draft-n-max 3
-
