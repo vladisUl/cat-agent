@@ -19,6 +19,9 @@ class ChatResponse:
     content: str
     prompt_tokens: int | None
     completion_tokens: int | None
+    cached_tokens: int | None
+    prompt_seconds: float | None
+    generation_seconds: float | None
     elapsed_seconds: float
 
 
@@ -105,17 +108,9 @@ class OpenAIChatClient:
             "reasoning_effort": self.reasoning_effort,
         }
 
-        # llama-server extension used only when a caller explicitly requests it.
-        # Normal OpenAI-compatible calls remain unchanged.
         if id_slot is not None:
             payload["id_slot"] = id_slot
             payload["cache_prompt"] = True
-
-        # TEMP DEBUG: expose the exact logical request sent to the model server.
-        LOGGER.info(
-            "MODEL REQUEST BEGIN\n%s\nMODEL REQUEST END",
-            json.dumps(payload, ensure_ascii=False, indent=2),
-        )
 
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         http_request = request.Request(
@@ -128,12 +123,6 @@ class OpenAIChatClient:
         started = time.monotonic()
         response = self._send(http_request)
         elapsed = time.monotonic() - started
-
-        # TEMP DEBUG: expose the complete raw JSON response before parsing it.
-        LOGGER.info(
-            "MODEL RESPONSE BEGIN\n%s\nMODEL RESPONSE END",
-            json.dumps(response, ensure_ascii=False, indent=2),
-        )
 
         try:
             message = response["choices"][0]["message"]
@@ -152,9 +141,10 @@ class OpenAIChatClient:
                 f"by this agent: {message!r}"
             )
 
-        usage = response.get("usage")
         prompt_tokens: int | None = None
         completion_tokens: int | None = None
+        cached_tokens: int | None = None
+        usage = response.get("usage")
         if isinstance(usage, dict):
             prompt_value = usage.get("prompt_tokens")
             completion_value = usage.get("completion_tokens")
@@ -162,11 +152,30 @@ class OpenAIChatClient:
                 prompt_tokens = prompt_value
             if isinstance(completion_value, int):
                 completion_tokens = completion_value
+            details = usage.get("prompt_tokens_details")
+            if isinstance(details, dict):
+                cached_value = details.get("cached_tokens")
+                if isinstance(cached_value, int):
+                    cached_tokens = cached_value
+
+        prompt_seconds: float | None = None
+        generation_seconds: float | None = None
+        timings = response.get("timings")
+        if isinstance(timings, dict):
+            prompt_ms = timings.get("prompt_ms")
+            predicted_ms = timings.get("predicted_ms")
+            if isinstance(prompt_ms, (int, float)):
+                prompt_seconds = float(prompt_ms) / 1000.0
+            if isinstance(predicted_ms, (int, float)):
+                generation_seconds = float(predicted_ms) / 1000.0
 
         return ChatResponse(
             content=content,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            cached_tokens=cached_tokens,
+            prompt_seconds=prompt_seconds,
+            generation_seconds=generation_seconds,
             elapsed_seconds=elapsed,
         )
 
