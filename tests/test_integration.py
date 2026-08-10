@@ -9,7 +9,7 @@ from cat_agent.agent import AgentWorker
 from cat_agent.manager import ManagerRuntime
 from cat_agent.model_client import ChatResponse
 from cat_agent.pool import AgentPool
-from cat_agent.prompt_store import PromptStore
+from cat_agent.prompt_store import AGENT_BOOTSTRAP_ACK, PromptStore
 from cat_agent.skills import SkillBase
 
 
@@ -63,9 +63,20 @@ class IntegrationTest(unittest.TestCase):
             turn = manager.user_message("Какие файлы лежат в рабочем каталоге?")
             self.assertEqual(turn.kind, "reply")
             self.assertIn("alpha.txt", turn.text)
+
             built = (prompt_dir / "prompt_agent_1.txt").read_text(encoding="utf-8")
             self.assertIn("[SKILL shell]", built)
             self.assertIn("Посмотри список файлов", built)
+
+            first_agent_call = client.calls[1]
+            self.assertEqual(
+                [message["role"] for message in first_agent_call[:4]],
+                ["system", "user", "assistant", "user"],
+            )
+            self.assertEqual(first_agent_call[2]["content"], AGENT_BOOTSTRAP_ACK)
+            self.assertNotIn("[TASK]", first_agent_call[1]["content"])
+            self.assertIn("[TASK]", first_agent_call[3]["content"])
+            self.assertIn("Посмотри список файлов", first_agent_call[3]["content"])
 
     def test_need_ask_continue_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
