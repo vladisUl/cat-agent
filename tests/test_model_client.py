@@ -69,6 +69,7 @@ class OpenAIChatClientTest(unittest.TestCase):
             temperature=0.0,
             top_p=1.0,
             reasoning_effort="none",
+            id_slot=1,
         )
 
     def tearDown(self) -> None:
@@ -91,6 +92,8 @@ class OpenAIChatClientTest(unittest.TestCase):
         self.assertNotIn("tool_choice", payload)
         self.assertEqual(payload["max_completion_tokens"], 64)
         self.assertEqual(payload["reasoning_effort"], "none")
+        self.assertEqual(payload["id_slot"], 1)
+        self.assertIs(payload["cache_prompt"], True)
 
 
 if __name__ == "__main__":
