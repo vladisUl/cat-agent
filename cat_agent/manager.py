@@ -6,7 +6,7 @@ import logging
 from .agent import AgentState
 from .model_client import ModelClientError, OpenAIChatClient
 from .pool import AgentPool
-from .prompt_store import PromptStore
+from .prompt_store import MANAGER_BOOTSTRAP_ACK, PromptStore
 from .protocol import ManagerAction, parse_manager_output
 from .skills import SkillBase, SkillBaseError
 
@@ -39,12 +39,13 @@ class ManagerRuntime:
         self.messages: list[dict[str, str]] = [
             {"role": "system", "content": self.prompt_store.manager_system_prompt()},
             {"role": "user", "content": bootstrap},
+            {"role": "assistant", "content": MANAGER_BOOTSTRAP_ACK},
         ]
 
     def user_message(self, text: str) -> ManagerTurn:
         user_text = text.strip()
         self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
-        self.messages.append({"role": "user", "content": user_text})
+        self._append_user(user_text)
         return self._drive()
 
     def _drive(self) -> ManagerTurn:
@@ -137,7 +138,15 @@ class ManagerRuntime:
 
     def _event(self, text: str) -> None:
         self.prompt_store.write_manager_prompt(text)
-        self.messages.append({"role": "user", "content": text})
+        self._append_user(text)
+
+    def _append_user(self, text: str) -> None:
+        content = text.strip()
+        if self.messages and self.messages[-1]["role"] == "user":
+            previous = self.messages[-1]["content"].rstrip()
+            self.messages[-1]["content"] = f"{previous}\n\n{content}" if previous else content
+            return
+        self.messages.append({"role": "user", "content": content})
 
     def _bootstrap_prompt(self) -> str:
         return (
