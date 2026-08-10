@@ -20,7 +20,10 @@ def main() -> int:
     if not runtime.client.wait_until_ready(lambda: False):
         return 1
 
-    response = runtime.client.chat(runtime.messages)
+    # Warm only the stable system + bootstrap user turn. The live manager
+    # history then adds assistant READY and the real user request, preserving
+    # strict user/assistant alternation required by Gemma 3 templates.
+    response = runtime.client.chat(runtime.messages[:2])
     cached = response.cached_tokens
     new = response.prompt_evaluated_tokens
     prefill = response.prompt_seconds
