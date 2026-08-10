@@ -22,9 +22,8 @@ def main() -> int:
 
     response = runtime.client.chat(runtime.messages)
     cached = response.cached_tokens
-    prompt_n = response.prompt_evaluated_tokens
-    prefill = response.prompt_eval_seconds
-    new = prompt_n if prompt_n is not None else response.prompt_tokens
+    new = response.prompt_evaluated_tokens
+    prefill = response.prompt_seconds
 
     print(
         "manager warmup: "
