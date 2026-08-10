@@ -42,6 +42,13 @@ class _Handler(BaseHTTPRequestHandler):
                 "prompt_tokens": 20,
                 "completion_tokens": 4,
                 "total_tokens": 24,
+                "prompt_tokens_details": {"cached_tokens": 17},
+            },
+            "timings": {
+                "cache_n": 17,
+                "prompt_n": 3,
+                "prompt_ms": 123.0,
+                "predicted_ms": 456.0,
             },
         }
         body = json.dumps(response).encode()
@@ -85,6 +92,10 @@ class OpenAIChatClientTest(unittest.TestCase):
         self.assertEqual(response.content, "ls test.txt")
         self.assertEqual(response.prompt_tokens, 20)
         self.assertEqual(response.completion_tokens, 4)
+        self.assertEqual(response.cached_tokens, 17)
+        self.assertEqual(response.prompt_evaluated_tokens, 3)
+        self.assertEqual(response.prompt_seconds, 0.123)
+        self.assertEqual(response.generation_seconds, 0.456)
 
         payload = _Handler.requests[0]
         self.assertEqual(payload["model"], "gemma4-e4b")
