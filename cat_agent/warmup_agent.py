@@ -54,10 +54,10 @@ def main() -> int:
 
     # Use the exact same /v1/chat/completions path as the real agent. The final
     # user message is deliberately left open: a real task begins with the same
-    # [TASK] prefix and continues from this point. Disable the template's normal
-    # assistant-generation suffix because it is mutually exclusive with
-    # continue_final_message. With zero completion tokens the server should only
-    # evaluate this prefix into slot 1 and generate nothing.
+    # [TASK] prefix and continues from this point. llama-server reads
+    # add_generation_prompt directly from the request body; it must be false
+    # when continue_final_message is enabled. With zero completion tokens the
+    # server only evaluates this prefix into slot 1 and generates nothing.
     messages = [
         {
             "role": "system",
@@ -81,8 +81,8 @@ def main() -> int:
             "reasoning_effort": settings.reasoning_effort,
             "id_slot": AGENT_SLOT,
             "cache_prompt": True,
+            "add_generation_prompt": False,
             "continue_final_message": True,
-            "chat_template_kwargs": {"add_generation_prompt": False},
         },
         settings.http_timeout_seconds,
     )
