@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .command_runtime import CommandRuntime
 from .model_client import ModelClientError, OpenAIChatClient
-from .prompt_store import PromptStore
+from .prompt_store import AGENT_BOOTSTRAP_ACK, PromptStore
 from .protocol import AgentAction, parse_agent_output
 from .skills import Skill
 
@@ -57,12 +57,22 @@ class AgentWorker:
         if self.state is not AgentState.FREE:
             raise RuntimeError(f"{self.agent_id} is {self.state}")
         self._skills = skills
-        prompt = self.prompt_store.build_agent_prompt(
-            self.agent_id, task, skills, self.workspace
+
+        bootstrap = self.prompt_store.build_agent_bootstrap(skills, self.workspace)
+        task_prompt = self.prompt_store.build_agent_task(task)
+        self.prompt_store.write_agent_prompt(
+            self.agent_id,
+            bootstrap.rstrip() + "\n\n" + task_prompt,
         )
+
+        # Keep the large, stable environment/skill prefix in complete chat turns.
+        # TASK is always a new user turn, so changing the task does not rewrite
+        # the bootstrap prefix stored in the dedicated agent llama-server slot.
         self._messages = [
             {"role": "system", "content": self.prompt_store.agent_system_prompt(self.agent_id)},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": bootstrap},
+            {"role": "assistant", "content": AGENT_BOOTSTRAP_ACK},
+            {"role": "user", "content": task_prompt},
         ]
         self._runtime = CommandRuntime(
             self.workspace,
