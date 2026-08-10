@@ -55,11 +55,21 @@ class ManagerRuntime:
                 return ManagerTurn("error", f"Model request failed: {exc}")
 
             LOGGER.info(
-                "manager step %d response in %.3f s: prompt_tokens=%s completion_tokens=%s content=%r",
+                "manager step %d response in %.3f s: prompt=%s cached=%s new=%s prefill=%s completion=%s generate=%s content=%r",
                 step,
                 response.elapsed_seconds,
                 response.prompt_tokens if response.prompt_tokens is not None else "?",
+                response.cached_tokens if response.cached_tokens is not None else "?",
+                response.prompt_evaluated_tokens
+                if response.prompt_evaluated_tokens is not None
+                else "?",
+                f"{response.prompt_seconds:.3f}s"
+                if response.prompt_seconds is not None
+                else "?",
                 response.completion_tokens if response.completion_tokens is not None else "?",
+                f"{response.generation_seconds:.3f}s"
+                if response.generation_seconds is not None
+                else "?",
                 " ".join(response.content.strip().split())[:300],
             )
             self.messages.append({"role": "assistant", "content": response.content})
