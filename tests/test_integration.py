@@ -115,8 +115,10 @@ class IntegrationTest(unittest.TestCase):
             second_call = client.calls[1]
 
             self.assertEqual(second_call[: len(first_call)], first_call)
-            self.assertEqual(second_call[len(first_call)]["role"], "user")
-            self.assertIn("температуру в аквариуме", second_call[len(first_call)]["content"])
+            self.assertEqual(second_call[len(first_call)]["role"], "assistant")
+            self.assertIn("Первая задача выполнена", second_call[len(first_call)]["content"])
+            self.assertEqual(second_call[-1]["role"], "user")
+            self.assertIn("температуру в аквариуме", second_call[-1]["content"])
 
     def test_need_ask_continue_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
