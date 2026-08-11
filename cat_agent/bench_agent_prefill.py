@@ -96,8 +96,10 @@ def main() -> int:
                 {"role": "user", "content": formatter.format_result(result)},
             ]
 
-            # n_predict=0 isolates prompt evaluation of the second pass.
-            second = client.prefill(second_messages)
+            # Use the real production path for the second pass as well.  The
+            # native response reports prompt timing separately from decoding,
+            # so generation does not contaminate the prefill measurement.
+            second = client.chat(second_messages)
 
             if second.prompt_seconds is not None:
                 samples.append(second.prompt_seconds)
@@ -111,6 +113,7 @@ def main() -> int:
                 f"generated={first.completion_tokens if first.completion_tokens is not None else '?'}, "
                 f"second_new={second.prompt_evaluated_tokens if second.prompt_evaluated_tokens is not None else '?'}, "
                 f"second_prefill={_fmt_seconds(second.prompt_seconds)}, "
+                f"second_generated={second.completion_tokens if second.completion_tokens is not None else '?'}, "
                 f"command={first.content.strip()!r}"
             )
     finally:
