@@ -73,7 +73,9 @@ def main() -> int:
         timeout_seconds=settings.command_timeout_seconds,
     )
 
-    samples: list[float] = []
+    prompt_samples: list[float] = []
+    second_generate_samples: list[float] = []
+    second_total_samples: list[float] = []
     new_tokens: list[int] = []
 
     print(
@@ -110,13 +112,15 @@ def main() -> int:
                 {"role": "user", "content": formatter.format_result(result)},
             ]
 
-            # Use the real production path for the second pass as well.  The
-            # native response reports prompt timing separately from decoding,
-            # so generation does not contaminate the prefill measurement.
+            # Use the real production path for the second pass as well. The
+            # native response reports prompt and generation timing separately.
             second = client.chat(second_messages)
 
             if second.prompt_seconds is not None:
-                samples.append(second.prompt_seconds)
+                prompt_samples.append(second.prompt_seconds)
+            if second.generation_seconds is not None:
+                second_generate_samples.append(second.generation_seconds)
+            second_total_samples.append(second.elapsed_seconds)
             if second.prompt_evaluated_tokens is not None:
                 new_tokens.append(second.prompt_evaluated_tokens)
 
@@ -124,10 +128,14 @@ def main() -> int:
                 f"run {index}: "
                 f"first_new={first.prompt_evaluated_tokens if first.prompt_evaluated_tokens is not None else '?'}, "
                 f"first_prefill={_fmt_seconds(first.prompt_seconds)}, "
-                f"generated={first.completion_tokens if first.completion_tokens is not None else '?'}, "
+                f"first_generated={first.completion_tokens if first.completion_tokens is not None else '?'}, "
+                f"first_generate={_fmt_seconds(first.generation_seconds)}, "
+                f"first_total={first.elapsed_seconds:.3f}s, "
                 f"second_new={second.prompt_evaluated_tokens if second.prompt_evaluated_tokens is not None else '?'}, "
                 f"second_prefill={_fmt_seconds(second.prompt_seconds)}, "
                 f"second_generated={second.completion_tokens if second.completion_tokens is not None else '?'}, "
+                f"second_generate={_fmt_seconds(second.generation_seconds)}, "
+                f"second_total={second.elapsed_seconds:.3f}s, "
                 f"command={first.content.strip()!r}"
             )
     finally:
@@ -137,7 +145,7 @@ def main() -> int:
         except Exception:
             pass
 
-    if not samples:
+    if not prompt_samples:
         print("No native prompt timing samples were returned.", file=sys.stderr)
         return 2
 
@@ -146,12 +154,19 @@ def main() -> int:
         if new_tokens and all(value == new_tokens[0] for value in new_tokens)
         else repr(new_tokens)
     )
+    generate_text = (
+        f", generate_median={median(second_generate_samples):.3f}s"
+        if second_generate_samples
+        else ""
+    )
     print(
         "second-pass summary: "
         f"new={token_text}, "
-        f"min={min(samples):.3f}s, "
-        f"median={median(samples):.3f}s, "
-        f"max={max(samples):.3f}s"
+        f"prefill_min={min(prompt_samples):.3f}s, "
+        f"prefill_median={median(prompt_samples):.3f}s, "
+        f"prefill_max={max(prompt_samples):.3f}s"
+        f"{generate_text}, "
+        f"total_median={median(second_total_samples):.3f}s"
     )
     return 0
 
