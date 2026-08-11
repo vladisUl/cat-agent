@@ -12,6 +12,7 @@ import litert_lm
 from cat_agent.agent import AgentWorker
 from cat_agent.config import Settings
 from cat_agent.manager import ManagerRuntime
+from cat_agent.model_client import ModelClientError
 from cat_agent.pool import AgentPool
 from cat_agent.prompt_store import AGENT_BOOTSTRAP_ACK, MANAGER_BOOTSTRAP_ACK, PromptStore
 from cat_agent.skills import SkillBase
@@ -43,6 +44,7 @@ class NativeRuntime:
 class NativeWarmup:
     manager_seconds: float
     agent_seconds: float
+    agent_warmed: bool
 
     @property
     def total_seconds(self) -> float:
@@ -137,12 +139,12 @@ def warm_native_runtime(
     *,
     agent_skills: tuple[str, ...] = ("mqtt",),
 ) -> NativeWarmup:
-    """Materialize the canonical stable prefixes into live Conversations.
+    """Warm only prefixes that can be materialized without changing history.
 
-    LiteRT-LM 0.15 has no public Conversation prefill-only call. The proven
-    continuation path creates each Conversation with system + bootstrap user,
-    then submits the already-known assistant READY with max_output_tokens=0.
-    The runtime subsequently continues from that resident KV state.
+    The manager prefix has a proven continuation path through warm_prefix().
+    For the agent, LiteRT-LM 0.15 may decode NEED instead of accepting the
+    canonical assistant READY. In that case the attempted Conversation is
+    discarded and the real agent starts cold, preserving the exact history.
     """
 
     manager_messages = bundle.runtime.messages[:3]
@@ -178,19 +180,36 @@ def warm_native_runtime(
     ]
 
     started = time.monotonic()
-    agent_response = bundle.agent_client.warm_prefix(agent_messages)
-    agent_seconds = time.monotonic() - started
-    LOGGER.info(
-        "LiteRT agent warmup ready in %.3f s prefill=%s decode=%s skills=%s",
-        agent_seconds,
-        agent_response.prompt_evaluated_tokens,
-        agent_response.completion_tokens,
-        ",".join(agent_skills),
-    )
+    try:
+        agent_response = bundle.agent_client.warm_prefix(agent_messages)
+    except ModelClientError as exc:
+        agent_seconds = time.monotonic() - started
+        # The failed warmup may have appended a semantic token such as NEED.
+        # Destroy it completely; the real task must start from a clean agent
+        # Conversation rather than from an altered bootstrap history.
+        bundle.agent_client.close()
+        agent_warmed = False
+        LOGGER.warning(
+            "LiteRT agent warmup rejected after %.3f s; continuing with a clean "
+            "cold agent Conversation: %s",
+            agent_seconds,
+            exc,
+        )
+    else:
+        agent_seconds = time.monotonic() - started
+        agent_warmed = True
+        LOGGER.info(
+            "LiteRT agent warmup ready in %.3f s prefill=%s decode=%s skills=%s",
+            agent_seconds,
+            agent_response.prompt_evaluated_tokens,
+            agent_response.completion_tokens,
+            ",".join(agent_skills),
+        )
 
     return NativeWarmup(
         manager_seconds=manager_seconds,
         agent_seconds=agent_seconds,
+        agent_warmed=agent_warmed,
     )
 
 
