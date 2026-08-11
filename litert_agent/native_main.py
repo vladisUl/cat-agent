@@ -137,27 +137,30 @@ def warm_native_runtime(
     *,
     agent_skills: tuple[str, ...] = ("mqtt",),
 ) -> NativeWarmup:
-    """Materialize stable manager/agent prefixes into their live Conversations.
+    """Materialize the canonical stable prefixes into live Conversations.
 
-    The warmup is semantically identical to the real bootstrap: the model is
-    asked to answer the bootstrap prompt and must return the exact READY ACK.
-    Only then do we keep that Conversation as resident KV state.
+    LiteRT-LM 0.15 has no public Conversation prefill-only call. The proven
+    continuation path creates each Conversation with system + bootstrap user,
+    then submits the already-known assistant READY with max_output_tokens=0.
+    The runtime subsequently continues from that resident KV state.
     """
 
-    manager_messages = bundle.runtime.messages[:2]
+    manager_messages = bundle.runtime.messages[:3]
+    if (
+        len(manager_messages) != 3
+        or manager_messages[-1].get("role") != "assistant"
+        or manager_messages[-1].get("content") != MANAGER_BOOTSTRAP_ACK
+    ):
+        raise RuntimeError("Unexpected canonical manager bootstrap history")
+
     started = time.monotonic()
-    manager_response = bundle.manager_client.chat(manager_messages)
+    manager_response = bundle.manager_client.warm_prefix(manager_messages)
     manager_seconds = time.monotonic() - started
-    if manager_response.content != MANAGER_BOOTSTRAP_ACK:
-        bundle.manager_client.close()
-        raise RuntimeError(
-            "LiteRT manager warmup ACK mismatch: "
-            f"expected {MANAGER_BOOTSTRAP_ACK!r}, got {manager_response.content!r}"
-        )
     LOGGER.info(
-        "LiteRT manager warmup ready in %.3f s resident=%s",
+        "LiteRT manager warmup ready in %.3f s prefill=%s decode=%s",
         manager_seconds,
-        manager_response.prompt_tokens,
+        manager_response.prompt_evaluated_tokens,
+        manager_response.completion_tokens,
     )
 
     skills = bundle.runtime.skill_base.require(agent_skills)
@@ -171,20 +174,17 @@ def warm_native_runtime(
             "content": bundle.runtime.prompt_store.agent_system_prompt("agent1"),
         },
         {"role": "user", "content": bootstrap},
+        {"role": "assistant", "content": AGENT_BOOTSTRAP_ACK},
     ]
+
     started = time.monotonic()
-    agent_response = bundle.agent_client.chat(agent_messages)
+    agent_response = bundle.agent_client.warm_prefix(agent_messages)
     agent_seconds = time.monotonic() - started
-    if agent_response.content != AGENT_BOOTSTRAP_ACK:
-        bundle.agent_client.close()
-        raise RuntimeError(
-            "LiteRT agent warmup ACK mismatch: "
-            f"expected {AGENT_BOOTSTRAP_ACK!r}, got {agent_response.content!r}"
-        )
     LOGGER.info(
-        "LiteRT agent warmup ready in %.3f s resident=%s skills=%s",
+        "LiteRT agent warmup ready in %.3f s prefill=%s decode=%s skills=%s",
         agent_seconds,
-        agent_response.prompt_tokens,
+        agent_response.prompt_evaluated_tokens,
+        agent_response.completion_tokens,
         ",".join(agent_skills),
     )
 
