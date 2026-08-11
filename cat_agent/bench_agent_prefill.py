@@ -4,6 +4,7 @@ import logging
 import os
 from statistics import median
 import sys
+import time
 
 from .command_runtime import CommandResult, CommandRuntime
 from .config import Settings
@@ -30,6 +31,10 @@ def main() -> int:
     runs = int(os.getenv("CAT_AGENT_BENCH_RUNS", "3"))
     if runs < 1:
         raise ValueError("CAT_AGENT_BENCH_RUNS must be >= 1")
+
+    pause_seconds = float(os.getenv("CAT_AGENT_BENCH_PAUSE_SECONDS", "10"))
+    if pause_seconds < 0:
+        raise ValueError("CAT_AGENT_BENCH_PAUSE_SECONDS must be >= 0")
 
     bench_stdout = os.getenv("CAT_AGENT_BENCH_STDOUT", DEFAULT_BENCH_STDOUT)
     if not bench_stdout.endswith("\n"):
@@ -72,12 +77,17 @@ def main() -> int:
     new_tokens: list[int] = []
 
     print(
-        f"agent second-pass prefill benchmark: runs={runs}, "
+        f"agent second-pass prefill benchmark: runs={runs}, pause={pause_seconds:g}s, "
         f"task={BENCH_TASK!r}, stdout={bench_stdout.strip()!r}"
     )
 
     try:
         for index in range(1, runs + 1):
+            # Give the SoC a repeatable idle interval before each sample so
+            # consecutive runs do not benchmark accumulated sustained load.
+            if pause_seconds:
+                time.sleep(pause_seconds)
+
             # Return slot 1 to the same stable prefix used by warmup_agent.
             client.prefill(warm_messages)
 
