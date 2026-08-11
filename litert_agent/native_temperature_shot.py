@@ -32,6 +32,7 @@ def main() -> int:
         print(f"CONTROL_ENGINE_INIT={bundle.engine_init_seconds:.3f}s")
         print(f"CONTROL_WARMUP_MANAGER={warmup.manager_seconds:.3f}s")
         print(f"CONTROL_WARMUP_AGENT={warmup.agent_seconds:.3f}s")
+        print(f"CONTROL_WARMUP_AGENT_ACTIVE={'YES' if warmup.agent_warmed else 'NO'}")
         print(f"CONTROL_WARMUP_TOTAL={warmup.total_seconds:.3f}s")
         print(f"CONTROL_CHAIN_TOTAL={total:.3f}s")
         return 0 if turn.kind in {"reply", "ask"} else 2
