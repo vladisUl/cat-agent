@@ -60,6 +60,107 @@ class LiteRTNativeChatClient:
             self._conversation = None
         self._synced_messages = []
 
+    def warm_prefix(self, messages: list[dict[str, str]]) -> ChatResponse:
+        """Materialize a stable history ending in a known assistant message.
+
+        LiteRT-LM 0.15 has no public Conversation prefill-only API. The tested
+        equivalent is to create the Conversation with all but the final known
+        assistant message, then submit that assistant message with
+        max_output_tokens=0. On Gemma E4B this prefills the stable prefix and
+        performs one terminal decode token while preserving correct continuation
+        semantics for the next user turn.
+        """
+
+        if len(messages) < 2 or messages[-1].get("role") != "assistant":
+            raise ModelClientError(
+                "LiteRT warm_prefix expects a history ending in an assistant message"
+            )
+
+        expected = messages[-1].get("content", "")
+        if not isinstance(expected, str) or not expected:
+            raise ModelClientError("LiteRT warm_prefix requires non-empty assistant content")
+
+        try:
+            if self._conversation is not None:
+                self._conversation.close()
+
+            prefix = deepcopy(messages[:-1])
+            self._conversation = self.engine.create_conversation(
+                messages=prefix,
+                automatic_tool_calling=False,
+                sampler_config=self.sampler_config,
+                thinking_config=self.thinking_config,
+                max_output_tokens=self.max_output_tokens,
+            )
+
+            resident_before = self._conversation.token_count
+            started = time.monotonic()
+            response = self._conversation.send_message(
+                deepcopy(messages[-1]),
+                max_output_tokens=0,
+                thinking_config=self.thinking_config,
+            )
+            elapsed = time.monotonic() - started
+
+            content = _response_text(response)
+            benchmark = self._conversation.get_benchmark_info()
+            resident_after = self._conversation.token_count
+            prefill_n = benchmark.last_prefill_token_count
+            decode_n = benchmark.last_decode_token_count
+
+            if content != expected:
+                self.close()
+                raise ModelClientError(
+                    "LiteRT warm_prefix response mismatch: "
+                    f"expected {expected!r}, got {content!r}"
+                )
+            if resident_after <= resident_before or prefill_n <= 0:
+                self.close()
+                raise ModelClientError(
+                    "LiteRT warm_prefix did not materialize resident KV"
+                )
+
+            prompt_seconds = _seconds_from_rate(
+                prefill_n, benchmark.last_prefill_tokens_per_second
+            )
+            generation_seconds = _seconds_from_rate(
+                decode_n, benchmark.last_decode_tokens_per_second
+            )
+
+            # The continuation probe verified that the next real user turn can
+            # continue directly from this KV state. Keep the logical history
+            # aligned with cat-agent's canonical bootstrap messages.
+            self._synced_messages = deepcopy(messages)
+
+            LOGGER.info(
+                "litert-kv %s warm resident=%d new=%d decode=%d after=%d "
+                "prefill=%s generate=%s content=%r",
+                self.label,
+                resident_before,
+                prefill_n,
+                decode_n,
+                resident_after,
+                _fmt_seconds(prompt_seconds),
+                _fmt_seconds(generation_seconds),
+                content,
+            )
+
+            return ChatResponse(
+                content=content,
+                prompt_tokens=resident_before + prefill_n,
+                completion_tokens=decode_n,
+                elapsed_seconds=elapsed,
+                cached_tokens=resident_before,
+                prompt_evaluated_tokens=prefill_n,
+                prompt_seconds=prompt_seconds,
+                generation_seconds=generation_seconds,
+            )
+        except ModelClientError:
+            raise
+        except Exception as exc:
+            self.close()
+            raise ModelClientError(f"LiteRT-LM native warmup failed: {exc}") from exc
+
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
         if not messages or messages[-1].get("role") != "user":
             raise ModelClientError(
