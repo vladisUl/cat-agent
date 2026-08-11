@@ -13,7 +13,7 @@ from .prompt_store import AGENT_BOOTSTRAP_ACK
 
 WARMUP_SKILLS = ("mqtt",)
 BENCH_TASK = "Получить текущую температуру на улице."
-BENCH_STDOUT = "22.00\n"
+DEFAULT_BENCH_STDOUT = "22.00\n"
 
 
 def _fmt_seconds(value: float | None) -> str:
@@ -30,6 +30,10 @@ def main() -> int:
     runs = int(os.getenv("CAT_AGENT_BENCH_RUNS", "3"))
     if runs < 1:
         raise ValueError("CAT_AGENT_BENCH_RUNS must be >= 1")
+
+    bench_stdout = os.getenv("CAT_AGENT_BENCH_STDOUT", DEFAULT_BENCH_STDOUT)
+    if not bench_stdout.endswith("\n"):
+        bench_stdout += "\n"
 
     runtime = build_runtime(settings)
     if not runtime.client.wait_until_ready(lambda: False):
@@ -69,7 +73,7 @@ def main() -> int:
 
     print(
         f"agent second-pass prefill benchmark: runs={runs}, "
-        f"task={BENCH_TASK!r}, synthetic_stdout={BENCH_STDOUT.strip()!r}"
+        f"task={BENCH_TASK!r}, stdout={bench_stdout.strip()!r}"
     )
 
     try:
@@ -84,7 +88,7 @@ def main() -> int:
             result = CommandResult(
                 command=first.content.strip(),
                 exit_code=0,
-                stdout=BENCH_STDOUT,
+                stdout=bench_stdout,
                 stderr="",
                 cwd=settings.workspace.resolve(),
                 operation="benchmark",
