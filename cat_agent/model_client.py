@@ -27,14 +27,15 @@ class ChatResponse:
 
 
 class OpenAIChatClient:
-    """Small OpenAI-compatible text chat client.
+    """Native llama-server text chat client.
 
-    It deliberately does not send tools/tool_choice and does not consume
-    tool_calls. The model server is used only as a text-generation backend.
+    The class name is intentionally kept for this experiment so the rest of the
+    runtime does not change. Messages are formatted by llama-server itself via
+    /apply-template, then sent directly to the native /completion endpoint.
 
-    When ``id_slot`` is set, llama-server requests are pinned to that slot and
-    prompt caching is enabled for the slot. This keeps independent long-lived
-    KV caches for the manager and agent roles.
+    When ``id_slot`` is set, requests are pinned to that llama-server slot and
+    prompt caching is enabled. This keeps independent long-lived KV caches for
+    the manager and agent roles.
     """
 
     def __init__(
@@ -50,49 +51,47 @@ class OpenAIChatClient:
         reasoning_effort: str,
         id_slot: int | None = None,
     ) -> None:
-        self.api_base_url = api_base_url.rstrip("/")
+        base = api_base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        self.api_base_url = base.rstrip("/")
+        # Kept in the constructor for compatibility with the existing runtime.
+        # Native llama-server already has the model loaded and reasoning is
+        # disabled globally by start_server.sh.
         self.model = model
+        self.reasoning_effort = reasoning_effort
         self.timeout_seconds = timeout_seconds
         self.retries = retries
         self.retry_delay_seconds = retry_delay_seconds
         self.max_output_tokens = max_output_tokens
         self.temperature = temperature
         self.top_p = top_p
-        self.reasoning_effort = reasoning_effort
         self.id_slot = id_slot
 
     @property
-    def chat_url(self) -> str:
-        return f"{self.api_base_url}/chat/completions"
+    def health_url(self) -> str:
+        return f"{self.api_base_url}/health"
 
     @property
-    def models_url(self) -> str:
-        return f"{self.api_base_url}/models"
+    def apply_template_url(self) -> str:
+        return f"{self.api_base_url}/apply-template"
 
-    def list_models(self) -> dict[str, Any]:
-        http_request = request.Request(self.models_url, method="GET")
-        return self._send(http_request)
+    @property
+    def completion_url(self) -> str:
+        return f"{self.api_base_url}/completion"
 
     def wait_until_ready(
         self, stop_requested: Callable[[], bool], interval: float = 2.0
     ) -> bool:
         while not stop_requested():
             try:
-                response = self.list_models()
-                model_ids = {
-                    item.get("id")
-                    for item in response.get("data", [])
-                    if isinstance(item, dict)
-                }
-                if model_ids and self.model not in model_ids:
-                    LOGGER.warning(
-                        "Model server is ready, but model %r is not listed. "
-                        "Available models: %s",
-                        self.model,
-                        sorted(model_ids),
+                http_request = request.Request(self.health_url, method="GET")
+                response = self._send(http_request)
+                if response.get("status") != "ok":
+                    raise ModelClientError(
+                        f"Unexpected health response from model server: {response!r}"
                     )
-                else:
-                    LOGGER.info("Model server is ready")
+                LOGGER.info("Model server is ready")
                 return True
             except ModelClientError as exc:
                 LOGGER.info("Waiting for model server: %s", exc)
@@ -100,86 +99,75 @@ class OpenAIChatClient:
         return False
 
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
+        return self._complete(messages, n_predict=self.max_output_tokens)
+
+    def prefill(self, messages: list[dict[str, str]]) -> ChatResponse:
+        """Evaluate a templated conversation into the assigned slot without decoding."""
+        return self._complete(messages, n_predict=0)
+
+    def _complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        n_predict: int,
+    ) -> ChatResponse:
+        started = time.monotonic()
+        prompt = self._apply_template(messages)
+
         payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
+            "prompt": prompt,
             "stream": False,
-            "max_completion_tokens": self.max_output_tokens,
+            "n_predict": n_predict,
             "temperature": self.temperature,
             "top_p": self.top_p,
-            "reasoning_effort": self.reasoning_effort,
+            "cache_prompt": True,
         }
         if self.id_slot is not None:
             payload["id_slot"] = self.id_slot
-            payload["cache_prompt"] = True
 
-        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        http_request = request.Request(
-            self.chat_url,
-            data=encoded,
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-
-        started = time.monotonic()
-        response = self._send(http_request)
+        response = self._post_json(self.completion_url, payload)
         elapsed = time.monotonic() - started
 
-        try:
-            message = response["choices"][0]["message"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ModelClientError(
-                f"Unexpected chat response structure: {response!r}"
-            ) from exc
-
-        if not isinstance(message, dict):
-            raise ModelClientError(f"Response message is not an object: {message!r}")
-
-        content = message.get("content")
+        content = response.get("content")
         if not isinstance(content, str):
             raise ModelClientError(
-                "Model returned no text content. Native tool calls are not used "
-                f"by this agent: {message!r}"
+                f"Unexpected native completion response structure: {response!r}"
             )
 
-        prompt_tokens: int | None = None
-        completion_tokens: int | None = None
-        cached_tokens: int | None = None
-        usage = response.get("usage")
-        if isinstance(usage, dict):
-            prompt_value = usage.get("prompt_tokens")
-            completion_value = usage.get("completion_tokens")
-            if isinstance(prompt_value, int):
-                prompt_tokens = prompt_value
-            if isinstance(completion_value, int):
-                completion_tokens = completion_value
-            details = usage.get("prompt_tokens_details")
-            if isinstance(details, dict):
-                cached_value = details.get("cached_tokens")
-                if isinstance(cached_value, int):
-                    cached_tokens = cached_value
+        cached_tokens = _int_or_none(response.get("tokens_cached"))
+        total_prompt_tokens = _int_or_none(response.get("tokens_evaluated"))
+        completion_tokens = _int_or_none(response.get("tokens_predicted"))
 
         prompt_evaluated_tokens: int | None = None
         prompt_seconds: float | None = None
         generation_seconds: float | None = None
         timings = response.get("timings")
         if isinstance(timings, dict):
-            cache_n = timings.get("cache_n")
             prompt_n = timings.get("prompt_n")
             prompt_ms = timings.get("prompt_ms")
+            predicted_n = timings.get("predicted_n")
             predicted_ms = timings.get("predicted_ms")
-            if cached_tokens is None and isinstance(cache_n, int):
-                cached_tokens = cache_n
             if isinstance(prompt_n, int):
                 prompt_evaluated_tokens = prompt_n
+            if completion_tokens is None and isinstance(predicted_n, int):
+                completion_tokens = predicted_n
             if isinstance(prompt_ms, (int, float)):
                 prompt_seconds = float(prompt_ms) / 1000.0
             if isinstance(predicted_ms, (int, float)):
                 generation_seconds = float(predicted_ms) / 1000.0
 
+        # On current llama-server, timings.prompt_n is the suffix actually
+        # evaluated for this request. If tokens_evaluated is unavailable,
+        # cached + newly evaluated is the best total-prompt metric.
+        if total_prompt_tokens is None:
+            if cached_tokens is not None and prompt_evaluated_tokens is not None:
+                total_prompt_tokens = cached_tokens + prompt_evaluated_tokens
+            else:
+                total_prompt_tokens = prompt_evaluated_tokens
+
         return ChatResponse(
             content=content,
-            prompt_tokens=prompt_tokens,
+            prompt_tokens=total_prompt_tokens,
             completion_tokens=completion_tokens,
             elapsed_seconds=elapsed,
             cached_tokens=cached_tokens,
@@ -187,6 +175,28 @@ class OpenAIChatClient:
             prompt_seconds=prompt_seconds,
             generation_seconds=generation_seconds,
         )
+
+    def _apply_template(self, messages: list[dict[str, str]]) -> str:
+        response = self._post_json(
+            self.apply_template_url,
+            {"messages": messages},
+        )
+        prompt = response.get("prompt")
+        if not isinstance(prompt, str):
+            raise ModelClientError(
+                f"Unexpected /apply-template response structure: {response!r}"
+            )
+        return prompt
+
+    def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        http_request = request.Request(
+            url,
+            data=encoded,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        return self._send(http_request)
 
     def _send(self, http_request: request.Request) -> dict[str, Any]:
         last_error: Exception | None = None
@@ -226,3 +236,7 @@ class OpenAIChatClient:
                 time.sleep(delay)
 
         raise ModelClientError(f"Model request failed: {last_error}")
+
+
+def _int_or_none(value: Any) -> int | None:
+    return value if isinstance(value, int) else None
