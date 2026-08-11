@@ -13,7 +13,7 @@ fi
 
 echo "Model: $CAT_AGENT_MODEL"
 echo "MTP: $MTP_MODEL (draft-mtp, n_max=3, CPU)"
-echo "Slots: 2, ctx-checkpoints=0, cache-prompt=on, threads-batch=8"
+echo "Slots: 2, ctx-checkpoints=0, cache-prompt=on"
 
 cd /opt/llama.cpp
 
@@ -23,7 +23,6 @@ exec ./build-vulkan/bin/llama-server \
   --port 9380 \
   --parallel 2 \
   --device none \
-  --threads-batch 8 \
   --jinja \
   --reasoning off \
   --reasoning-budget 0 \
