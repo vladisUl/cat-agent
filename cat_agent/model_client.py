@@ -134,10 +134,10 @@ class OpenAIChatClient:
                 f"Unexpected native completion response structure: {response!r}"
             )
 
-        cached_tokens = _int_or_none(response.get("tokens_cached"))
         total_prompt_tokens = _int_or_none(response.get("tokens_evaluated"))
         completion_tokens = _int_or_none(response.get("tokens_predicted"))
 
+        cached_tokens: int | None = None
         prompt_evaluated_tokens: int | None = None
         prompt_seconds: float | None = None
         generation_seconds: float | None = None
@@ -156,14 +156,17 @@ class OpenAIChatClient:
             if isinstance(predicted_ms, (int, float)):
                 generation_seconds = float(predicted_ms) / 1000.0
 
-        # On current llama-server, timings.prompt_n is the suffix actually
-        # evaluated for this request. If tokens_evaluated is unavailable,
-        # cached + newly evaluated is the best total-prompt metric.
+        # Native /completion's tokens_cached is not the same metric as the
+        # OpenAI-compatible timings.cache_n that we used previously. For a
+        # directly comparable "reused prompt prefix" metric, derive it from
+        # total prompt tokens minus the suffix actually evaluated this request.
+        if total_prompt_tokens is not None and prompt_evaluated_tokens is not None:
+            cached_tokens = max(total_prompt_tokens - prompt_evaluated_tokens, 0)
+
+        # If tokens_evaluated is unavailable, timings.prompt_n still gives the
+        # amount of prompt work done, but the total prompt length is unknown.
         if total_prompt_tokens is None:
-            if cached_tokens is not None and prompt_evaluated_tokens is not None:
-                total_prompt_tokens = cached_tokens + prompt_evaluated_tokens
-            else:
-                total_prompt_tokens = prompt_evaluated_tokens
+            total_prompt_tokens = prompt_evaluated_tokens
 
         return ChatResponse(
             content=content,
