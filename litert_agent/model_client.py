@@ -1,179 +1,254 @@
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import dataclass
+import ctypes
 import json
 import logging
 import time
-from typing import Any, Callable
-from urllib import error, request
+from typing import Callable
+
+import litert_lm
 
 from cat_agent.model_client import ChatResponse, ModelClientError
 
 LOGGER = logging.getLogger(__name__)
 
 
-class LiteRTChatClient:
-    """OpenAI-compatible LiteRT-LM server client.
+@dataclass(frozen=True, slots=True)
+class WarmResult:
+    strategy: str
+    elapsed_seconds: float
+    token_count: int
 
-    This first correctness pass sends the full message history on every request.
-    Native LiteRT-LM Conversation/KV reuse is investigated separately after the
-    complete manager -> agent -> tool -> agent -> manager chain works.
+
+class LiteRTChatClient:
+    """LiteRT-LM adapter backed by the low-level Session API.
+
+    Conversation is used only as the official chat-template renderer.
+    Live model state is held by one Session:
+
+        prefix prefill -> user prefill -> decode -> user prefill -> decode ...
     """
 
     def __init__(
         self,
-        api_base_url: str,
-        model: str,
-        timeout_seconds: int,
-        retries: int,
-        retry_delay_seconds: float,
+        engine: litert_lm.Engine,
+        *,
         max_output_tokens: int,
         temperature: float,
         top_p: float,
         reasoning_effort: str,
+        label: str,
     ) -> None:
-        base = api_base_url.rstrip("/")
-        if not base.endswith("/v1"):
-            base = f"{base}/v1"
-        self.api_base_url = base
-        self.model = model
-        self.timeout_seconds = timeout_seconds
-        self.retries = retries
-        self.retry_delay_seconds = retry_delay_seconds
+        self.engine = engine
         self.max_output_tokens = max_output_tokens
-        self.temperature = temperature
-        self.top_p = top_p
         self.reasoning_effort = reasoning_effort
-
-    @property
-    def models_url(self) -> str:
-        return f"{self.api_base_url}/models"
-
-    @property
-    def chat_url(self) -> str:
-        return f"{self.api_base_url}/chat/completions"
+        self.label = label
+        self.sampler_config = litert_lm.SamplerConfig(
+            top_p=top_p,
+            temperature=temperature,
+            seed=0,
+        )
+        self._renderer: litert_lm.Conversation | None = None
+        self._session = None
+        self._lib = None
+        self._base_preface = ""
+        self._synced_messages: list[dict[str, str]] = []
+        self._resident_tokens = 0
 
     def wait_until_ready(
         self, stop_requested: Callable[[], bool], interval: float = 2.0
     ) -> bool:
-        while not stop_requested():
-            try:
-                http_request = request.Request(self.models_url, method="GET")
-                response = self._send(http_request)
-                if not isinstance(response.get("data"), list):
-                    raise ModelClientError(
-                        f"Unexpected /v1/models response from LiteRT-LM: {response!r}"
-                    )
-                LOGGER.info("LiteRT-LM server is ready")
-                return True
-            except ModelClientError as exc:
-                LOGGER.info("Waiting for LiteRT-LM server: %s", exc)
-                time.sleep(interval)
-        return False
+        del interval
+        return not stop_requested()
+
+    def close(self) -> None:
+        if self._session is not None:
+            self._session.close()
+            self._session = None
+        if self._renderer is not None:
+            self._renderer.close()
+            self._renderer = None
+        self._lib = None
+        self._base_preface = ""
+        self._synced_messages = []
+        self._resident_tokens = 0
+
+    def prepare_prefix(self, messages: list[dict[str, str]]) -> WarmResult:
+        if len(messages) < 3 or messages[-1].get("role") != "assistant":
+            raise ModelClientError(
+                "LiteRT Session prefix must end in canonical assistant ACK"
+            )
+
+        try:
+            self.close()
+            self._renderer = self.engine.create_conversation(
+                messages=deepcopy(messages),
+                automatic_tool_calling=False,
+                sampler_config=self.sampler_config,
+                max_output_tokens=self.max_output_tokens,
+            )
+            self._lib = self._renderer._lib
+            self._configure_renderer_ffi()
+
+            raw = self._lib.litert_lm_conversation_render_preface_to_string(
+                self._renderer._ptr
+            )
+            if not raw:
+                raise RuntimeError("render_preface_to_string failed")
+            self._base_preface = raw.decode("utf-8")
+
+            self._session = self.engine.create_session(
+                apply_prompt_template=False,
+                sampler_config=self.sampler_config,
+                max_output_tokens=self.max_output_tokens,
+            )
+
+            started = time.monotonic()
+            self._session.run_prefill([self._base_preface])
+            elapsed = time.monotonic() - started
+
+            benchmark = self._session.get_benchmark_info()
+            prefill_n = benchmark.last_prefill_token_count
+            if prefill_n <= 0:
+                raise RuntimeError(
+                    f"Session prefix prefill returned {prefill_n} tokens"
+                )
+
+            self._resident_tokens = prefill_n
+            self._synced_messages = deepcopy(messages)
+
+            LOGGER.info(
+                "litert-session-warm %s resident=%d elapsed=%.3fs",
+                self.label,
+                self._resident_tokens,
+                elapsed,
+            )
+            return WarmResult(
+                strategy="session-native",
+                elapsed_seconds=elapsed,
+                token_count=prefill_n,
+            )
+        except ModelClientError:
+            raise
+        except Exception as exc:
+            self.close()
+            raise ModelClientError(
+                f"LiteRT-LM Session prefix prefill failed: {exc}"
+            ) from exc
 
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
-        started = time.monotonic()
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "stream": False,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "max_tokens": self.max_output_tokens,
-        }
-        response = self._post_json(self.chat_url, payload)
-        elapsed = time.monotonic() - started
-
-        choices = response.get("choices")
-        if not isinstance(choices, list) or not choices:
+        if not messages or messages[-1].get("role") != "user":
+            raise ModelClientError("LiteRT Session turn must end in a user message")
+        if self._session is None or self._renderer is None:
             raise ModelClientError(
-                f"Unexpected LiteRT-LM chat response structure: {response!r}"
+                "LiteRT Session client has not been prepared with prepare_prefix()"
             )
-        first = choices[0]
-        if not isinstance(first, dict):
+        if messages[:-1] != self._synced_messages:
             raise ModelClientError(
-                f"Unexpected LiteRT-LM choice structure: {response!r}"
-            )
-        message = first.get("message")
-        if not isinstance(message, dict):
-            raise ModelClientError(
-                f"Unexpected LiteRT-LM message structure: {response!r}"
-            )
-        content = message.get("content")
-        if not isinstance(content, str):
-            raise ModelClientError(
-                f"Unexpected LiteRT-LM content structure: {response!r}"
+                f"LiteRT Session {self.label} history no longer extends resident KV"
             )
 
-        prompt_tokens: int | None = None
-        completion_tokens: int | None = None
-        usage = response.get("usage")
-        if isinstance(usage, dict):
-            prompt_tokens = _int_or_none(usage.get("prompt_tokens"))
-            completion_tokens = _int_or_none(usage.get("completion_tokens"))
+        try:
+            user_turn = self._render_user_turn(messages[-1])
+            resident_before = self._resident_tokens
+            total_started = time.monotonic()
 
-        # Stock OpenAI-compatible responses do not split server time into
-        # prefill/decode and do not report reused KV tokens. Do not fabricate
-        # those metrics; phase 2 will instrument the native Conversation path.
-        return ChatResponse(
-            content=content,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            elapsed_seconds=elapsed,
-            cached_tokens=None,
-            prompt_evaluated_tokens=None,
-            prompt_seconds=None,
-            generation_seconds=None,
+            prefill_started = time.monotonic()
+            self._session.run_prefill([user_turn])
+            prompt_seconds = time.monotonic() - prefill_started
+            prefill_benchmark = self._session.get_benchmark_info()
+            prefill_n = prefill_benchmark.last_prefill_token_count
+
+            decode_started = time.monotonic()
+            response = self._session.run_decode()
+            generation_seconds = time.monotonic() - decode_started
+            decode_benchmark = self._session.get_benchmark_info()
+            decode_n = decode_benchmark.last_decode_token_count
+
+            elapsed = time.monotonic() - total_started
+            content = _session_response_text(response)
+
+            self._resident_tokens += prefill_n + decode_n
+            self._synced_messages = deepcopy(messages)
+            self._synced_messages.append(
+                {"role": "assistant", "content": content}
+            )
+
+            LOGGER.info(
+                "litert-session-kv %s resident=%d new=%d decode=%d "
+                "after=%d wall=%.3fs prefill=%.3fs generate=%.3fs",
+                self.label,
+                resident_before,
+                prefill_n,
+                decode_n,
+                self._resident_tokens,
+                elapsed,
+                prompt_seconds,
+                generation_seconds,
+            )
+
+            return ChatResponse(
+                content=content,
+                prompt_tokens=resident_before + prefill_n,
+                completion_tokens=decode_n,
+                elapsed_seconds=elapsed,
+                cached_tokens=resident_before,
+                prompt_evaluated_tokens=prefill_n,
+                prompt_seconds=prompt_seconds,
+                generation_seconds=generation_seconds,
+            )
+        except ModelClientError:
+            raise
+        except Exception as exc:
+            raise ModelClientError(f"LiteRT-LM Session request failed: {exc}") from exc
+
+    def _configure_renderer_ffi(self) -> None:
+        assert self._lib is not None
+
+        self._lib.litert_lm_conversation_render_preface_to_string.argtypes = [
+            ctypes.c_void_p
+        ]
+        self._lib.litert_lm_conversation_render_preface_to_string.restype = ctypes.c_char_p
+        self._lib.litert_lm_conversation_render_message_to_string.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+        ]
+        self._lib.litert_lm_conversation_render_message_to_string.restype = ctypes.c_char_p
+
+    def _render_user_turn(self, message: dict[str, str]) -> str:
+        assert self._renderer is not None
+        assert self._lib is not None
+
+        message_json = json.dumps(message, ensure_ascii=False).encode("utf-8")
+        raw = self._lib.litert_lm_conversation_render_message_to_string(
+            self._renderer._ptr,
+            message_json,
         )
+        if not raw:
+            raise RuntimeError("render_message_to_string failed")
 
-    def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        http_request = request.Request(
-            url,
-            data=encoded,
-            method="POST",
-            headers={"Content-Type": "application/json"},
+        rendered = raw.decode("utf-8")
+        if not rendered.startswith(self._base_preface):
+            raise RuntimeError(
+                "Rendered user turn does not extend canonical base preface"
+            )
+
+        suffix = rendered[len(self._base_preface) :]
+        if not suffix:
+            raise RuntimeError("Rendered user turn is empty")
+        return suffix
+
+
+def _session_response_text(response) -> str:
+    texts = getattr(response, "texts", None)
+    if not texts:
+        raise ModelClientError(f"LiteRT Session decode returned no text: {response!r}")
+
+    text = texts[0]
+    if not isinstance(text, str):
+        raise ModelClientError(
+            f"LiteRT Session decode returned invalid text: {text!r}"
         )
-        return self._send(http_request)
-
-    def _send(self, http_request: request.Request) -> dict[str, Any]:
-        last_error: Exception | None = None
-        attempts = self.retries + 1
-
-        for attempt in range(1, attempts + 1):
-            try:
-                with request.urlopen(
-                    http_request,
-                    timeout=self.timeout_seconds,
-                ) as response:
-                    body = response.read().decode("utf-8")
-                    decoded = json.loads(body)
-                    if not isinstance(decoded, dict):
-                        raise ModelClientError(
-                            f"Expected JSON object, got {type(decoded).__name__}"
-                        )
-                    return decoded
-            except error.HTTPError as exc:
-                body = exc.read().decode("utf-8", errors="replace")
-                message = f"HTTP {exc.code} from LiteRT-LM server: {body}"
-                if 400 <= exc.code < 500:
-                    raise ModelClientError(message) from exc
-                last_error = ModelClientError(message)
-            except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                last_error = exc
-
-            if attempt < attempts:
-                delay = self.retry_delay_seconds * attempt
-                LOGGER.warning(
-                    "LiteRT-LM request failed (%s/%s): %s; retry in %.1f s",
-                    attempt,
-                    attempts,
-                    last_error,
-                    delay,
-                )
-                time.sleep(delay)
-
-        raise ModelClientError(f"LiteRT-LM request failed: {last_error}")
-
-
-def _int_or_none(value: Any) -> int | None:
-    return value if isinstance(value, int) else None
+    return text
