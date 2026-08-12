@@ -67,6 +67,7 @@ def build_native_runtime(settings: Settings) -> NativeRuntime:
     cpu_threads = _env_optional_positive_int("LITERT_AGENT_CPU_THREADS")
     max_num_tokens = _env_optional_positive_int("LITERT_AGENT_MAX_NUM_TOKENS")
     speculative = _env_bool("LITERT_AGENT_SPECULATIVE", False)
+    benchmark = _env_bool("LITERT_AGENT_BENCHMARK", False)
 
     LOGGER.info("Initializing two isolated LiteRT-LM 0.14 E4B Engines")
     LOGGER.info("Model path: %s", model_path)
@@ -74,6 +75,7 @@ def build_native_runtime(settings: Settings) -> NativeRuntime:
     LOGGER.info("CPU threads override: %s", cpu_threads or "default")
     LOGGER.info("Max KV tokens override: %s", max_num_tokens or "model default")
     LOGGER.info("Speculative decoding: %s", speculative)
+    LOGGER.info("Benchmark mode: %s", benchmark)
     LOGGER.info("Preface prefill: local 0.14 binding enabled")
     LOGGER.info("Role KV isolation: manager Engine != agent Engine")
 
@@ -83,6 +85,7 @@ def build_native_runtime(settings: Settings) -> NativeRuntime:
         cpu_threads,
         max_num_tokens,
         speculative,
+        benchmark,
         label="manager",
     )
     try:
@@ -92,6 +95,7 @@ def build_native_runtime(settings: Settings) -> NativeRuntime:
             cpu_threads,
             max_num_tokens,
             speculative,
+            benchmark,
             label="agent",
         )
     except Exception:
@@ -155,16 +159,19 @@ def _create_engine(
     cpu_threads: int | None,
     max_num_tokens: int | None,
     speculative: bool,
+    benchmark: bool,
     *,
     label: str,
 ) -> tuple[litert_lm.Engine, float]:
     started = time.monotonic()
-    engine = litert_lm.Engine(
-        str(model_path),
-        backend=_backend(backend_name, cpu_threads),
-        max_num_tokens=max_num_tokens,
-        enable_speculative_decoding=speculative,
-    )
+    kwargs: dict[str, object] = {
+        "backend": _backend(backend_name, cpu_threads),
+        "max_num_tokens": max_num_tokens,
+        "enable_speculative_decoding": speculative,
+    }
+    if benchmark:
+        kwargs["enable_benchmark"] = True
+    engine = litert_lm.Engine(str(model_path), **kwargs)
     engine.__enter__()
     elapsed = time.monotonic() - started
     LOGGER.info("LiteRT-LM %s Engine ready in %.3f s", label, elapsed)
