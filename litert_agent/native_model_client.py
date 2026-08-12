@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import logging
+import os
 import time
 from typing import Any, Callable
 
@@ -117,6 +118,7 @@ class LiteRTNativeChatClient:
                 resident,
                 elapsed,
             )
+            self._log_benchmark_info("prefill")
             return NativePrefillResult(
                 elapsed_seconds=elapsed,
                 token_count=resident,
@@ -164,7 +166,8 @@ class LiteRTNativeChatClient:
             # LiteRT-LM 0.14 exposes resident token_count but not the later
             # get_benchmark_info() Python API. Keep exact values exact: resident
             # KV and total tokens appended by this live turn are known; separate
-            # prompt/decode counts and timings are intentionally left unknown.
+            # prompt/decode counts and timings are reported below directly from
+            # the existing 0.14 C API when benchmark mode is enabled.
             LOGGER.info(
                 "litert-kv %s resident=%d added=%d after=%d wall=%.3fs",
                 self.label,
@@ -173,6 +176,7 @@ class LiteRTNativeChatClient:
                 resident_after,
                 elapsed,
             )
+            self._log_benchmark_info("live")
 
             return ChatResponse(
                 content=content,
@@ -222,6 +226,71 @@ class LiteRTNativeChatClient:
             resident,
             elapsed,
         )
+        self._log_benchmark_info("reset")
+
+    def _log_benchmark_info(self, phase: str) -> None:
+        if not _env_bool("LITERT_AGENT_BENCHMARK", False):
+            return
+        if self._conversation is None:
+            return
+
+        lib = getattr(self._conversation, "_lib", None)
+        ptr = getattr(self._conversation, "_ptr", None)
+        if lib is None or not ptr:
+            return
+
+        info = lib.litert_lm_conversation_get_benchmark_info(ptr)
+        if not info:
+            LOGGER.warning("litert-bench %s %s unavailable", self.label, phase)
+            return
+
+        try:
+            prefill_turns = lib.litert_lm_benchmark_info_get_num_prefill_turns(info)
+            decode_turns = lib.litert_lm_benchmark_info_get_num_decode_turns(info)
+
+            prefill = []
+            for index in range(prefill_turns):
+                tokens = lib.litert_lm_benchmark_info_get_prefill_token_count_at(
+                    info, index
+                )
+                tps = lib.litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
+                    info, index
+                )
+                seconds = tokens / tps if tps > 0 else float("nan")
+                prefill.append(f"{tokens}@{tps:.3f}={seconds:.3f}s")
+
+            decode = []
+            for index in range(decode_turns):
+                tokens = lib.litert_lm_benchmark_info_get_decode_token_count_at(
+                    info, index
+                )
+                tps = lib.litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
+                    info, index
+                )
+                seconds = tokens / tps if tps > 0 else float("nan")
+                decode.append(f"{tokens}@{tps:.3f}={seconds:.3f}s")
+
+            LOGGER.info(
+                "litert-bench %s %s prefill=[%s] decode=[%s]",
+                self.label,
+                phase,
+                ", ".join(prefill),
+                ", ".join(decode),
+            )
+        finally:
+            lib.litert_lm_benchmark_info_delete(info)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean, got {raw!r}")
 
 
 def _response_text(response: Any) -> str:
