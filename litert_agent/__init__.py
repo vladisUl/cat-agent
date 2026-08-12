@@ -1,1 +1,1 @@
-"""Parallel LiteRT-LM transport for the cat-agent experiment."""
+"""LiteRT-LM backend for cat-agent."""
