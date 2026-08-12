@@ -29,6 +29,14 @@ def main() -> int:
         print(f"CONTROL_TASK={TASK}")
         print(f"CONTROL_RESULT_KIND={turn.kind}")
         print(f"CONTROL_RESULT={turn.text}")
+        print(
+            f"CONTROL_ENGINE_INIT_MANAGER="
+            f"{bundle.manager_engine_init_seconds:.3f}s"
+        )
+        print(
+            f"CONTROL_ENGINE_INIT_AGENT="
+            f"{bundle.agent_engine_init_seconds:.3f}s"
+        )
         print(f"CONTROL_ENGINE_INIT={bundle.engine_init_seconds:.3f}s")
         print(f"CONTROL_PREFILL_MANAGER={prefill.manager.elapsed_seconds:.3f}s")
         print(f"CONTROL_PREFILL_MANAGER_TOKENS={prefill.manager.token_count}")
