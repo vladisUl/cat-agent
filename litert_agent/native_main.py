@@ -28,15 +28,22 @@ DEFAULT_E4B_MODEL = Path(
 @dataclass(slots=True)
 class NativeRuntime:
     runtime: ManagerRuntime
-    engine: litert_lm.Engine
+    manager_engine: litert_lm.Engine
+    agent_engine: litert_lm.Engine
     manager_client: LiteRTNativeChatClient
     agent_client: LiteRTNativeChatClient
-    engine_init_seconds: float
+    manager_engine_init_seconds: float
+    agent_engine_init_seconds: float
+
+    @property
+    def engine_init_seconds(self) -> float:
+        return self.manager_engine_init_seconds + self.agent_engine_init_seconds
 
     def close(self) -> None:
         self.manager_client.close()
         self.agent_client.close()
-        self.engine.close()
+        self.manager_engine.close()
+        self.agent_engine.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,36 +65,45 @@ def build_native_runtime(settings: Settings) -> NativeRuntime:
 
     backend_name = os.getenv("LITERT_AGENT_BACKEND", "cpu").strip().lower()
     cpu_threads = _env_optional_positive_int("LITERT_AGENT_CPU_THREADS")
-    backend = _backend(backend_name, cpu_threads)
-
     max_num_tokens = _env_optional_positive_int("LITERT_AGENT_MAX_NUM_TOKENS")
     speculative = _env_bool("LITERT_AGENT_SPECULATIVE", False)
 
-    LOGGER.info("Initializing one LiteRT-LM 0.14 E4B Engine")
+    LOGGER.info("Initializing two isolated LiteRT-LM 0.14 E4B Engines")
     LOGGER.info("Model path: %s", model_path)
     LOGGER.info("Backend: %s", backend_name)
     LOGGER.info("CPU threads override: %s", cpu_threads or "default")
     LOGGER.info("Max KV tokens override: %s", max_num_tokens or "model default")
     LOGGER.info("Speculative decoding: %s", speculative)
     LOGGER.info("Preface prefill: local 0.14 binding enabled")
+    LOGGER.info("Role KV isolation: manager Engine != agent Engine")
 
-    started = time.monotonic()
-    engine = litert_lm.Engine(
-        str(model_path),
-        backend=backend,
-        max_num_tokens=max_num_tokens,
-        enable_speculative_decoding=speculative,
+    manager_engine, manager_engine_init_seconds = _create_engine(
+        model_path,
+        backend_name,
+        cpu_threads,
+        max_num_tokens,
+        speculative,
+        label="manager",
     )
-    engine.__enter__()
-    engine_init_seconds = time.monotonic() - started
-    LOGGER.info("LiteRT-LM Engine ready in %.3f s", engine_init_seconds)
+    try:
+        agent_engine, agent_engine_init_seconds = _create_engine(
+            model_path,
+            backend_name,
+            cpu_threads,
+            max_num_tokens,
+            speculative,
+            label="agent",
+        )
+    except Exception:
+        manager_engine.close()
+        raise
 
     prompt_store = PromptStore(settings.prompt_dir, settings.agent_count)
     prompt_store.validate()
     skill_base = SkillBase(settings.prompt_dir / "prompt_base.txt")
 
     manager_client = LiteRTNativeChatClient(
-        engine,
+        manager_engine,
         max_output_tokens=settings.manager_max_output_tokens,
         temperature=settings.temperature,
         top_p=settings.top_p,
@@ -95,7 +111,7 @@ def build_native_runtime(settings: Settings) -> NativeRuntime:
         label="manager",
     )
     agent_client = LiteRTNativeChatClient(
-        engine,
+        agent_engine,
         max_output_tokens=settings.agent_max_output_tokens,
         temperature=settings.temperature,
         top_p=settings.top_p,
@@ -124,11 +140,35 @@ def build_native_runtime(settings: Settings) -> NativeRuntime:
     )
     return NativeRuntime(
         runtime=runtime,
-        engine=engine,
+        manager_engine=manager_engine,
+        agent_engine=agent_engine,
         manager_client=manager_client,
         agent_client=agent_client,
-        engine_init_seconds=engine_init_seconds,
+        manager_engine_init_seconds=manager_engine_init_seconds,
+        agent_engine_init_seconds=agent_engine_init_seconds,
     )
+
+
+def _create_engine(
+    model_path: Path,
+    backend_name: str,
+    cpu_threads: int | None,
+    max_num_tokens: int | None,
+    speculative: bool,
+    *,
+    label: str,
+) -> tuple[litert_lm.Engine, float]:
+    started = time.monotonic()
+    engine = litert_lm.Engine(
+        str(model_path),
+        backend=_backend(backend_name, cpu_threads),
+        max_num_tokens=max_num_tokens,
+        enable_speculative_decoding=speculative,
+    )
+    engine.__enter__()
+    elapsed = time.monotonic() - started
+    LOGGER.info("LiteRT-LM %s Engine ready in %.3f s", label, elapsed)
+    return engine, elapsed
 
 
 def prefill_manager_runtime(bundle: NativeRuntime) -> NativePrefillResult:
@@ -195,14 +235,10 @@ def main() -> int:
     LOGGER.info("Workspace: %s", settings.workspace)
     LOGGER.info("Prompt dir: %s", settings.prompt_dir)
     LOGGER.info("Native LiteRT-LM skills/presets: disabled")
-    LOGGER.info("Role KV: manager=Conversation[0], agent=Conversation[1]")
+    LOGGER.info("Role KV: manager=Engine[0], agent=Engine[1]")
 
     bundle = build_native_runtime(settings)
     try:
-        # The manager prefix is known at startup and can be materialized before
-        # the first user request. The neutral agent prefix depends on the skills
-        # selected by the manager; it is prefetched on Conversation creation for
-        # that concrete skill profile.
         prefill_manager_runtime(bundle)
 
         print("cat-agent native LiteRT-LM manager ready. Commands: /quit")
