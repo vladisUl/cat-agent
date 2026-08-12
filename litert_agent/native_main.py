@@ -12,12 +12,11 @@ import litert_lm
 from cat_agent.agent import AgentWorker
 from cat_agent.config import Settings
 from cat_agent.manager import ManagerRuntime
-from cat_agent.model_client import ModelClientError
 from cat_agent.pool import AgentPool
 from cat_agent.prompt_store import AGENT_BOOTSTRAP_ACK, MANAGER_BOOTSTRAP_ACK, PromptStore
 from cat_agent.skills import SkillBase
 
-from .native_model_client import LiteRTNativeChatClient
+from .native_model_client import LiteRTNativeChatClient, NativePrefillResult
 
 LOGGER = logging.getLogger(__name__)
 
@@ -41,14 +40,13 @@ class NativeRuntime:
 
 
 @dataclass(frozen=True, slots=True)
-class NativeWarmup:
-    manager_seconds: float
-    agent_seconds: float
-    agent_warmed: bool
+class NativePrefill:
+    manager: NativePrefillResult
+    agent: NativePrefillResult
 
     @property
     def total_seconds(self) -> float:
-        return self.manager_seconds + self.agent_seconds
+        return self.manager.elapsed_seconds + self.agent.elapsed_seconds
 
 
 def build_native_runtime(settings: Settings) -> NativeRuntime:
@@ -65,12 +63,13 @@ def build_native_runtime(settings: Settings) -> NativeRuntime:
     max_num_tokens = _env_optional_positive_int("LITERT_AGENT_MAX_NUM_TOKENS")
     speculative = _env_bool("LITERT_AGENT_SPECULATIVE", False)
 
-    LOGGER.info("Initializing one LiteRT-LM E4B Engine")
+    LOGGER.info("Initializing one LiteRT-LM 0.14 E4B Engine")
     LOGGER.info("Model path: %s", model_path)
     LOGGER.info("Backend: %s", backend_name)
     LOGGER.info("CPU threads override: %s", cpu_threads or "default")
     LOGGER.info("Max KV tokens override: %s", max_num_tokens or "model default")
     LOGGER.info("Speculative decoding: %s", speculative)
+    LOGGER.info("Preface prefill: local 0.14 binding enabled")
 
     started = time.monotonic()
     engine = litert_lm.Engine(
@@ -78,7 +77,6 @@ def build_native_runtime(settings: Settings) -> NativeRuntime:
         backend=backend,
         max_num_tokens=max_num_tokens,
         enable_speculative_decoding=speculative,
-        enable_benchmark=True,
     )
     engine.__enter__()
     engine_init_seconds = time.monotonic() - started
@@ -133,20 +131,7 @@ def build_native_runtime(settings: Settings) -> NativeRuntime:
     )
 
 
-def warm_native_runtime(
-    bundle: NativeRuntime,
-    settings: Settings,
-    *,
-    agent_skills: tuple[str, ...] = ("mqtt",),
-) -> NativeWarmup:
-    """Warm only prefixes that can be materialized without changing history.
-
-    The manager prefix has a proven continuation path through warm_prefix().
-    For the agent, LiteRT-LM 0.15 may decode NEED instead of accepting the
-    canonical assistant READY. In that case the attempted Conversation is
-    discarded and the real agent starts cold, preserving the exact history.
-    """
-
+def prefill_manager_runtime(bundle: NativeRuntime) -> NativePrefillResult:
     manager_messages = bundle.runtime.messages[:3]
     if (
         len(manager_messages) != 3
@@ -155,15 +140,24 @@ def warm_native_runtime(
     ):
         raise RuntimeError("Unexpected canonical manager bootstrap history")
 
-    started = time.monotonic()
-    manager_response = bundle.manager_client.warm_prefix(manager_messages)
-    manager_seconds = time.monotonic() - started
+    result = bundle.manager_client.prefill_prefix(manager_messages)
     LOGGER.info(
-        "LiteRT manager warmup ready in %.3f s prefill=%s decode=%s",
-        manager_seconds,
-        manager_response.prompt_evaluated_tokens,
-        manager_response.completion_tokens,
+        "LiteRT manager prefill ready in %.3f s resident=%d",
+        result.elapsed_seconds,
+        result.token_count,
     )
+    return result
+
+
+def prefill_native_runtime(
+    bundle: NativeRuntime,
+    settings: Settings,
+    *,
+    agent_skills: tuple[str, ...] = ("mqtt",),
+) -> NativePrefill:
+    """Prefill exact manager and agent stable histories without generation."""
+
+    manager = prefill_manager_runtime(bundle)
 
     skills = bundle.runtime.skill_base.require(agent_skills)
     bootstrap = bundle.runtime.prompt_store.build_agent_bootstrap(
@@ -179,38 +173,15 @@ def warm_native_runtime(
         {"role": "assistant", "content": AGENT_BOOTSTRAP_ACK},
     ]
 
-    started = time.monotonic()
-    try:
-        agent_response = bundle.agent_client.warm_prefix(agent_messages)
-    except ModelClientError as exc:
-        agent_seconds = time.monotonic() - started
-        # The failed warmup may have appended a semantic token such as NEED.
-        # Destroy it completely; the real task must start from a clean agent
-        # Conversation rather than from an altered bootstrap history.
-        bundle.agent_client.close()
-        agent_warmed = False
-        LOGGER.warning(
-            "LiteRT agent warmup rejected after %.3f s; continuing with a clean "
-            "cold agent Conversation: %s",
-            agent_seconds,
-            exc,
-        )
-    else:
-        agent_seconds = time.monotonic() - started
-        agent_warmed = True
-        LOGGER.info(
-            "LiteRT agent warmup ready in %.3f s prefill=%s decode=%s skills=%s",
-            agent_seconds,
-            agent_response.prompt_evaluated_tokens,
-            agent_response.completion_tokens,
-            ",".join(agent_skills),
-        )
-
-    return NativeWarmup(
-        manager_seconds=manager_seconds,
-        agent_seconds=agent_seconds,
-        agent_warmed=agent_warmed,
+    agent = bundle.agent_client.prefill_prefix(agent_messages)
+    LOGGER.info(
+        "LiteRT agent prefill ready in %.3f s resident=%d skills=%s",
+        agent.elapsed_seconds,
+        agent.token_count,
+        ",".join(agent_skills),
     )
+
+    return NativePrefill(manager=manager, agent=agent)
 
 
 def main() -> int:
@@ -220,7 +191,7 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    LOGGER.info("cat-agent native LiteRT-LM runtime starting")
+    LOGGER.info("cat-agent native LiteRT-LM 0.14 runtime starting")
     LOGGER.info("Workspace: %s", settings.workspace)
     LOGGER.info("Prompt dir: %s", settings.prompt_dir)
     LOGGER.info("Native LiteRT-LM skills/presets: disabled")
@@ -228,6 +199,12 @@ def main() -> int:
 
     bundle = build_native_runtime(settings)
     try:
+        # The manager prefix is known at startup and can be materialized before
+        # the first user request. The neutral agent prefix depends on the skills
+        # selected by the manager; it is prefetched on Conversation creation for
+        # that concrete skill profile.
+        prefill_manager_runtime(bundle)
+
         print("cat-agent native LiteRT-LM manager ready. Commands: /quit")
         while True:
             try:
