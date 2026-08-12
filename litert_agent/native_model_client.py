@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import logging
 import time
 from typing import Any, Callable
@@ -12,11 +13,21 @@ from cat_agent.model_client import ChatResponse, ModelClientError
 LOGGER = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class NativePrefillResult:
+    elapsed_seconds: float
+    token_count: int
+
+
 class LiteRTNativeChatClient:
-    """Stateful LiteRT-LM Conversation adapter for the existing cat-agent runtime.
+    """Stateful LiteRT-LM 0.14 Conversation adapter.
 
     The manager and the shared neutral-agent execution path each get their own
     client instance and therefore their own persistent Conversation/KV state.
+    Stable conversation prefixes are materialized directly into KV through the
+    locally exposed ConversationConfig::SetPrefillPrefaceOnInit() path. No
+    model-generated READY/NEED bootstrap probe is used.
+
     The existing runtime still passes complete message histories; this adapter
     verifies that the new history extends the resident one and sends only the
     newly appended user turn to LiteRT-LM.
@@ -60,106 +71,61 @@ class LiteRTNativeChatClient:
             self._conversation = None
         self._synced_messages = []
 
-    def warm_prefix(self, messages: list[dict[str, str]]) -> ChatResponse:
-        """Materialize a stable history ending in a known assistant message.
+    def prefill_prefix(
+        self, messages: list[dict[str, str]]
+    ) -> NativePrefillResult:
+        """Materialize an exact stable conversation prefix into resident KV.
 
-        LiteRT-LM 0.15 has no public Conversation prefill-only API. The tested
-        equivalent is to create the Conversation with all but the final known
-        assistant message, then submit that assistant message with
-        max_output_tokens=0. On Gemma E4B this prefills the stable prefix and
-        performs one terminal decode token while preserving correct continuation
-        semantics for the next user turn.
+        LiteRT-LM 0.14 already has the C++
+        ConversationConfig::SetPrefillPrefaceOnInit() switch. The local wheel
+        exposes that switch through the C and Python bindings as
+        prefill_preface_on_init=True. Conversation creation therefore performs
+        prefill only: it does not ask the model to generate or validate an ACK.
         """
 
-        if len(messages) < 2 or messages[-1].get("role") != "assistant":
-            raise ModelClientError(
-                "LiteRT warm_prefix expects a history ending in an assistant message"
-            )
-
-        expected = messages[-1].get("content", "")
-        if not isinstance(expected, str) or not expected:
-            raise ModelClientError("LiteRT warm_prefix requires non-empty assistant content")
+        if not messages:
+            raise ModelClientError("LiteRT prefill_prefix requires a non-empty history")
 
         try:
             if self._conversation is not None:
                 self._conversation.close()
 
-            prefix = deepcopy(messages[:-1])
+            prefix = deepcopy(messages)
+            started = time.monotonic()
             self._conversation = self.engine.create_conversation(
                 messages=prefix,
                 automatic_tool_calling=False,
                 sampler_config=self.sampler_config,
                 thinking_config=self.thinking_config,
+                prefill_preface_on_init=True,
                 max_output_tokens=self.max_output_tokens,
             )
-
-            resident_before = self._conversation.token_count
-            started = time.monotonic()
-            response = self._conversation.send_message(
-                deepcopy(messages[-1]),
-                max_output_tokens=0,
-                thinking_config=self.thinking_config,
-            )
             elapsed = time.monotonic() - started
+            resident = self._conversation.token_count
 
-            content = _response_text(response)
-            benchmark = self._conversation.get_benchmark_info()
-            resident_after = self._conversation.token_count
-            prefill_n = benchmark.last_prefill_token_count
-            decode_n = benchmark.last_decode_token_count
-
-            if content != expected:
+            if resident <= 0:
                 self.close()
                 raise ModelClientError(
-                    "LiteRT warm_prefix response mismatch: "
-                    f"expected {expected!r}, got {content!r}"
-                )
-            if resident_after <= resident_before or prefill_n <= 0:
-                self.close()
-                raise ModelClientError(
-                    "LiteRT warm_prefix did not materialize resident KV"
+                    "LiteRT prefill_prefix created no resident KV tokens"
                 )
 
-            prompt_seconds = _seconds_from_rate(
-                prefill_n, benchmark.last_prefill_tokens_per_second
-            )
-            generation_seconds = _seconds_from_rate(
-                decode_n, benchmark.last_decode_tokens_per_second
-            )
-
-            # The continuation probe verified that the next real user turn can
-            # continue directly from this KV state. Keep the logical history
-            # aligned with cat-agent's canonical bootstrap messages.
-            self._synced_messages = deepcopy(messages)
-
+            self._synced_messages = prefix
             LOGGER.info(
-                "litert-kv %s warm resident=%d new=%d decode=%d after=%d "
-                "prefill=%s generate=%s content=%r",
+                "litert-kv %s prefill messages=%d resident=%d elapsed=%.3fs",
                 self.label,
-                resident_before,
-                prefill_n,
-                decode_n,
-                resident_after,
-                _fmt_seconds(prompt_seconds),
-                _fmt_seconds(generation_seconds),
-                content,
+                len(prefix),
+                resident,
+                elapsed,
             )
-
-            return ChatResponse(
-                content=content,
-                prompt_tokens=resident_before + prefill_n,
-                completion_tokens=decode_n,
+            return NativePrefillResult(
                 elapsed_seconds=elapsed,
-                cached_tokens=resident_before,
-                prompt_evaluated_tokens=prefill_n,
-                prompt_seconds=prompt_seconds,
-                generation_seconds=generation_seconds,
+                token_count=resident,
             )
         except ModelClientError:
             raise
         except Exception as exc:
             self.close()
-            raise ModelClientError(f"LiteRT-LM native warmup failed: {exc}") from exc
+            raise ModelClientError(f"LiteRT-LM native prefill failed: {exc}") from exc
 
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
         if not messages or messages[-1].get("role") != "user":
@@ -187,48 +153,36 @@ class LiteRTNativeChatClient:
             elapsed = time.monotonic() - started
 
             content = _response_text(response)
-            benchmark = self._conversation.get_benchmark_info()
             resident_after = self._conversation.token_count
-
-            prefill_n = benchmark.last_prefill_token_count
-            decode_n = benchmark.last_decode_token_count
-            prompt_seconds = _seconds_from_rate(
-                prefill_n, benchmark.last_prefill_tokens_per_second
-            )
-            generation_seconds = _seconds_from_rate(
-                decode_n, benchmark.last_decode_tokens_per_second
-            )
-
-            prompt_tokens = resident_before + prefill_n
-            cached_tokens = resident_before
+            added = max(resident_after - resident_before, 0)
 
             self._synced_messages = deepcopy(messages)
             self._synced_messages.append(
                 {"role": "assistant", "content": content}
             )
 
+            # LiteRT-LM 0.14 exposes resident token_count but not the later
+            # get_benchmark_info() Python API. Keep exact values exact: resident
+            # KV and total tokens appended by this live turn are known; separate
+            # prompt/decode counts and timings are intentionally left unknown.
             LOGGER.info(
-                "litert-kv %s resident=%d new=%d prompt=%d decode=%d after=%d "
-                "prefill=%s generate=%s",
+                "litert-kv %s resident=%d added=%d after=%d wall=%.3fs",
                 self.label,
                 resident_before,
-                prefill_n,
-                prompt_tokens,
-                decode_n,
+                added,
                 resident_after,
-                _fmt_seconds(prompt_seconds),
-                _fmt_seconds(generation_seconds),
+                elapsed,
             )
 
             return ChatResponse(
                 content=content,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=decode_n,
+                prompt_tokens=None,
+                completion_tokens=None,
                 elapsed_seconds=elapsed,
-                cached_tokens=cached_tokens,
-                prompt_evaluated_tokens=prefill_n,
-                prompt_seconds=prompt_seconds,
-                generation_seconds=generation_seconds,
+                cached_tokens=resident_before,
+                prompt_evaluated_tokens=None,
+                prompt_seconds=None,
+                generation_seconds=None,
             )
         except ModelClientError:
             raise
@@ -248,18 +202,25 @@ class LiteRTNativeChatClient:
             self._conversation.close()
 
         prefix = deepcopy(messages[:-1])
+        started = time.monotonic()
         self._conversation = self.engine.create_conversation(
             messages=prefix,
             automatic_tool_calling=False,
             sampler_config=self.sampler_config,
             thinking_config=self.thinking_config,
+            prefill_preface_on_init=bool(prefix),
             max_output_tokens=self.max_output_tokens,
         )
+        elapsed = time.monotonic() - started
+        resident = self._conversation.token_count
         self._synced_messages = prefix
         LOGGER.info(
-            "litert-kv %s created conversation with %d preface messages",
+            "litert-kv %s created conversation preface_messages=%d resident=%d "
+            "prefill=%.3fs",
             self.label,
             len(prefix),
+            resident,
+            elapsed,
         )
 
 
@@ -288,13 +249,3 @@ def _response_text(response: Any) -> str:
     raise ModelClientError(
         f"LiteRT-LM native response has no text content: {response!r}"
     )
-
-
-def _seconds_from_rate(token_count: int, tokens_per_second: float) -> float | None:
-    if token_count <= 0 or tokens_per_second <= 0:
-        return None
-    return token_count / tokens_per_second
-
-
-def _fmt_seconds(value: float | None) -> str:
-    return f"{value:.3f}s" if value is not None else "?"
