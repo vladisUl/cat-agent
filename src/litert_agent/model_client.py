@@ -23,13 +23,7 @@ class WarmResult:
 
 
 class LiteRTChatClient:
-    """LiteRT-LM adapter backed by the low-level Session API.
-
-    Conversation is used only as the official chat-template renderer.
-    Live model state is held by one Session:
-
-        prefix prefill -> user prefill -> decode -> user prefill -> decode ...
-    """
+    """LiteRT-LM adapter backed by the low-level Session API."""
 
     def __init__(
         self,
@@ -40,11 +34,13 @@ class LiteRTChatClient:
         top_p: float,
         reasoning_effort: str,
         label: str,
+        allow_prefix_reset: bool = False,
     ) -> None:
         self.engine = engine
         self.max_output_tokens = max_output_tokens
         self.reasoning_effort = reasoning_effort
         self.label = label
+        self.allow_prefix_reset = allow_prefix_reset
         self.sampler_config = litert_lm.SamplerConfig(
             top_p=top_p,
             temperature=temperature,
@@ -141,14 +137,18 @@ class LiteRTChatClient:
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
         if not messages or messages[-1].get("role") != "user":
             raise ModelClientError("LiteRT Session turn must end in a user message")
+
         if self._session is None or self._renderer is None:
-            raise ModelClientError(
-                "LiteRT Session client has not been prepared with prepare_prefix()"
-            )
+            if not self._try_reset_prefix(messages):
+                raise ModelClientError(
+                    "LiteRT Session client has not been prepared with prepare_prefix()"
+                )
+
         if messages[:-1] != self._synced_messages:
-            raise ModelClientError(
-                f"LiteRT Session {self.label} history no longer extends resident KV"
-            )
+            if not self._try_reset_prefix(messages):
+                raise ModelClientError(
+                    f"LiteRT Session {self.label} history no longer extends resident KV"
+                )
 
         try:
             user_turn = self._render_user_turn(messages[-1])
@@ -203,6 +203,15 @@ class LiteRTChatClient:
             raise
         except Exception as exc:
             raise ModelClientError(f"LiteRT-LM Session request failed: {exc}") from exc
+
+    def _try_reset_prefix(self, messages: list[dict[str, str]]) -> bool:
+        if not self.allow_prefix_reset or len(messages) != 4:
+            return False
+        prefix = messages[:3]
+        if [item.get("role") for item in prefix] != ["system", "user", "assistant"]:
+            return False
+        self.prepare_prefix(prefix)
+        return messages[:-1] == self._synced_messages
 
     def _configure_renderer_ffi(self) -> None:
         assert self._lib is not None
