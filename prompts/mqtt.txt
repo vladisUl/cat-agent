@@ -1,7 +1,8 @@
-IP address mosquitto server 192.168.0.21
-port 1883
+broker_host: 192.168.0.21
+broker_port: 1883
+
 topics:
-zigbee2mqtt/temp_ulica это температура на улице
-zigbee2mqtt/temp_tua это температура дома
-zigbee2mqtt/temp_akva это температура в аквариуме
-zigbee2mqtt/temp_moroz это температура в морозильнике
+zigbee2mqtt/temp_ulica: температура на улице
+zigbee2mqtt/temp_tua: температура дома
+zigbee2mqtt/temp_akva: температура в аквариуме
+zigbee2mqtt/temp_moroz: температура в морозильнике
