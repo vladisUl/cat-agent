@@ -4,7 +4,7 @@ set -e
 
 : "${CAT_AGENT_MODEL:?CAT_AGENT_MODEL is not set}"
 
-MTP_MODEL=/storage/models/litertlm/mtp-gemma-4-E4B-it.gguf
+MTP_MODEL=/storage/models/mtp-gemma-4-E4B-it.gguf
 
 if [[ ! -f "$MTP_MODEL" ]]; then
   echo "MTP model not found: $MTP_MODEL" >&2
