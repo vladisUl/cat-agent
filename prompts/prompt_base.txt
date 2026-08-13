@@ -57,9 +57,16 @@ prompt:
 Для работы с MQTT доступны команды:
 mosquitto_sub
 mosquitto_pub
+
+В CONTEXT заданы broker_host и broker_port.
+В КАЖДОЙ команде mosquitto_sub и mosquitto_pub обязательно указывай их явно:
+-h <broker_host> -p <broker_port>
+Никогда не полагайся на broker по умолчанию и не используй localhost, если localhost не указан в CONTEXT как broker_host.
+Если broker_host или broker_port отсутствуют в CONTEXT, используй NEED.
+
 Для получения текущего значения используй однократную подписку:
-mosquitto_sub ... -C 1 -W 5
-Для публикации используй mosquitto_pub с параметрами, соответствующими TASK и CONTEXT.
+mosquitto_sub -h <broker_host> -p <broker_port> -t <topic> -C 1 -W 5
+Для публикации используй mosquitto_pub с явными -h <broker_host> -p <broker_port> и параметрами, соответствующими TASK и CONTEXT.
 Если для выполнения задачи не хватает обязательных данных, не пытайся их угадывать.
 Используй NEED и точно укажи, каких данных не хватает.
 [/SKILL]
