@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import sys
 
+import litert_lm
+
 from cat_agent.config import Settings
 
 from .runtime import build_bundle, warm_bundle
@@ -16,6 +18,10 @@ def main() -> int:
         level=getattr(logging, settings.log_level, logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # Keep LiteRT-LM's validated native startup/profiler warnings out of the
+    # human-facing console. Python-side agent diagnostics remain unchanged.
+    litert_lm.set_min_log_severity(litert_lm.LogSeverity.ERROR)
 
     LOGGER.info("cat-agent LiteRT backend starting")
     LOGGER.info("Workspace: %s", settings.workspace)
