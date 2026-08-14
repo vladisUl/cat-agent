@@ -17,11 +17,15 @@ class FakeClient:
     def __init__(self, replies: list[str]) -> None:
         self.replies = list(replies)
         self.calls: list[list[dict[str, str]]] = []
+        self.reset_calls: list[list[dict[str, str]]] = []
 
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
         self.calls.append([dict(item) for item in messages])
         content = self.replies.pop(0)
         return ChatResponse(content, None, None, 0.001)
+
+    def reset_to_base(self, messages: list[dict[str, str]]) -> None:
+        self.reset_calls.append([dict(item) for item in messages])
 
 
 class IntegrationTest(unittest.TestCase):
@@ -77,8 +81,9 @@ class IntegrationTest(unittest.TestCase):
             self.assertNotIn("[TASK]", first_agent_call[1]["content"])
             self.assertIn("[TASK]", first_agent_call[3]["content"])
             self.assertIn("Посмотри список файлов", first_agent_call[3]["content"])
+            self.assertEqual(len(client.reset_calls), 2)
 
-    def test_repeated_matching_agent_tasks_append_to_session(self) -> None:
+    def test_repeated_matching_agent_tasks_reuse_clean_base(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             prompt_dir = root / "prompts"
@@ -114,11 +119,48 @@ class IntegrationTest(unittest.TestCase):
             self.assertEqual(second.status, "OK")
             second_call = client.calls[1]
 
-            self.assertEqual(second_call[: len(first_call)], first_call)
-            self.assertEqual(second_call[len(first_call)]["role"], "assistant")
-            self.assertIn("Первая задача выполнена", second_call[len(first_call)]["content"])
+            self.assertEqual(first_call[:3], second_call[:3])
+            self.assertEqual(len(second_call), 4)
             self.assertEqual(second_call[-1]["role"], "user")
             self.assertIn("температуру в аквариуме", second_call[-1]["content"])
+            self.assertNotIn("Первая задача выполнена", str(second_call))
+            self.assertEqual(len(client.reset_calls), 2)
+            self.assertEqual(client.reset_calls[0], first_call[:3])
+
+    def test_manager_replies_start_next_request_from_clean_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prompt_dir = root / "prompts"
+            shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+
+            client = FakeClient(
+                [
+                    "REPLY\nПервый ответ.",
+                    "REPLY\nВторой ответ.",
+                ]
+            )
+            store = PromptStore(prompt_dir, 1)
+            store.validate()
+            manager = ManagerRuntime(
+                client,  # type: ignore[arg-type]
+                SkillBase(prompt_dir / "prompt_base.txt"),
+                store,
+                AgentPool([]),
+                max_steps=4,
+            )
+
+            first = manager.user_message("Первая задача")
+            second = manager.user_message("Вторая задача")
+
+            self.assertEqual(first.kind, "reply")
+            self.assertEqual(second.kind, "reply")
+            self.assertEqual(client.calls[0][:3], client.calls[1][:3])
+            self.assertEqual(len(client.calls[1]), 4)
+            self.assertIn("Вторая задача", client.calls[1][-1]["content"])
+            self.assertNotIn("Первая задача", str(client.calls[1]))
+            self.assertEqual(len(client.reset_calls), 2)
 
     def test_need_ask_continue_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -162,11 +204,13 @@ class IntegrationTest(unittest.TestCase):
             first = manager.user_message("Прочитай нужный файл.")
             self.assertEqual(first.kind, "ask")
             self.assertEqual(worker.state.value, "WAITING")
+            self.assertEqual(len(client.reset_calls), 0)
 
             second = manager.user_message("answer.txt")
             self.assertEqual(second.kind, "reply")
             self.assertIn("42", second.text)
             self.assertEqual(worker.state.value, "FREE")
+            self.assertEqual(len(client.reset_calls), 2)
 
 
 if __name__ == "__main__":
