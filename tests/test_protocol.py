@@ -35,6 +35,15 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(item.system_command, "TIMER SET cats 60")
         self.assertEqual(item.body, "Проверяй test.txt и обрабатывай содержимое.")
 
+    def test_manager_system_rejects_malformed_timer_set_from_model(self) -> None:
+        item = parse_manager_output(
+            'SYSTEM TIMER SET cat_check "Проверить файл test.txt."\n'
+            "SYSTEM TIMER START cat_check"
+        )
+        self.assertIsNone(item.action)
+        self.assertIn("period_seconds", item.error or "")
+        self.assertIn("starts the timer automatically", item.error or "")
+
     def test_manager_system_rejects_embedded_control_action(self) -> None:
         item = parse_manager_output(
             "SYSTEM TIMER SET cats 60\n"
