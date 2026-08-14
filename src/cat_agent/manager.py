@@ -44,6 +44,7 @@ class ManagerRuntime:
             {"role": "user", "content": bootstrap},
             {"role": "assistant", "content": MANAGER_BOOTSTRAP_ACK},
         ]
+        self._base_messages = [dict(item) for item in self.messages]
 
     def user_message(self, text: str) -> ManagerTurn:
         user_text = text.strip()
@@ -73,6 +74,7 @@ class ManagerRuntime:
                 response = self.client.chat(self.messages)
             except ModelClientError as exc:
                 LOGGER.exception("manager step %d model request failed", step)
+                self._reset_to_base()
                 return ManagerTurn("error", f"Model request failed: {exc}")
 
             LOGGER.info(
@@ -111,6 +113,7 @@ class ManagerRuntime:
                         "manager repeated identical protocol error %d times; aborting current request",
                         repeated_protocol_errors,
                     )
+                    self._reset_to_base()
                     return ManagerTurn(
                         "error",
                         "Manager repeated the same invalid control response 3 times; current request aborted",
@@ -121,8 +124,10 @@ class ManagerRuntime:
             repeated_protocol_errors = 0
 
             if directive.action is ManagerAction.REPLY:
-                LOGGER.info("MANAGER REPLY %r", directive.body)
-                return ManagerTurn("reply", directive.body)
+                text = directive.body
+                LOGGER.info("MANAGER REPLY %r", text)
+                self._reset_to_base()
+                return ManagerTurn("reply", text)
 
             if directive.action is ManagerAction.ASK:
                 LOGGER.info("MANAGER ASK %r", directive.body)
@@ -166,6 +171,7 @@ class ManagerRuntime:
                 continue
 
         LOGGER.error("Manager exceeded maximum of %d steps", self.max_steps)
+        self._reset_to_base()
         return ManagerTurn("error", f"Manager exceeded maximum of {self.max_steps} steps")
 
     def _delegate(self, skill_names: tuple[str, ...], task: str) -> None:
@@ -221,6 +227,16 @@ class ManagerRuntime:
             self.messages[-1]["content"] = f"{previous}\n\n{content}" if previous else content
             return
         self.messages.append({"role": "user", "content": content})
+
+    def _reset_to_base(self) -> None:
+        try:
+            reset_to_base = getattr(self.client, "reset_to_base", None)
+            if callable(reset_to_base):
+                reset_to_base(self._base_messages)
+            LOGGER.info("MANAGER RESET resident session to base")
+        except Exception:
+            LOGGER.exception("MANAGER failed to reset resident session to base")
+        self.messages = [dict(item) for item in self._base_messages]
 
     def _bootstrap_prompt(self) -> str:
         return (
