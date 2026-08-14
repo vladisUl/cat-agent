@@ -50,6 +50,10 @@ class LiteRTChatClient:
         self._session = None
         self._lib = None
         self._base_preface = ""
+        self._base_messages: list[dict[str, str]] = []
+        self._base_resident_tokens = 0
+        self._checkpoint_label = f"cat-agent-{label}-base".encode("utf-8")
+        self._checkpoint_ready = False
         self._synced_messages: list[dict[str, str]] = []
         self._resident_tokens = 0
         self._last_response: ChatResponse | None = None
@@ -82,6 +86,9 @@ class LiteRTChatClient:
             self._renderer = None
         self._lib = None
         self._base_preface = ""
+        self._base_messages = []
+        self._base_resident_tokens = 0
+        self._checkpoint_ready = False
         self._synced_messages = []
         self._resident_tokens = 0
         self._last_response = None
@@ -103,6 +110,7 @@ class LiteRTChatClient:
             )
             self._lib = self._renderer._lib
             self._configure_renderer_ffi()
+            self._configure_session_checkpoint_ffi()
 
             raw = self._lib.litert_lm_conversation_render_preface_to_string(
                 self._renderer._ptr
@@ -128,17 +136,21 @@ class LiteRTChatClient:
                     f"Session prefix prefill returned {prefill_n} tokens"
                 )
 
+            self._base_messages = deepcopy(messages)
+            self._base_resident_tokens = prefill_n
             self._resident_tokens = prefill_n
             self._synced_messages = deepcopy(messages)
+            self._save_base_checkpoint()
 
             LOGGER.info(
-                "litert-session-warm %s resident=%d elapsed=%.3fs",
+                "litert-session-warm %s resident=%d elapsed=%.3fs checkpoint=%s",
                 self.label,
                 self._resident_tokens,
                 elapsed,
+                self._checkpoint_label.decode("utf-8"),
             )
             result = WarmResult(
-                strategy="session-native",
+                strategy="session-checkpoint",
                 elapsed_seconds=elapsed,
                 token_count=prefill_n,
             )
@@ -150,6 +162,45 @@ class LiteRTChatClient:
             self.close()
             raise ModelClientError(
                 f"LiteRT-LM Session prefix prefill failed: {exc}"
+            ) from exc
+
+    def reset_to_base(self, messages: list[dict[str, str]]) -> None:
+        if messages != self._base_messages:
+            raise ModelClientError(
+                f"LiteRT Session {self.label} requested reset does not match resident base"
+            )
+        if (
+            self._session is None
+            or self._lib is None
+            or not self._checkpoint_ready
+        ):
+            raise ModelClientError(
+                f"LiteRT Session {self.label} has no resident base checkpoint"
+            )
+
+        try:
+            result = self._lib.litert_lm_session_rewind_to_checkpoint(
+                self._session._ptr,
+                self._checkpoint_label,
+            )
+            if result != 0:
+                raise RuntimeError(
+                    f"rewind_to_checkpoint returned {result}"
+                )
+            self._resident_tokens = self._base_resident_tokens
+            self._synced_messages = deepcopy(self._base_messages)
+            self._last_response = None
+            LOGGER.info(
+                "litert-session-rewind %s resident=%d checkpoint=%s",
+                self.label,
+                self._resident_tokens,
+                self._checkpoint_label.decode("utf-8"),
+            )
+        except ModelClientError:
+            raise
+        except Exception as exc:
+            raise ModelClientError(
+                f"LiteRT-LM Session rewind failed: {exc}"
             ) from exc
 
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
@@ -230,7 +281,10 @@ class LiteRTChatClient:
         prefix = messages[:3]
         if [item.get("role") for item in prefix] != ["system", "user", "assistant"]:
             return False
-        self.prepare_prefix(prefix)
+        if self._checkpoint_ready and prefix == self._base_messages:
+            self.reset_to_base(prefix)
+        else:
+            self.prepare_prefix(prefix)
         return messages[:-1] == self._synced_messages
 
     def _configure_renderer_ffi(self) -> None:
@@ -245,6 +299,44 @@ class LiteRTChatClient:
             ctypes.c_char_p,
         ]
         self._lib.litert_lm_conversation_render_message_to_string.restype = ctypes.c_char_p
+
+    def _configure_session_checkpoint_ffi(self) -> None:
+        assert self._lib is not None
+
+        required = (
+            "litert_lm_session_save_checkpoint",
+            "litert_lm_session_rewind_to_checkpoint",
+        )
+        missing = [name for name in required if not hasattr(self._lib, name)]
+        if missing:
+            raise RuntimeError(
+                "installed LiteRT-LM lacks Session checkpoint C API; "
+                "LiteRT-LM 0.16.0 or newer is required: "
+                + ", ".join(missing)
+            )
+
+        self._lib.litert_lm_session_save_checkpoint.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+        ]
+        self._lib.litert_lm_session_save_checkpoint.restype = ctypes.c_int
+        self._lib.litert_lm_session_rewind_to_checkpoint.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+        ]
+        self._lib.litert_lm_session_rewind_to_checkpoint.restype = ctypes.c_int
+
+    def _save_base_checkpoint(self) -> None:
+        assert self._session is not None
+        assert self._lib is not None
+
+        result = self._lib.litert_lm_session_save_checkpoint(
+            self._session._ptr,
+            self._checkpoint_label,
+        )
+        if result != 0:
+            raise RuntimeError(f"save_checkpoint returned {result}")
+        self._checkpoint_ready = True
 
     def _render_user_turn(self, message: dict[str, str]) -> str:
         assert self._renderer is not None
