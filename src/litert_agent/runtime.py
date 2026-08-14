@@ -14,6 +14,7 @@ from cat_agent.manager import ManagerRuntime
 from cat_agent.pool import AgentPool
 from cat_agent.prompt_store import AGENT_BOOTSTRAP_ACK, MANAGER_BOOTSTRAP_ACK, PromptStore
 from cat_agent.skills import SkillBase
+from cat_agent.system_events import SystemRuntime
 
 from .model_client import LiteRTChatClient, WarmResult
 
@@ -27,12 +28,18 @@ DEFAULT_MODEL = Path(
 @dataclass(slots=True)
 class LiteRTRuntimeBundle:
     runtime: ManagerRuntime
+    system_runtime: SystemRuntime
     manager_engine: litert_lm.Engine
     agent_engine: litert_lm.Engine
     manager_client: LiteRTChatClient
     agent_client: LiteRTChatClient
     manager_engine_init_seconds: float
     agent_engine_init_seconds: float
+    model_path: Path
+    backend_name: str
+    speculative: bool
+    manager_warm: WarmResult | None = None
+    agent_warm: WarmResult | None = None
 
     def close(self) -> None:
         self.manager_client.close()
@@ -79,6 +86,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
     prompt_store = PromptStore(settings.prompt_dir, settings.agent_count)
     prompt_store.validate()
     skill_base = SkillBase(settings.prompt_dir / "prompt_base.txt")
+    system_runtime = SystemRuntime()
 
     manager_client = LiteRTChatClient(
         manager_engine,
@@ -116,17 +124,22 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         skill_base,
         prompt_store,
         AgentPool(workers),
+        system_runtime,
         max_steps=settings.max_manager_steps,
     )
 
     return LiteRTRuntimeBundle(
         runtime=runtime,
+        system_runtime=system_runtime,
         manager_engine=manager_engine,
         agent_engine=agent_engine,
         manager_client=manager_client,
         agent_client=agent_client,
         manager_engine_init_seconds=manager_init,
         agent_engine_init_seconds=agent_init,
+        model_path=model_path,
+        backend_name=backend_name,
+        speculative=speculative,
     )
 
 
@@ -158,6 +171,8 @@ def warm_bundle(
         {"role": "assistant", "content": AGENT_BOOTSTRAP_ACK},
     ]
     agent_warm = bundle.agent_client.prepare_prefix(agent_messages)
+    bundle.manager_warm = manager_warm
+    bundle.agent_warm = agent_warm
     return manager_warm, agent_warm
 
 

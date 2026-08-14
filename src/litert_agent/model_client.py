@@ -52,6 +52,20 @@ class LiteRTChatClient:
         self._base_preface = ""
         self._synced_messages: list[dict[str, str]] = []
         self._resident_tokens = 0
+        self._last_response: ChatResponse | None = None
+        self._warm_result: WarmResult | None = None
+
+    @property
+    def resident_tokens(self) -> int:
+        return self._resident_tokens
+
+    @property
+    def last_response(self) -> ChatResponse | None:
+        return self._last_response
+
+    @property
+    def warm_result(self) -> WarmResult | None:
+        return self._warm_result
 
     def wait_until_ready(
         self, stop_requested: Callable[[], bool], interval: float = 2.0
@@ -70,6 +84,8 @@ class LiteRTChatClient:
         self._base_preface = ""
         self._synced_messages = []
         self._resident_tokens = 0
+        self._last_response = None
+        self._warm_result = None
 
     def prepare_prefix(self, messages: list[dict[str, str]]) -> WarmResult:
         if len(messages) < 3 or messages[-1].get("role") != "assistant":
@@ -121,11 +137,13 @@ class LiteRTChatClient:
                 self._resident_tokens,
                 elapsed,
             )
-            return WarmResult(
+            result = WarmResult(
                 strategy="session-native",
                 elapsed_seconds=elapsed,
                 token_count=prefill_n,
             )
+            self._warm_result = result
+            return result
         except ModelClientError:
             raise
         except Exception as exc:
@@ -189,7 +207,7 @@ class LiteRTChatClient:
                 generation_seconds,
             )
 
-            return ChatResponse(
+            result = ChatResponse(
                 content=content,
                 prompt_tokens=resident_before + prefill_n,
                 completion_tokens=decode_n,
@@ -199,6 +217,8 @@ class LiteRTChatClient:
                 prompt_seconds=prompt_seconds,
                 generation_seconds=generation_seconds,
             )
+            self._last_response = result
+            return result
         except ModelClientError:
             raise
         except Exception as exc:

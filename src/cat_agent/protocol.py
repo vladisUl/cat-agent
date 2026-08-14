@@ -8,6 +8,7 @@ import re
 class ManagerAction(str, Enum):
     DELEGATE = "DELEGATE"
     CONTINUE = "CONTINUE"
+    SYSTEM = "SYSTEM"
     ASK = "ASK"
     WAIT = "WAIT"
     REPLY = "REPLY"
@@ -19,6 +20,7 @@ class ManagerDirective:
     body: str
     skills: tuple[str, ...] = ()
     agent_id: str | None = None
+    system_command: str | None = None
     error: str | None = None
 
 
@@ -68,6 +70,16 @@ def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirec
             return ManagerDirective(None, "", error="WAIT must not contain additional text")
         return ManagerDirective(ManagerAction.WAIT, "")
 
+    if first.startswith("SYSTEM "):
+        command = first[len("SYSTEM ") :].strip()
+        if not command:
+            return ManagerDirective(None, "", error="SYSTEM requires a command")
+        return ManagerDirective(
+            ManagerAction.SYSTEM,
+            body,
+            system_command=command,
+        )
+
     if first.startswith("DELEGATE "):
         skills_text = first[len("DELEGATE ") :].strip()
         if not skills_text:
@@ -92,7 +104,7 @@ def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirec
     return ManagerDirective(
         None,
         "",
-        error="first line must be DELEGATE, CONTINUE, ASK, WAIT, or REPLY",
+        error="first line must be DELEGATE, CONTINUE, SYSTEM, ASK, WAIT, or REPLY",
     )
 
 

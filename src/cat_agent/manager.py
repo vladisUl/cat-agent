@@ -9,6 +9,7 @@ from .pool import AgentPool
 from .prompt_store import MANAGER_BOOTSTRAP_ACK, PromptStore
 from .protocol import ManagerAction, parse_manager_output
 from .skills import SkillBase, SkillBaseError
+from .system_events import SystemEvent, SystemRuntime
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class ManagerRuntime:
         skill_base: SkillBase,
         prompt_store: PromptStore,
         pool: AgentPool,
+        system_runtime: SystemRuntime | None = None,
         *,
         max_steps: int,
     ) -> None:
@@ -33,6 +35,7 @@ class ManagerRuntime:
         self.skill_base = skill_base
         self.prompt_store = prompt_store
         self.pool = pool
+        self.system_runtime = system_runtime or SystemRuntime()
         self.max_steps = max_steps
         bootstrap = self._bootstrap_prompt()
         self.prompt_store.write_manager_prompt(bootstrap)
@@ -46,6 +49,12 @@ class ManagerRuntime:
         user_text = text.strip()
         self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
         self._append_user(user_text)
+        return self._drive()
+
+    def system_event(self, event: SystemEvent) -> ManagerTurn:
+        text = event.manager_text()
+        self.prompt_store.write_manager_prompt(text)
+        self._append_user(text)
         return self._drive()
 
     def _drive(self) -> ManagerTurn:
@@ -87,6 +96,15 @@ class ManagerRuntime:
 
             if directive.action is ManagerAction.WAIT:
                 return ManagerTurn("wait", "Manager is waiting for an external event.")
+
+            if directive.action is ManagerAction.SYSTEM:
+                assert directive.system_command is not None
+                result = self.system_runtime.execute(
+                    directive.system_command,
+                    directive.body,
+                )
+                self._event(result)
+                continue
 
             if directive.action is ManagerAction.DELEGATE:
                 self._delegate(directive.skills, directive.body)
@@ -156,5 +174,8 @@ class ManagerRuntime:
             "[AGENT_CONTAINERS]\n"
             f"{self.pool.status_text()}\n"
             "[/AGENT_CONTAINERS]\n\n"
-            "Система готова. Жди сообщения пользователя."
+            "[SYSTEM]\n"
+            f"{self.system_runtime.capabilities_text()}\n"
+            "[/SYSTEM]\n\n"
+            "Система готова. Жди сообщения пользователя или SYSTEM_EVENT."
         )
