@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import curses
 import logging
 from pathlib import Path
+import sys
 import textwrap
 import time
 
@@ -16,6 +17,10 @@ from .runtime import LiteRTRuntimeBundle
 
 LOGGER = logging.getLogger(__name__)
 LOG_PATH = Path("/var/log/litertlm/cat-agent.log")
+BRACKETED_PASTE_ON = "\x1b[?2004h"
+BRACKETED_PASTE_OFF = "\x1b[?2004l"
+BRACKETED_PASTE_START = "[200~"
+BRACKETED_PASTE_END = "\x1b[201~"
 
 
 @dataclass(slots=True)
@@ -43,14 +48,16 @@ class LiteRTTUI:
         self._quit = False
 
     def run(self) -> None:
+        self._set_bracketed_paste(True)
         try:
             curses.wrapper(self._main)
         finally:
+            self._set_bracketed_paste(False)
             self._executor.shutdown(wait=True, cancel_futures=False)
 
     def _main(self, stdscr) -> None:
         try:
-            curses.curs_set(1)
+            curses.curs_set(0)
         except curses.error:
             pass
         stdscr.keypad(True)
@@ -71,6 +78,9 @@ class LiteRTTUI:
             try:
                 key = stdscr.get_wch()
             except curses.error:
+                continue
+
+            if key == "\x1b" and self._try_bracketed_paste(stdscr):
                 continue
             self._handle_key(key)
 
@@ -184,24 +194,7 @@ class LiteRTTUI:
 
     def _handle_key(self, key) -> None:
         if key in ("\n", "\r", curses.KEY_ENTER):
-            text = self._input.strip()
-            self._input = ""
-            if not text:
-                return
-            if text in {"/quit", "/exit"}:
-                self._quit = True
-                return
-            LOGGER.info("USER input=%r", text)
-            self._dialog.append(("YOU", text))
-            self._dialog_scroll_lines = 0
-            self._pending.append(
-                _Request(
-                    kind="user",
-                    label="user",
-                    payload=text,
-                    queued_at=time.monotonic(),
-                )
-            )
+            self._submit_input()
             return
 
         if key in (curses.KEY_BACKSPACE, "\b", "\x7f"):
@@ -227,8 +220,88 @@ class LiteRTTUI:
             self._quit = True
             return
 
+        if key == "\x16":
+            self._status = "PASTE: use terminal paste shortcut"
+            return
+
         if isinstance(key, str) and key.isprintable():
             self._input += key
+
+    def _submit_input(self) -> None:
+        text = self._input.strip()
+        self._input = ""
+        if not text:
+            return
+        if text in {"/quit", "/exit"}:
+            self._quit = True
+            return
+        LOGGER.info("USER input=%r", text)
+        self._dialog.append(("YOU", text))
+        self._dialog_scroll_lines = 0
+        self._pending.append(
+            _Request(
+                kind="user",
+                label="user",
+                payload=text,
+                queued_at=time.monotonic(),
+            )
+        )
+
+    def _try_bracketed_paste(self, stdscr) -> bool:
+        stdscr.timeout(30)
+        prefix = ""
+        try:
+            for _ in range(len(BRACKETED_PASTE_START)):
+                try:
+                    item = stdscr.get_wch()
+                except curses.error:
+                    return False
+                if not isinstance(item, str):
+                    return False
+                prefix += item
+            if prefix != BRACKETED_PASTE_START:
+                return False
+
+            stdscr.timeout(1000)
+            data = ""
+            tail = ""
+            while True:
+                try:
+                    item = stdscr.get_wch()
+                except curses.error:
+                    LOGGER.warning("TUI bracketed paste timed out")
+                    break
+                if not isinstance(item, str):
+                    continue
+                tail += item
+                if tail.endswith(BRACKETED_PASTE_END):
+                    data += tail[: -len(BRACKETED_PASTE_END)]
+                    break
+                if len(tail) > len(BRACKETED_PASTE_END):
+                    data += tail[0]
+                    tail = tail[1:]
+
+            pasted = self._normalize_paste(data)
+            if pasted:
+                self._input += pasted
+                self._status = f"PASTED {len(pasted)} chars"
+                LOGGER.info("TUI pasted %d characters", len(pasted))
+            return True
+        finally:
+            stdscr.timeout(100)
+
+    @staticmethod
+    def _normalize_paste(text: str) -> str:
+        return " ".join(text.replace("\r", "\n").splitlines()).strip()
+
+    @staticmethod
+    def _set_bracketed_paste(enabled: bool) -> None:
+        sequence = BRACKETED_PASTE_ON if enabled else BRACKETED_PASTE_OFF
+        try:
+            sys.stdout.write(sequence)
+            sys.stdout.flush()
+        except (AttributeError, OSError):
+            pass
 
     def _draw(self, stdscr) -> None:
         stdscr.erase()
@@ -271,7 +344,7 @@ class LiteRTTUI:
 
         self._draw_dialog(left)
         self._draw_info(right)
-        cursor_y, cursor_x = self._draw_input(
+        self._draw_input(
             input_win,
             visible_input_lines,
             input_cursor,
@@ -281,12 +354,6 @@ class LiteRTTUI:
         left.noutrefresh()
         right.noutrefresh()
         input_win.noutrefresh()
-
-        try:
-            curses.curs_set(1)
-            curses.setsyx(input_y + cursor_y, cursor_x)
-        except curses.error:
-            pass
         curses.doupdate()
 
     def _draw_dialog(self, win) -> None:
@@ -471,7 +538,7 @@ class LiteRTTUI:
         lines: list[str],
         cursor: tuple[int, int],
         hidden_lines: int,
-    ) -> tuple[int, int]:
+    ) -> None:
         _height, width = win.getmaxyx()
         for row, line in enumerate(lines, start=1):
             display = line
@@ -484,7 +551,15 @@ class LiteRTTUI:
         if visible_cursor_row < 1:
             visible_cursor_row = 1
             cursor_col = 0
-        return visible_cursor_row, min(width - 2, 2 + cursor_col)
+        cursor_x = min(width - 2, 2 + cursor_col)
+        self._safe_addstr(
+            win,
+            visible_cursor_row,
+            cursor_x,
+            " ",
+            curses.A_REVERSE | curses.A_BOLD,
+            1,
+        )
 
     @staticmethod
     def _seconds(value: float | None) -> str:
