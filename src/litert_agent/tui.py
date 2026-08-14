@@ -40,7 +40,8 @@ class LiteRTTUI:
         self._active_future: Future[ManagerTurn] | None = None
         self._active_started: float | None = None
         self._last_request_seconds: float | None = None
-        self._dialog: deque[tuple[str, str]] = deque(maxlen=1000)
+        self._chat_started = time.monotonic()
+        self._dialog: deque[tuple[str, str, int]] = deque(maxlen=1000)
         self._dialog_scroll_lines = 0
         self._dialog_page_lines = 10
         self._input = ""
@@ -62,11 +63,9 @@ class LiteRTTUI:
             pass
         stdscr.keypad(True)
         stdscr.timeout(100)
-        self._dialog.append(
-            (
-                "SYSTEM",
-                "LiteRT ready. /quit exits. PageUp/PageDown scroll dialog.",
-            )
+        self._append_dialog(
+            "SYSTEM",
+            "LiteRT ready. /quit exits. PageUp/PageDown scroll dialog.",
         )
 
         while not self._quit:
@@ -87,10 +86,14 @@ class LiteRTTUI:
     def _runtime_busy(self) -> bool:
         return self._active_future is not None or bool(self._pending)
 
+    def _append_dialog(self, speaker: str, text: str) -> None:
+        elapsed = max(0, int(time.monotonic() - self._chat_started))
+        self._dialog.append((speaker, text, elapsed))
+
     def _poll_system_events(self) -> None:
         busy = self._runtime_busy()
         for event in self.bundle.system_runtime.poll_due(busy=busy):
-            self._dialog.append(("SYSTEM", f"event {event.source}:{event.name}"))
+            self._append_dialog("SYSTEM", f"event {event.source}:{event.name}")
             self._dialog_scroll_lines = 0
             self._enqueue_system_event(event)
 
@@ -165,16 +168,16 @@ class LiteRTTUI:
             turn = future.result()
         except Exception as exc:
             LOGGER.exception("TUI request failed")
-            self._dialog.append(("ERROR", str(exc)))
+            self._append_dialog("ERROR", str(exc))
         else:
             if request is not None and request.kind == "system":
                 prefix = "SYSTEM/MANAGER"
             else:
                 prefix = "MANAGER"
             if turn.kind == "wait":
-                self._dialog.append((prefix, "WAIT"))
+                self._append_dialog(prefix, "WAIT")
             else:
-                self._dialog.append((prefix, turn.text))
+                self._append_dialog(prefix, turn.text)
             LOGGER.info(
                 "TUI request complete kind=%s label=%s turn=%s text=%r",
                 request.kind if request is not None else "?",
@@ -236,7 +239,7 @@ class LiteRTTUI:
             self._quit = True
             return
         LOGGER.info("USER input=%r", text)
-        self._dialog.append(("YOU", text))
+        self._append_dialog("YOU", text)
         self._dialog_scroll_lines = 0
         self._pending.append(
             _Request(
@@ -359,21 +362,22 @@ class LiteRTTUI:
     def _draw_dialog(self, win) -> None:
         height, width = win.getmaxyx()
         usable_width = max(1, width - 4)
-        lines: list[tuple[str, bool]] = []
+        lines: list[tuple[str, str, bool]] = []
 
-        for speaker, text in self._dialog:
+        for speaker, text, elapsed in self._dialog:
             normalized = " ".join(text.strip().split())
+            timed_text = f"{normalized} ({self._format_elapsed(elapsed)})"
             prefix = f"{speaker}> "
             wrapped = textwrap.wrap(
-                normalized,
+                timed_text,
                 width=max(10, usable_width - len(prefix)),
                 replace_whitespace=True,
                 drop_whitespace=True,
             ) or [""]
-            lines.append((prefix + wrapped[0], True))
+            lines.append((prefix, wrapped[0], True))
             indent = " " * len(prefix)
-            lines.extend((indent + item, False) for item in wrapped[1:])
-            lines.append(("", False))
+            lines.extend((indent, item, False) for item in wrapped[1:])
+            lines.append(("", "", False))
 
         page = max(1, height - 2)
         self._dialog_page_lines = max(5, page - 2)
@@ -383,11 +387,19 @@ class LiteRTTUI:
         start = max(0, end - page)
         visible = lines[start:end]
 
-        for row, (line, first_line) in enumerate(visible, start=1):
-            attr = 0
-            if first_line and line.startswith(("YOU>", "MANAGER>", "SYSTEM>", "SYSTEM/MANAGER>")):
-                attr = curses.A_BOLD
-            self._safe_addstr(win, row, 2, line, attr, width - 4)
+        for row, (lead, text, first_line) in enumerate(visible, start=1):
+            if first_line:
+                self._safe_addstr(win, row, 2, lead, curses.A_BOLD, width - 4)
+                self._safe_addstr(
+                    win,
+                    row,
+                    2 + len(lead),
+                    text,
+                    0,
+                    width - 4 - len(lead),
+                )
+            else:
+                self._safe_addstr(win, row, 2, lead + text, 0, width - 4)
 
         if self._dialog_scroll_lines:
             marker = f" ↑ {self._dialog_scroll_lines} lines "
@@ -564,6 +576,17 @@ class LiteRTTUI:
     @staticmethod
     def _seconds(value: float | None) -> str:
         return "--" if value is None else f"{value:.3f}s"
+
+    @staticmethod
+    def _format_elapsed(value: int) -> str:
+        total = max(0, int(value))
+        if total < 60:
+            return f"{total}сек"
+        minutes, seconds = divmod(total, 60)
+        if minutes < 60:
+            return f"{minutes}мин{seconds}сек"
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}ч{minutes}мин{seconds}сек"
 
     @staticmethod
     def _format_bytes(value: int) -> str:
