@@ -9,49 +9,36 @@ from cat_agent.model_client import OpenAIChatClient
 
 
 class _Handler(BaseHTTPRequestHandler):
-    requests: list[dict] = []
+    requests: list[tuple[str, dict]] = []
 
     def log_message(self, format: str, *args: object) -> None:
         pass
 
-    def do_GET(self) -> None:
-        if self.path != "/v1/models":
-            self.send_error(404)
-            return
-        body = json.dumps({"object": "list", "data": [{"id": "gemma4-e4b"}]}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
     def do_POST(self) -> None:
-        if self.path != "/v1/chat/completions":
-            self.send_error(404)
-            return
         length = int(self.headers["Content-Length"])
         payload = json.loads(self.rfile.read(length))
-        self.__class__.requests.append(payload)
-        response = {
-            "choices": [{
-                "index": 0,
-                "finish_reason": "stop",
-                "message": {"role": "assistant", "content": "ls test.txt"},
-            }],
-            "usage": {
-                "prompt_tokens": 20,
-                "completion_tokens": 4,
-                "total_tokens": 24,
-                "prompt_tokens_details": {"cached_tokens": 17},
-            },
-            "timings": {
-                "cache_n": 17,
-                "prompt_n": 3,
-                "prompt_ms": 123.0,
-                "predicted_ms": 456.0,
-            },
-        }
-        body = json.dumps(response).encode()
+        self.__class__.requests.append((self.path, payload))
+
+        if self.path == "/apply-template":
+            body = json.dumps({"prompt": "<templated>test</templated>"}).encode()
+        elif self.path == "/completion":
+            body = json.dumps(
+                {
+                    "content": "ls test.txt",
+                    "tokens_evaluated": 20,
+                    "tokens_predicted": 4,
+                    "timings": {
+                        "prompt_n": 3,
+                        "prompt_ms": 123.0,
+                        "predicted_n": 4,
+                        "predicted_ms": 456.0,
+                    },
+                }
+            ).encode()
+        else:
+            self.send_error(404)
+            return
+
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -84,10 +71,7 @@ class OpenAIChatClientTest(unittest.TestCase):
         self.server.server_close()
         self.thread.join(timeout=2)
 
-    def test_models_and_text_chat_without_native_tools(self) -> None:
-        models = self.client.list_models()
-        self.assertEqual(models["data"][0]["id"], "gemma4-e4b")
-
+    def test_native_text_chat_without_tools(self) -> None:
         response = self.client.chat([{"role": "user", "content": "test"}])
         self.assertEqual(response.content, "ls test.txt")
         self.assertEqual(response.prompt_tokens, 20)
@@ -97,14 +81,22 @@ class OpenAIChatClientTest(unittest.TestCase):
         self.assertEqual(response.prompt_seconds, 0.123)
         self.assertEqual(response.generation_seconds, 0.456)
 
-        payload = _Handler.requests[0]
-        self.assertEqual(payload["model"], "gemma4-e4b")
-        self.assertNotIn("tools", payload)
-        self.assertNotIn("tool_choice", payload)
-        self.assertEqual(payload["max_completion_tokens"], 64)
-        self.assertEqual(payload["reasoning_effort"], "none")
+        self.assertEqual(len(_Handler.requests), 2)
+        template_path, template_payload = _Handler.requests[0]
+        self.assertEqual(template_path, "/apply-template")
+        self.assertEqual(template_payload["messages"], [{"role": "user", "content": "test"}])
+
+        completion_path, payload = _Handler.requests[1]
+        self.assertEqual(completion_path, "/completion")
+        self.assertEqual(payload["prompt"], "<templated>test</templated>")
+        self.assertIs(payload["stream"], False)
+        self.assertEqual(payload["n_predict"], 64)
+        self.assertEqual(payload["temperature"], 0.0)
+        self.assertEqual(payload["top_p"], 1.0)
         self.assertEqual(payload["id_slot"], 1)
         self.assertIs(payload["cache_prompt"], True)
+        self.assertNotIn("tools", payload)
+        self.assertNotIn("tool_choice", payload)
 
 
 if __name__ == "__main__":
