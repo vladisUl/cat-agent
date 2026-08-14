@@ -210,7 +210,19 @@ class AgentWorker:
 
     def _release(self, *, preserve_session: bool) -> None:
         self.state = AgentState.FREE
-        if not preserve_session:
+        if preserve_session and self._messages is not None:
+            base_messages = [dict(item) for item in self._messages[:3]]
+            try:
+                reset_to_base = getattr(self.client, "reset_to_base", None)
+                if callable(reset_to_base):
+                    reset_to_base(base_messages)
+                self._messages = base_messages
+                LOGGER.info("%s RESET resident session to base", self.agent_id)
+            except Exception:
+                LOGGER.exception("%s failed to reset resident session to base", self.agent_id)
+                self._messages = None
+                self._session_bootstrap = None
+        else:
             self._messages = None
             self._session_bootstrap = None
         self._runtime = None
