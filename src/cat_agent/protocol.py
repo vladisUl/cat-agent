@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import re
+import shlex
 
 
 class ManagerAction(str, Enum):
@@ -53,6 +54,23 @@ def _looks_like_manager_control_line(line: str) -> bool:
     )
 
 
+def _positive_number(raw: str) -> bool:
+    try:
+        return float(raw) > 0
+    except ValueError:
+        return False
+
+
+def _timer_set_error() -> str:
+    return (
+        "invalid SYSTEM TIMER SET format; use exactly:\n"
+        "SYSTEM TIMER SET <name> <period_seconds>\n"
+        "<future event task>\n"
+        "period_seconds must be a positive number; put the task only on following lines; "
+        "TIMER SET starts the timer automatically, so do not add TIMER START"
+    )
+
+
 def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirective:
     text = content.strip()
     if not text:
@@ -86,31 +104,68 @@ def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirec
         if not command:
             return ManagerDirective(None, "", error="SYSTEM requires a command")
 
-        parts = command.split()
+        try:
+            parts = shlex.split(command)
+        except ValueError as exc:
+            return ManagerDirective(None, "", error=f"invalid SYSTEM command syntax: {exc}")
+
         if len(parts) >= 2 and parts[0].upper() == "TIMER":
             operation = parts[1].upper()
+
             if operation == "SET":
+                if len(parts) != 4 or not _positive_number(parts[3]):
+                    return ManagerDirective(None, "", error=_timer_set_error())
                 if not body:
-                    return ManagerDirective(
-                        None,
-                        "",
-                        error="SYSTEM TIMER SET requires only the future event task on following lines",
-                    )
+                    return ManagerDirective(None, "", error=_timer_set_error())
                 if any(_looks_like_manager_control_line(line) for line in body.splitlines()):
                     return ManagerDirective(
                         None,
                         "",
                         error=(
                             "SYSTEM TIMER SET body must contain only the future event task; "
-                            "do not embed DELEGATE, CONTINUE, SYSTEM, ASK, WAIT, or REPLY"
+                            "do not embed DELEGATE, CONTINUE, SYSTEM, ASK, WAIT, or REPLY. "
+                            "TIMER SET already starts the timer automatically"
                         ),
                     )
-            elif body:
-                return ManagerDirective(
-                    None,
-                    "",
-                    error=f"SYSTEM TIMER {operation} must not contain additional text",
-                )
+
+            elif operation in {"START", "STOP", "DELETE"}:
+                if len(parts) != 3:
+                    return ManagerDirective(
+                        None,
+                        "",
+                        error=f"SYSTEM TIMER {operation} requires exactly one timer name",
+                    )
+                if body:
+                    return ManagerDirective(
+                        None,
+                        "",
+                        error=f"SYSTEM TIMER {operation} must not contain additional text",
+                    )
+
+            elif operation == "PERIOD":
+                if len(parts) != 4 or not _positive_number(parts[3]):
+                    return ManagerDirective(
+                        None,
+                        "",
+                        error=(
+                            "SYSTEM TIMER PERIOD requires exactly: "
+                            "SYSTEM TIMER PERIOD <name> <positive_period_seconds>"
+                        ),
+                    )
+                if body:
+                    return ManagerDirective(
+                        None,
+                        "",
+                        error="SYSTEM TIMER PERIOD must not contain additional text",
+                    )
+
+            elif operation == "LIST":
+                if len(parts) != 2 or body:
+                    return ManagerDirective(
+                        None,
+                        "",
+                        error="SYSTEM TIMER LIST must not contain arguments or additional text",
+                    )
 
         return ManagerDirective(
             ManagerAction.SYSTEM,
