@@ -95,6 +95,13 @@ class OpenAIChatClient:
                 time.sleep(interval)
         return False
 
+    def reset_to_base(self, messages: list[dict[str, str]]) -> None:
+        # llama-server receives the complete prompt on every request. With
+        # cache_prompt enabled it will keep the common prefix and discard the
+        # divergent tail automatically, so there is no explicit server-side
+        # rewind operation to perform here.
+        del messages
+
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
         return self._complete(messages, n_predict=self.max_output_tokens)
 
