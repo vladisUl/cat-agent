@@ -47,12 +47,19 @@ class ManagerRuntime:
 
     def user_message(self, text: str) -> ManagerTurn:
         user_text = text.strip()
+        LOGGER.info("MANAGER USER MESSAGE\n%s", user_text)
         self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
         self._append_user(user_text)
         return self._drive()
 
     def system_event(self, event: SystemEvent) -> ManagerTurn:
         text = event.manager_text()
+        LOGGER.info(
+            "MANAGER SYSTEM EVENT source=%s name=%s\n%s",
+            event.source,
+            event.name,
+            text,
+        )
         self.prompt_store.write_manager_prompt(text)
         self._append_user(text)
         return self._drive()
@@ -62,10 +69,12 @@ class ManagerRuntime:
             try:
                 response = self.client.chat(self.messages)
             except ModelClientError as exc:
+                LOGGER.exception("manager step %d model request failed", step)
                 return ManagerTurn("error", f"Model request failed: {exc}")
 
             LOGGER.info(
-                "manager step %d response in %.3f s: prompt=%s cached=%s new=%s prefill=%s completion=%s generate=%s content=%r",
+                "manager step %d response in %.3f s: prompt=%s cached=%s new=%s "
+                "prefill=%s completion=%s generate=%s",
                 step,
                 response.elapsed_seconds,
                 response.prompt_tokens if response.prompt_tokens is not None else "?",
@@ -80,25 +89,34 @@ class ManagerRuntime:
                 f"{response.generation_seconds:.3f}s"
                 if response.generation_seconds is not None
                 else "?",
-                " ".join(response.content.strip().split())[:300],
             )
+            LOGGER.info("manager step %d MODEL RESPONSE\n%s", step, response.content)
             self.messages.append({"role": "assistant", "content": response.content})
             directive = parse_manager_output(response.content)
             if directive.error:
+                LOGGER.warning("manager step %d protocol error: %s", step, directive.error)
                 self._event(f"PROTOCOL_ERROR\n{directive.error}")
                 continue
 
             if directive.action is ManagerAction.REPLY:
+                LOGGER.info("MANAGER REPLY %r", directive.body)
                 return ManagerTurn("reply", directive.body)
 
             if directive.action is ManagerAction.ASK:
+                LOGGER.info("MANAGER ASK %r", directive.body)
                 return ManagerTurn("ask", directive.body)
 
             if directive.action is ManagerAction.WAIT:
+                LOGGER.info("MANAGER WAIT")
                 return ManagerTurn("wait", "Manager is waiting for an external event.")
 
             if directive.action is ManagerAction.SYSTEM:
                 assert directive.system_command is not None
+                LOGGER.info(
+                    "MANAGER SYSTEM directive=%r body=%r",
+                    directive.system_command,
+                    directive.body,
+                )
                 result = self.system_runtime.execute(
                     directive.system_command,
                     directive.body,
@@ -107,28 +125,42 @@ class ManagerRuntime:
                 continue
 
             if directive.action is ManagerAction.DELEGATE:
+                LOGGER.info(
+                    "MANAGER DELEGATE skills=%s task=%r",
+                    ",".join(directive.skills),
+                    directive.body,
+                )
                 self._delegate(directive.skills, directive.body)
                 continue
 
             if directive.action is ManagerAction.CONTINUE:
                 assert directive.agent_id is not None
+                LOGGER.info(
+                    "MANAGER CONTINUE agent=%s context=%r",
+                    directive.agent_id,
+                    directive.body,
+                )
                 self._continue_agent(directive.agent_id, directive.body)
                 continue
 
+        LOGGER.error("Manager exceeded maximum of %d steps", self.max_steps)
         return ManagerTurn("error", f"Manager exceeded maximum of {self.max_steps} steps")
 
     def _delegate(self, skill_names: tuple[str, ...], task: str) -> None:
         try:
             skills = self.skill_base.require(skill_names)
         except SkillBaseError as exc:
+            LOGGER.warning("DELEGATE_FAILED skills=%s error=%s", skill_names, exc)
             self._event(f"EVENT DELEGATE_FAILED\n{exc}")
             return
 
         worker = self.pool.acquire()
         if worker is None:
+            LOGGER.warning("DELEGATE_FAILED no FREE agent")
             self._event("EVENT DELEGATE_FAILED\nNo FREE agent container is available.")
             return
 
+        LOGGER.info("AGENT assigned id=%s skills=%s", worker.agent_id, ",".join(skill_names))
         self._event(
             f"EVENT STARTED {worker.agent_id}\nskills: {','.join(skill_names)}"
         )
@@ -149,12 +181,14 @@ class ManagerRuntime:
         self._agent_outcome(outcome.agent_id, outcome.status, outcome.text)
 
     def _agent_outcome(self, agent_id: str, status: str, text: str) -> None:
+        LOGGER.info("AGENT outcome id=%s status=%s text=%r", agent_id, status, text)
         if status == "NEED":
             self._event(f"EVENT NEED {agent_id}\n{text}")
         else:
             self._event(f"EVENT RESULT {agent_id} {status}\n{text}")
 
     def _event(self, text: str) -> None:
+        LOGGER.info("MANAGER runtime event\n%s", text)
         self.prompt_store.write_manager_prompt(text)
         self._append_user(text)
 

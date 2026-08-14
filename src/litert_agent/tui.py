@@ -4,6 +4,8 @@ from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 import curses
+import logging
+from pathlib import Path
 import textwrap
 import time
 
@@ -11,6 +13,9 @@ from cat_agent.manager import ManagerTurn
 from cat_agent.system_events import SystemEvent
 
 from .runtime import LiteRTRuntimeBundle
+
+LOGGER = logging.getLogger(__name__)
+LOG_PATH = Path("/var/log/litertlm/cat-agent.log")
 
 
 @dataclass(slots=True)
@@ -30,7 +35,9 @@ class LiteRTTUI:
         self._active_future: Future[ManagerTurn] | None = None
         self._active_started: float | None = None
         self._last_request_seconds: float | None = None
-        self._dialog: deque[tuple[str, str]] = deque(maxlen=500)
+        self._dialog: deque[tuple[str, str]] = deque(maxlen=1000)
+        self._dialog_scroll_lines = 0
+        self._dialog_page_lines = 10
         self._input = ""
         self._status = "IDLE"
         self._quit = False
@@ -51,7 +58,7 @@ class LiteRTTUI:
         self._dialog.append(
             (
                 "SYSTEM",
-                "LiteRT ready. /quit exits. Internal timer events are active.",
+                "LiteRT ready. /quit exits. PageUp/PageDown scroll dialog.",
             )
         )
 
@@ -67,28 +74,62 @@ class LiteRTTUI:
                 continue
             self._handle_key(key)
 
+    def _runtime_busy(self) -> bool:
+        return self._active_future is not None or bool(self._pending)
+
     def _poll_system_events(self) -> None:
-        for event in self.bundle.system_runtime.poll_due():
-            self._dialog.append(
-                ("SYSTEM", f"event {event.source}:{event.name}")
-            )
-            self._pending.append(
-                _Request(
+        busy = self._runtime_busy()
+        for event in self.bundle.system_runtime.poll_due(busy=busy):
+            self._dialog.append(("SYSTEM", f"event {event.source}:{event.name}"))
+            self._dialog_scroll_lines = 0
+            self._enqueue_system_event(event)
+
+    def _enqueue_system_event(self, event: SystemEvent) -> None:
+        label = f"{event.source}:{event.name}"
+        for index, request in enumerate(self._pending):
+            if request.kind == "system" and request.label == label:
+                self._pending[index] = _Request(
                     kind="system",
-                    label=f"{event.source}:{event.name}",
+                    label=label,
                     payload=event,
                     queued_at=time.monotonic(),
                 )
+                LOGGER.info("TUI coalesced pending system event label=%s", label)
+                return
+        self._pending.append(
+            _Request(
+                kind="system",
+                label=label,
+                payload=event,
+                queued_at=time.monotonic(),
             )
+        )
+        LOGGER.info("TUI queued system event label=%s", label)
 
     def _start_next(self) -> None:
         if self._active_future is not None or not self._pending:
             return
 
         request = self._pending.popleft()
+        if request.kind == "system":
+            assert isinstance(request.payload, SystemEvent)
+            event = request.payload
+            if event.source == "timer" and not self.bundle.system_runtime.timer_enabled(event.name):
+                LOGGER.info(
+                    "TUI dropped stale timer event name=%s because timer is stopped",
+                    event.name,
+                )
+                return
+
         self._active_request = request
         self._active_started = time.monotonic()
         self._status = f"BUSY {request.label}"
+        LOGGER.info(
+            "TUI request start kind=%s label=%s queued_for=%.3fs",
+            request.kind,
+            request.label,
+            self._active_started - request.queued_at,
+        )
 
         if request.kind == "user":
             assert isinstance(request.payload, str)
@@ -113,6 +154,7 @@ class LiteRTTUI:
         try:
             turn = future.result()
         except Exception as exc:
+            LOGGER.exception("TUI request failed")
             self._dialog.append(("ERROR", str(exc)))
         else:
             if request is not None and request.kind == "system":
@@ -123,7 +165,15 @@ class LiteRTTUI:
                 self._dialog.append((prefix, "WAIT"))
             else:
                 self._dialog.append((prefix, turn.text))
+            LOGGER.info(
+                "TUI request complete kind=%s label=%s turn=%s text=%r",
+                request.kind if request is not None else "?",
+                request.label if request is not None else "?",
+                turn.kind,
+                turn.text,
+            )
 
+        self._dialog_scroll_lines = 0
         if started is not None:
             self._last_request_seconds = time.monotonic() - started
 
@@ -141,7 +191,9 @@ class LiteRTTUI:
             if text in {"/quit", "/exit"}:
                 self._quit = True
                 return
+            LOGGER.info("USER input=%r", text)
             self._dialog.append(("YOU", text))
+            self._dialog_scroll_lines = 0
             self._pending.append(
                 _Request(
                     kind="user",
@@ -154,6 +206,21 @@ class LiteRTTUI:
 
         if key in (curses.KEY_BACKSPACE, "\b", "\x7f"):
             self._input = self._input[:-1]
+            return
+
+        if key == curses.KEY_PPAGE:
+            self._dialog_scroll_lines += self._dialog_page_lines
+            return
+
+        if key == curses.KEY_NPAGE:
+            self._dialog_scroll_lines = max(
+                0,
+                self._dialog_scroll_lines - self._dialog_page_lines,
+            )
+            return
+
+        if key == curses.KEY_END:
+            self._dialog_scroll_lines = 0
             return
 
         if key == "\x03":
@@ -178,18 +245,25 @@ class LiteRTTUI:
             stdscr.refresh()
             return
 
-        input_height = 3
-        body_height = height - input_height
+        input_lines, input_cursor = self._layout_input(width)
+        max_input_lines = max(2, min(10, height // 3))
+        visible_input_lines = input_lines[-max_input_lines:]
+        hidden_input_lines = len(input_lines) - len(visible_input_lines)
+        input_height = len(visible_input_lines) + 2
+        body_height = height - input_height + 1
+
         left_width = max(55, int(width * 0.64))
-        right_width = width - left_width
+        right_x = left_width - 1
+        right_width = width - right_x
 
         left = stdscr.derwin(body_height, left_width, 0, 0)
-        right = stdscr.derwin(body_height, right_width, 0, left_width)
-        input_win = stdscr.derwin(input_height, width, body_height, 0)
+        right = stdscr.derwin(body_height, right_width, 0, right_x)
+        input_y = body_height - 1
+        input_win = stdscr.derwin(input_height, width, input_y, 0)
 
-        left.box()
-        right.box()
-        input_win.box()
+        self._draw_box(left)
+        self._draw_box(right)
+        self._draw_box(input_win)
 
         self._title(left, " DIALOG ")
         self._title(right, " LiteRT-LM ")
@@ -197,23 +271,28 @@ class LiteRTTUI:
 
         self._draw_dialog(left)
         self._draw_info(right)
-        self._draw_input(input_win)
-
-        try:
-            input_win.move(1, min(width - 2, 2 + len(self._input)))
-            curses.curs_set(1)
-        except curses.error:
-            pass
+        cursor_y, cursor_x = self._draw_input(
+            input_win,
+            visible_input_lines,
+            input_cursor,
+            hidden_input_lines,
+        )
 
         left.noutrefresh()
         right.noutrefresh()
         input_win.noutrefresh()
+
+        try:
+            curses.curs_set(1)
+            curses.setsyx(input_y + cursor_y, cursor_x)
+        except curses.error:
+            pass
         curses.doupdate()
 
     def _draw_dialog(self, win) -> None:
         height, width = win.getmaxyx()
         usable_width = max(1, width - 4)
-        lines: list[str] = []
+        lines: list[tuple[str, bool]] = []
 
         for speaker, text in self._dialog:
             normalized = " ".join(text.strip().split())
@@ -224,15 +303,28 @@ class LiteRTTUI:
                 replace_whitespace=True,
                 drop_whitespace=True,
             ) or [""]
-            lines.append(prefix + wrapped[0])
+            lines.append((prefix + wrapped[0], True))
             indent = " " * len(prefix)
-            lines.extend(indent + item for item in wrapped[1:])
-            lines.append("")
+            lines.extend((indent + item, False) for item in wrapped[1:])
+            lines.append(("", False))
 
-        visible = lines[-max(1, height - 2) :]
-        for row, line in enumerate(visible, start=1):
-            attr = curses.A_BOLD if line.startswith(("YOU>", "MANAGER>", "SYSTEM>")) else 0
+        page = max(1, height - 2)
+        self._dialog_page_lines = max(5, page - 2)
+        max_scroll = max(0, len(lines) - page)
+        self._dialog_scroll_lines = min(self._dialog_scroll_lines, max_scroll)
+        end = len(lines) - self._dialog_scroll_lines
+        start = max(0, end - page)
+        visible = lines[start:end]
+
+        for row, (line, first_line) in enumerate(visible, start=1):
+            attr = 0
+            if first_line and line.startswith(("YOU>", "MANAGER>", "SYSTEM>", "SYSTEM/MANAGER>")):
+                attr = curses.A_BOLD
             self._safe_addstr(win, row, 2, line, attr, width - 4)
+
+        if self._dialog_scroll_lines:
+            marker = f" ↑ {self._dialog_scroll_lines} lines "
+            self._safe_addstr(win, 0, max(2, width - len(marker) - 2), marker, curses.A_BOLD)
 
     def _draw_info(self, win) -> None:
         height, width = win.getmaxyx()
@@ -309,9 +401,18 @@ class LiteRTTUI:
                 else:
                     state = f"{timer.period_seconds:g}s stopped"
                 put(timer.name[:12], state)
+                put("  fired/skip", f"{timer.fired}/{timer.skipped}")
 
         if self._pending:
             put("queue", str(len(self._pending)))
+
+        row += 1
+        put("LOG", bold=True)
+        put("file", str(LOG_PATH))
+        try:
+            put("size", self._format_bytes(LOG_PATH.stat().st_size))
+        except OSError:
+            put("size", "--")
 
     def _draw_client_stats(self, win, row: int, client, width: int, height: int) -> int:
         def put(text: str) -> None:
@@ -341,17 +442,74 @@ class LiteRTTUI:
         put(f"wall         {response.elapsed_seconds:.3f}s")
         return row
 
-    def _draw_input(self, win) -> None:
-        height, width = win.getmaxyx()
-        del height
+    def _layout_input(self, width: int) -> tuple[list[str], tuple[int, int]]:
+        inner_width = max(8, width - 4)
         prompt = "> "
-        available = max(1, width - 4 - len(prompt))
-        visible = self._input[-available:]
-        self._safe_addstr(win, 1, 2, prompt + visible, curses.A_BOLD, width - 4)
+        first_capacity = max(1, inner_width - len(prompt))
+        text = self._input
+
+        first = text[:first_capacity]
+        lines = [prompt + first]
+        consumed = len(first)
+        while consumed < len(text):
+            chunk = text[consumed : consumed + inner_width]
+            lines.append(chunk)
+            consumed += len(chunk)
+
+        if text and len(text) == first_capacity:
+            lines.append("")
+        elif len(text) > first_capacity and (len(text) - first_capacity) % inner_width == 0:
+            lines.append("")
+
+        cursor_row = len(lines) - 1
+        cursor_col = len(lines[-1])
+        return lines, (cursor_row, cursor_col)
+
+    def _draw_input(
+        self,
+        win,
+        lines: list[str],
+        cursor: tuple[int, int],
+        hidden_lines: int,
+    ) -> tuple[int, int]:
+        _height, width = win.getmaxyx()
+        for row, line in enumerate(lines, start=1):
+            display = line
+            if row == 1 and hidden_lines:
+                display = "… " + display
+            self._safe_addstr(win, row, 2, display, curses.A_BOLD, width - 4)
+
+        cursor_row, cursor_col = cursor
+        visible_cursor_row = cursor_row - hidden_lines + 1
+        if visible_cursor_row < 1:
+            visible_cursor_row = 1
+            cursor_col = 0
+        return visible_cursor_row, min(width - 2, 2 + cursor_col)
 
     @staticmethod
     def _seconds(value: float | None) -> str:
         return "--" if value is None else f"{value:.3f}s"
+
+    @staticmethod
+    def _format_bytes(value: int) -> str:
+        if value < 1024:
+            return f"{value} B"
+        if value < 1024 * 1024:
+            return f"{value / 1024:.1f} KiB"
+        return f"{value / (1024 * 1024):.1f} MiB"
+
+    @staticmethod
+    def _draw_box(win) -> None:
+        height, width = win.getmaxyx()
+        if height < 2 or width < 2:
+            return
+        top = "┌" + "─" * max(0, width - 2) + "┐"
+        bottom = "└" + "─" * max(0, width - 2) + "┘"
+        LiteRTTUI._safe_addstr(win, 0, 0, top)
+        for row in range(1, height - 1):
+            LiteRTTUI._safe_addstr(win, row, 0, "│")
+            LiteRTTUI._safe_addstr(win, row, width - 1, "│")
+        LiteRTTUI._safe_addstr(win, height - 1, 0, bottom)
 
     @staticmethod
     def _title(win, title: str) -> None:
@@ -361,7 +519,14 @@ class LiteRTTUI:
             pass
 
     @staticmethod
-    def _safe_addstr(win, y: int, x: int, text: str, attr: int = 0, limit: int | None = None) -> None:
+    def _safe_addstr(
+        win,
+        y: int,
+        x: int,
+        text: str,
+        attr: int = 0,
+        limit: int | None = None,
+    ) -> None:
         try:
             if limit is None:
                 win.addstr(y, x, text, attr)

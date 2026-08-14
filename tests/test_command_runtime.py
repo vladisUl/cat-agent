@@ -32,6 +32,31 @@ class CommandRuntimeTest(unittest.TestCase):
         escaped = self.runtime.execute("cat /etc/passwd")
         self.assertNotEqual(escaped.exit_code, 0)
 
+    def test_safe_cat_append_requires_fresh_read(self) -> None:
+        (self.root / "source.txt").write_text("Кот сидит на диване\n", encoding="utf-8")
+        blocked = self.runtime.execute("cat source.txt >> user.txt")
+        self.assertEqual(blocked.exit_code, 1)
+        self.assertEqual(blocked.metadata.get("error_code"), "source_not_read")
+
+        read = self.runtime.execute("cat source.txt")
+        self.assertTrue(read.ok)
+        appended = self.runtime.execute("cat source.txt >> user.txt")
+        self.assertTrue(appended.ok)
+        self.assertEqual(appended.operation, "append")
+        self.assertEqual(
+            (self.root / "user.txt").read_text(encoding="utf-8"),
+            "Кот сидит на диване\n",
+        )
+
+    def test_safe_cat_append_rejects_changed_source(self) -> None:
+        source = self.root / "source.txt"
+        source.write_text("кот\n", encoding="utf-8")
+        self.assertTrue(self.runtime.execute("cat source.txt").ok)
+        source.write_text("собака\n", encoding="utf-8")
+        changed = self.runtime.execute("cat source.txt >> user.txt")
+        self.assertEqual(changed.exit_code, 1)
+        self.assertEqual(changed.metadata.get("error_code"), "source_changed")
+
 
 if __name__ == "__main__":
     unittest.main()

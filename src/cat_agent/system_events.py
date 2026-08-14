@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import shlex
 import threading
 import time
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +33,9 @@ class TimerSpec:
     task: str
     enabled: bool
     next_fire_monotonic: float | None
+    sequence: int = 0
+    fired: int = 0
+    skipped: int = 0
 
 
 class SystemRuntime:
@@ -54,21 +60,41 @@ class SystemRuntime:
         )
 
     def execute(self, command: str, body: str) -> str:
+        LOGGER.info(
+            "SYSTEM command=%r body=%r",
+            command,
+            " ".join(body.strip().split())[:1000],
+        )
         try:
             argv = shlex.split(command)
         except ValueError as exc:
-            return f"SYSTEM_ERROR\ninvalid command syntax: {exc}"
+            result = f"SYSTEM_ERROR\ninvalid command syntax: {exc}"
+            LOGGER.warning("SYSTEM result=%r", result)
+            return result
 
         if not argv:
-            return "SYSTEM_ERROR\nempty system command"
+            result = "SYSTEM_ERROR\nempty system command"
+            LOGGER.warning("SYSTEM result=%r", result)
+            return result
         if argv[0].upper() != "TIMER":
             source = argv[0].lower()
             state = self._source_state.get(source)
             if state == "stub":
-                return f"SYSTEM_ERROR\n{source} event source is reserved but not implemented yet"
-            return f"SYSTEM_ERROR\nunknown system source: {argv[0]}"
+                result = (
+                    f"SYSTEM_ERROR\n{source} event source is reserved "
+                    "but not implemented yet"
+                )
+            else:
+                result = f"SYSTEM_ERROR\nunknown system source: {argv[0]}"
+            LOGGER.warning("SYSTEM result=%r", result)
+            return result
 
-        return self._execute_timer(argv[1:], body)
+        result = self._execute_timer(argv[1:], body)
+        if result.startswith("SYSTEM_OK"):
+            LOGGER.info("SYSTEM result=%r", result)
+        else:
+            LOGGER.warning("SYSTEM result=%r", result)
+        return result
 
     def _execute_timer(self, argv: list[str], body: str) -> str:
         if not argv:
@@ -95,10 +121,14 @@ class SystemRuntime:
                     enabled=True,
                     next_fire_monotonic=now + period,
                 )
-            return (
-                f"SYSTEM_OK\n"
-                f"timer {name} set to {period:g}s and started"
+            LOGGER.info(
+                "SYSTEM timer set name=%s period=%.3fs next=%.3f task=%r",
+                name,
+                period,
+                now + period,
+                " ".join(task.split())[:1000],
             )
+            return f"SYSTEM_OK\ntimer {name} set to {period:g}s and started"
 
         if op == "START":
             if len(argv) != 2:
@@ -111,6 +141,7 @@ class SystemRuntime:
                     return f"SYSTEM_ERROR\nunknown timer: {name}"
                 timer.enabled = True
                 timer.next_fire_monotonic = now + timer.period_seconds
+            LOGGER.info("SYSTEM timer started name=%s", name)
             return f"SYSTEM_OK\ntimer {name} started"
 
         if op == "STOP":
@@ -123,6 +154,7 @@ class SystemRuntime:
                     return f"SYSTEM_ERROR\nunknown timer: {name}"
                 timer.enabled = False
                 timer.next_fire_monotonic = None
+            LOGGER.info("SYSTEM timer stopped name=%s", name)
             return f"SYSTEM_OK\ntimer {name} stopped"
 
         if op == "PERIOD":
@@ -140,6 +172,7 @@ class SystemRuntime:
                 timer.period_seconds = period
                 if timer.enabled:
                     timer.next_fire_monotonic = now + period
+            LOGGER.info("SYSTEM timer period name=%s period=%.3fs", name, period)
             return f"SYSTEM_OK\ntimer {name} period changed to {period:g}s"
 
         if op == "DELETE":
@@ -149,6 +182,7 @@ class SystemRuntime:
             with self._lock:
                 if self._timers.pop(name, None) is None:
                     return f"SYSTEM_ERROR\nunknown timer: {name}"
+            LOGGER.info("SYSTEM timer deleted name=%s", name)
             return f"SYSTEM_OK\ntimer {name} deleted"
 
         if op == "LIST":
@@ -158,7 +192,12 @@ class SystemRuntime:
 
         return f"SYSTEM_ERROR\nunknown TIMER operation: {op}"
 
-    def poll_due(self, now: float | None = None) -> tuple[SystemEvent, ...]:
+    def poll_due(
+        self,
+        now: float | None = None,
+        *,
+        busy: bool = False,
+    ) -> tuple[SystemEvent, ...]:
         current = time.monotonic() if now is None else now
         events: list[SystemEvent] = []
         with self._lock:
@@ -170,23 +209,45 @@ class SystemRuntime:
                 ):
                     continue
 
-                events.append(
-                    SystemEvent(
-                        source="timer",
-                        name=timer.name,
-                        task=timer.task,
-                        created_monotonic=current,
+                timer.sequence += 1
+                if busy:
+                    timer.skipped += 1
+                    LOGGER.info(
+                        "SYSTEM timer tick skipped name=%s sequence=%d "
+                        "reason=runtime_busy",
+                        timer.name,
+                        timer.sequence,
                     )
-                )
+                else:
+                    timer.fired += 1
+                    LOGGER.info(
+                        "SYSTEM timer tick emitted name=%s sequence=%d",
+                        timer.name,
+                        timer.sequence,
+                    )
+                    events.append(
+                        SystemEvent(
+                            source="timer",
+                            name=timer.name,
+                            task=timer.task,
+                            created_monotonic=current,
+                        )
+                    )
 
-                # Keep periodic cadence stable while avoiding a catch-up storm after
-                # a long model call: advance to the first future deadline.
+                # Preserve the periodic cadence without catch-up storms. Whether the
+                # due tick was emitted or skipped while busy, the next deadline is
+                # always the first deadline strictly in the future.
                 next_fire = timer.next_fire_monotonic
                 while next_fire <= current:
                     next_fire += timer.period_seconds
                 timer.next_fire_monotonic = next_fire
 
         return tuple(events)
+
+    def timer_enabled(self, name: str) -> bool:
+        with self._lock:
+            timer = self._timers.get(name)
+            return bool(timer is not None and timer.enabled)
 
     def timer_snapshot(self) -> tuple[TimerSpec, ...]:
         with self._lock:
@@ -197,6 +258,9 @@ class SystemRuntime:
                     task=item.task,
                     enabled=item.enabled,
                     next_fire_monotonic=item.next_fire_monotonic,
+                    sequence=item.sequence,
+                    fired=item.fired,
+                    skipped=item.skipped,
                 )
                 for item in self._timers.values()
             )
@@ -214,7 +278,8 @@ class SystemRuntime:
             else:
                 state = "stopped"
             lines.append(
-                f"{timer.name}: period={timer.period_seconds:g}s {state} task={timer.task!r}"
+                f"{timer.name}: period={timer.period_seconds:g}s {state} "
+                f"fired={timer.fired} skipped={timer.skipped} task={timer.task!r}"
             )
         return "\n".join(lines)
 

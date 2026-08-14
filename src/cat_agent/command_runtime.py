@@ -8,6 +8,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import tempfile
 from typing import Any
 
 
@@ -51,6 +52,8 @@ class CommandRuntime:
         self.skill_names = frozenset(skill_names)
         self.max_file_bytes = max_file_bytes
         self.timeout_seconds = timeout_seconds
+        self._read_snapshots: dict[Path, str] = {}
+        self._successful_appends: set[tuple[Path, Path, str]] = set()
 
     def prompt(self) -> str:
         return f"root@agent:{self.cwd}#"
@@ -121,10 +124,24 @@ class CommandRuntime:
         if any(char in command for char in ("\x00", "`", "$")):
             raise ValueError("command substitution and variable expansion are not permitted")
         tokens = shlex.split(command, posix=True)
-        if any(char in command for char in (";", "|", "&", "<", "(" , ")")):
+        is_cat_append = (
+            len(tokens) == 4
+            and tokens[0] == "cat"
+            and tokens[2] == ">>"
+        )
+        if is_cat_append:
+            reduced = command.replace(">>", "", 1)
+            if any(char in reduced for char in (";", "|", "&", "<", "(", ")", ">")):
+                raise ValueError("shell control operators are not permitted")
+            return tokens
+
+        if any(char in command for char in (";", "|", "&", "<", "(", ")")):
             raise ValueError("shell control operators are not permitted")
         if ">" in command and (not tokens or tokens[0] != "echo"):
-            raise ValueError("redirection is permitted only for echo > FILE or echo >> FILE")
+            raise ValueError(
+                "redirection is permitted only for echo > FILE, echo >> FILE, "
+                "or cat SOURCE >> DEST"
+            )
         return tokens
 
     def _pwd(self, command: str, tokens: list[str]) -> CommandResult:
@@ -171,6 +188,9 @@ class CommandRuntime:
         return self._ok(command, "ls", out + ("\n" if out else ""))
 
     def _cat(self, command: str, tokens: list[str]) -> CommandResult:
+        if len(tokens) == 4 and tokens[2] == ">>":
+            return self._append_file(command, tokens[1], tokens[3])
+
         self._arity(tokens, 2, "cat FILE")
         try:
             path = self._existing(tokens[1])
@@ -188,12 +208,117 @@ class CommandRuntime:
                 "file_too_large",
             )
         data = path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        self._read_snapshots[path] = digest
         text = data.decode("utf-8", errors="replace")
         return self._ok(
             command,
             "cat",
             text,
-            metadata={"path": str(path), "size": size, "sha256": hashlib.sha256(data).hexdigest()},
+            metadata={"path": str(path), "size": size, "sha256": digest, "read": True},
+        )
+
+    def _append_file(
+        self,
+        command: str,
+        source_value: str,
+        destination_value: str,
+    ) -> CommandResult:
+        try:
+            source = self._existing(source_value)
+        except FileNotFoundError:
+            return self._error(command, "append", 1, f"cat: {source_value}: No such file", "not_found")
+        if not source.is_file():
+            return self._error(command, "append", 1, f"cat: {source_value}: Not a regular file", "not_file")
+
+        size = source.stat().st_size
+        if size > self.max_file_bytes:
+            return self._error(
+                command,
+                "append",
+                1,
+                f"cat: source file is {size} bytes; limit is {self.max_file_bytes}",
+                "file_too_large",
+            )
+
+        source_bytes = source.read_bytes()
+        digest = hashlib.sha256(source_bytes).hexdigest()
+        expected = self._read_snapshots.get(source)
+        if expected is None:
+            return self._error(
+                command,
+                "append",
+                1,
+                "cat: source file must be read successfully before appending",
+                "source_not_read",
+            )
+        if expected != digest:
+            return self._error(
+                command,
+                "append",
+                1,
+                "cat: source file changed after it was read; read it again",
+                "source_changed",
+            )
+
+        destination = self._candidate(destination_value)
+        if not destination.parent.is_dir():
+            return self._error(
+                command,
+                "append",
+                1,
+                f"cat: {destination_value}: destination directory does not exist",
+                "destination_parent_missing",
+            )
+        if destination.exists() and not destination.is_file():
+            return self._error(
+                command,
+                "append",
+                1,
+                f"cat: {destination_value}: destination is not a regular file",
+                "destination_not_file",
+            )
+        if source == destination:
+            return self._error(command, "append", 1, "cat: input file is output file", "same_file")
+
+        append_key = (source, destination, digest)
+        if append_key in self._successful_appends:
+            return self._error(
+                command,
+                "append",
+                1,
+                "cat: this source snapshot was already appended in this activation",
+                "duplicate_append",
+            )
+
+        existing = destination.read_bytes() if destination.exists() else b""
+        combined = existing + source_bytes
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            dir=destination.parent,
+        )
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(combined)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, destination)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        self._successful_appends.add(append_key)
+        return self._ok(
+            command,
+            "append",
+            metadata={
+                "source": str(source),
+                "destination": str(destination),
+                "source_sha256": digest,
+                "bytes_appended": len(source_bytes),
+                "new_size": len(combined),
+            },
         )
 
     def _sha256sum(self, command: str, tokens: list[str]) -> CommandResult:

@@ -15,6 +15,7 @@ pwd
 cd PATH
 ls [-l] [-a] [PATH]
 cat FILE
+cat SOURCE >> DEST
 sha256sum FILE
 test -e PATH
 test -f PATH
@@ -30,6 +31,9 @@ rm FILE
 echo TEXT
 echo TEXT > FILE
 echo TEXT >> FILE
+
+Для безопасного cat SOURCE >> DEST сначала обязательно прочитай SOURCE командой cat SOURCE.
+Runtime разрешит append только если SOURCE после чтения не изменился.
 
 Также доступны диагностические команды системы:
 date
@@ -70,4 +74,3 @@ mosquitto_sub -h <broker_host> -p <broker_port> -t <topic> -C 1 -W 5
 Если для выполнения задачи не хватает обязательных данных, не пытайся их угадывать.
 Используй NEED и точно укажи, каких данных не хватает.
 [/SKILL]
-

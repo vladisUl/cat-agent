@@ -66,7 +66,9 @@ class AgentWorker:
             bootstrap.rstrip() + "\n\n" + task_prompt,
         )
 
-        if self._messages is not None and self._session_bootstrap == bootstrap:
+        reused = self._messages is not None and self._session_bootstrap == bootstrap
+        if reused:
+            assert self._messages is not None
             self._messages.append({"role": "user", "content": task_prompt})
         else:
             self._messages = [
@@ -88,6 +90,14 @@ class AgentWorker:
         )
         self._steps_used = 0
         self.state = AgentState.RUNNING
+        LOGGER.info(
+            "%s START skills=%s bootstrap_reused=%s workspace=%s task=%r",
+            self.agent_id,
+            ",".join(skill.name for skill in skills),
+            reused,
+            self.workspace,
+            task,
+        )
         return self._drive()
 
     def continue_with(self, context: str) -> AgentOutcome:
@@ -95,6 +105,7 @@ class AgentWorker:
             raise RuntimeError(f"{self.agent_id} is not waiting for context")
         self._messages.append({"role": "user", "content": f"ADDITIONAL CONTEXT:\n{context.strip()}"})
         self.state = AgentState.RUNNING
+        LOGGER.info("%s CONTINUE context=%r", self.agent_id, context)
         return self._drive()
 
     def _drive(self) -> AgentOutcome:
@@ -108,11 +119,13 @@ class AgentWorker:
             try:
                 response = self.client.chat(self._messages)
             except ModelClientError as exc:
+                LOGGER.exception("%s step %d model request failed", self.agent_id, step)
                 self._release(preserve_session=False)
                 return AgentOutcome(self.agent_id, "FAILED", str(exc), step)
 
             LOGGER.info(
-                "%s step %d response in %.3f s: prompt=%s cached=%s new=%s prefill=%s completion=%s generate=%s content=%r",
+                "%s step %d response in %.3f s: prompt=%s cached=%s new=%s "
+                "prefill=%s completion=%s generate=%s",
                 self.agent_id,
                 step,
                 response.elapsed_seconds,
@@ -128,12 +141,18 @@ class AgentWorker:
                 f"{response.generation_seconds:.3f}s"
                 if response.generation_seconds is not None
                 else "?",
-                " ".join(response.content.strip().split())[:300],
             )
+            LOGGER.info("%s step %d MODEL RESPONSE\n%s", self.agent_id, step, response.content)
             self._messages.append({"role": "assistant", "content": response.content})
             directive = parse_agent_output(response.content)
 
             if directive.error:
+                LOGGER.warning(
+                    "%s step %d protocol error: %s",
+                    self.agent_id,
+                    step,
+                    directive.error,
+                )
                 self._messages.append(
                     {"role": "user", "content": self._runtime.format_protocol_error(directive.error)}
                 )
@@ -141,26 +160,35 @@ class AgentWorker:
 
             if directive.action is AgentAction.DONE:
                 text = directive.body
+                LOGGER.info("%s DONE steps=%d result=%r", self.agent_id, step, text)
                 self._release(preserve_session=True)
                 return AgentOutcome(self.agent_id, "OK", text, step)
 
             if directive.action is AgentAction.NEED:
                 self.state = AgentState.WAITING
+                LOGGER.info("%s NEED steps=%d text=%r", self.agent_id, step, directive.body)
                 return AgentOutcome(self.agent_id, "NEED", directive.body, step)
 
             assert directive.command is not None
+            LOGGER.info("%s step %d TOOL COMMAND %s", self.agent_id, step, directive.command)
             result = self._runtime.execute(directive.command)
             LOGGER.info(
-                "%s step %d command: %s -> exit=%d operation=%s",
+                "%s step %d TOOL RESULT operation=%s exit=%d metadata=%r\n%s",
                 self.agent_id,
                 step,
-                directive.command,
-                result.exit_code,
                 result.operation,
+                result.exit_code,
+                result.metadata,
+                self._runtime.format_result(result),
             )
             signature = (directive.command, result.exit_code, result.stdout, result.stderr)
             repeated[signature] = repeated.get(signature, 0) + 1
             if repeated[signature] > 2:
+                LOGGER.error(
+                    "%s FAILED same command/result repeated more than twice: %s",
+                    self.agent_id,
+                    directive.command,
+                )
                 self._release(preserve_session=False)
                 return AgentOutcome(
                     self.agent_id,
@@ -171,6 +199,7 @@ class AgentWorker:
             self._messages.append({"role": "user", "content": self._runtime.format_result(result)})
 
         used = self._steps_used
+        LOGGER.error("%s FAILED exceeded maximum of %d model steps", self.agent_id, self.max_steps)
         self._release(preserve_session=False)
         return AgentOutcome(
             self.agent_id,
