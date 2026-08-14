@@ -65,6 +65,9 @@ class ManagerRuntime:
         return self._drive()
 
     def _drive(self) -> ManagerTurn:
+        last_protocol_signature: tuple[str, str] | None = None
+        repeated_protocol_errors = 0
+
         for step in range(1, self.max_steps + 1):
             try:
                 response = self.client.chat(self.messages)
@@ -95,8 +98,27 @@ class ManagerRuntime:
             directive = parse_manager_output(response.content)
             if directive.error:
                 LOGGER.warning("manager step %d protocol error: %s", step, directive.error)
+                signature = (response.content.strip(), directive.error)
+                if signature == last_protocol_signature:
+                    repeated_protocol_errors += 1
+                else:
+                    last_protocol_signature = signature
+                    repeated_protocol_errors = 1
+
                 self._event(f"PROTOCOL_ERROR\n{directive.error}")
+                if repeated_protocol_errors >= 3:
+                    LOGGER.error(
+                        "manager repeated identical protocol error %d times; aborting current request",
+                        repeated_protocol_errors,
+                    )
+                    return ManagerTurn(
+                        "error",
+                        "Manager repeated the same invalid control response 3 times; current request aborted",
+                    )
                 continue
+
+            last_protocol_signature = None
+            repeated_protocol_errors = 0
 
             if directive.action is ManagerAction.REPLY:
                 LOGGER.info("MANAGER REPLY %r", directive.body)
