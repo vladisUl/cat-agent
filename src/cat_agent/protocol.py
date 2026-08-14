@@ -40,6 +40,17 @@ class AgentDirective:
 
 _SKILL_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 _AGENT_RE = re.compile(r"^agent[1-9][0-9]*$")
+_MANAGER_CONTROL_WORDS = {"ASK", "WAIT", "REPLY"}
+
+
+def _looks_like_manager_control_line(line: str) -> bool:
+    text = line.strip()
+    if text in _MANAGER_CONTROL_WORDS:
+        return True
+    return any(
+        text.startswith(prefix)
+        for prefix in ("DELEGATE ", "CONTINUE ", "SYSTEM ")
+    )
 
 
 def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirective:
@@ -74,6 +85,33 @@ def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirec
         command = first[len("SYSTEM ") :].strip()
         if not command:
             return ManagerDirective(None, "", error="SYSTEM requires a command")
+
+        parts = command.split()
+        if len(parts) >= 2 and parts[0].upper() == "TIMER":
+            operation = parts[1].upper()
+            if operation == "SET":
+                if not body:
+                    return ManagerDirective(
+                        None,
+                        "",
+                        error="SYSTEM TIMER SET requires only the future event task on following lines",
+                    )
+                if any(_looks_like_manager_control_line(line) for line in body.splitlines()):
+                    return ManagerDirective(
+                        None,
+                        "",
+                        error=(
+                            "SYSTEM TIMER SET body must contain only the future event task; "
+                            "do not embed DELEGATE, CONTINUE, SYSTEM, ASK, WAIT, or REPLY"
+                        ),
+                    )
+            elif body:
+                return ManagerDirective(
+                    None,
+                    "",
+                    error=f"SYSTEM TIMER {operation} must not contain additional text",
+                )
+
         return ManagerDirective(
             ManagerAction.SYSTEM,
             body,
@@ -132,6 +170,14 @@ def parse_agent_output(content: str, *, max_chars: int = 8192) -> AgentDirective
         return AgentDirective(AgentAction.NEED, body)
 
     if "\n" in text or "\r" in text:
-        return AgentDirective(None, "", error="a command must occupy exactly one line")
+        return AgentDirective(
+            None,
+            "",
+            error=(
+                "previous response was rejected completely and no command was executed; "
+                "exactly one action is allowed per response: one command on one line, "
+                "or DONE with its result, or NEED with its reason"
+            ),
+        )
 
     return AgentDirective(AgentAction.COMMAND, "", command=text)

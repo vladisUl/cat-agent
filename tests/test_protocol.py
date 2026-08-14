@@ -27,6 +27,31 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(item.action, ManagerAction.CONTINUE)
         self.assertEqual(item.agent_id, "agent2")
 
+    def test_manager_system_timer_set(self) -> None:
+        item = parse_manager_output(
+            "SYSTEM TIMER SET cats 60\nПроверяй test.txt и обрабатывай содержимое."
+        )
+        self.assertEqual(item.action, ManagerAction.SYSTEM)
+        self.assertEqual(item.system_command, "TIMER SET cats 60")
+        self.assertEqual(item.body, "Проверяй test.txt и обрабатывай содержимое.")
+
+    def test_manager_system_rejects_embedded_control_action(self) -> None:
+        item = parse_manager_output(
+            "SYSTEM TIMER SET cats 60\n"
+            "DELEGATE shell\n"
+            "Проверь содержимое test.txt."
+        )
+        self.assertIsNone(item.action)
+        self.assertIn("must contain only the future event task", item.error or "")
+
+        item = parse_manager_output(
+            "SYSTEM TIMER STOP cats\n"
+            "REPLY\n"
+            "Таймер остановлен."
+        )
+        self.assertIsNone(item.action)
+        self.assertIn("must not contain additional text", item.error or "")
+
     def test_agent_done_need_and_command(self) -> None:
         done = parse_agent_output("DONE\nГотово")
         self.assertEqual(done.action, AgentAction.DONE)
@@ -36,6 +61,17 @@ class ProtocolTest(unittest.TestCase):
         command = parse_agent_output("ls -l")
         self.assertEqual(command.action, AgentAction.COMMAND)
         self.assertEqual(command.command, "ls -l")
+
+    def test_agent_rejects_multiple_actions(self) -> None:
+        two_commands = parse_agent_output("test -e test.txt\ncat test.txt")
+        self.assertIsNone(two_commands.action)
+        self.assertIn("no command was executed", two_commands.error or "")
+
+        command_and_need = parse_agent_output(
+            "cat test.txt\nNEED\nФайл test.txt не существует."
+        )
+        self.assertIsNone(command_and_need.action)
+        self.assertIn("no command was executed", command_and_need.error or "")
 
     def test_rejects_bad_shapes(self) -> None:
         self.assertIsNotNone(parse_manager_output("hello").error)
