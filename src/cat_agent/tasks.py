@@ -8,6 +8,7 @@ import tempfile
 
 
 DEFAULT_TASK_FILE = Path("/var/lib/cat-agent/task.txt")
+TASK_METHODS = frozenset({"task", "query"})
 
 
 class TaskStoreError(RuntimeError):
@@ -19,6 +20,7 @@ class TaskRecord:
     task_id: int
     description: str
     text: str
+    method: str = "task"
     skills: tuple[str, ...] = ()
     timer_period_seconds: float | None = None
     enabled: bool = True
@@ -59,6 +61,7 @@ class TaskStore:
                 task_id = int(item["task"])
                 description = str(item["description"]).strip()
                 text = str(item["text"]).strip()
+                method = str(item.get("method", "task")).strip().lower()
                 raw_skills = item.get("skills", [])
                 if not isinstance(raw_skills, list):
                     raise TypeError("skills must be a list")
@@ -77,6 +80,7 @@ class TaskStore:
                 task_id,
                 description,
                 text,
+                method,
                 skills,
                 timer_period_seconds,
                 line_number=line_number,
@@ -90,6 +94,7 @@ class TaskStore:
                 task_id=task_id,
                 description=description,
                 text=text,
+                method=method,
                 skills=skills,
                 timer_period_seconds=timer_period_seconds,
                 enabled=enabled,
@@ -102,17 +107,20 @@ class TaskStore:
         description: str,
         text: str,
         *,
+        method: str = "task",
         skills: tuple[str, ...] = (),
         timer_period_seconds: float | None = None,
         enabled: bool = True,
     ) -> TaskRecord:
         description = description.strip()
         text = text.strip()
+        method = method.strip().lower()
         skills = tuple(name.strip() for name in skills)
         self._validate_record(
             1,
             description,
             text,
+            method,
             skills,
             timer_period_seconds,
             validate_id=False,
@@ -126,6 +134,7 @@ class TaskStore:
             task_id=task_id,
             description=description,
             text=text,
+            method=method,
             skills=skills,
             timer_period_seconds=timer_period_seconds,
             enabled=enabled,
@@ -197,6 +206,7 @@ class TaskStore:
         task_id: int,
         description: str,
         text: str,
+        method: str,
         skills: tuple[str, ...],
         timer_period_seconds: float | None,
         *,
@@ -212,6 +222,8 @@ class TaskStore:
             raise TaskStoreError(f"empty task description{where}")
         if not text:
             raise TaskStoreError(f"empty task text{where}")
+        if method not in TASK_METHODS:
+            raise TaskStoreError(f"invalid task method {method!r}{where}")
         if any(not name for name in skills):
             raise TaskStoreError(f"empty task skill name{where}")
         if len(set(skills)) != len(skills):
@@ -233,6 +245,7 @@ class TaskStore:
                     "task": task.task_id,
                     "description": task.description,
                     "text": task.text,
+                    "method": task.method,
                     "skills": list(task.skills),
                     "timer_period_seconds": task.timer_period_seconds,
                     "enabled": task.enabled,
