@@ -15,6 +15,7 @@ from cat_agent.pool import AgentPool
 from cat_agent.prompt_store import AGENT_BOOTSTRAP_ACK, MANAGER_BOOTSTRAP_ACK, PromptStore
 from cat_agent.skills import SkillBase
 from cat_agent.system_events import SystemRuntime
+from cat_agent.tasks import DEFAULT_TASK_FILE, TaskStore
 
 from .model_client import LiteRTChatClient, WarmResult
 
@@ -102,7 +103,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
     skill_base = SkillBase(settings.prompt_dir / "prompt_base.txt")
     if bench_skills is not None:
         skill_base.require(bench_skills)
-    system_runtime = SystemRuntime()
+    system_runtime = SystemRuntime(TaskStore(DEFAULT_TASK_FILE))
 
     manager_client = LiteRTChatClient(
         manager_engine,
