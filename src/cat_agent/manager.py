@@ -30,6 +30,7 @@ class ManagerRuntime:
         system_runtime: SystemRuntime | None = None,
         *,
         max_steps: int,
+        forced_delegate_skills: tuple[str, ...] | None = None,
     ) -> None:
         self.client = client
         self.skill_base = skill_base
@@ -37,6 +38,7 @@ class ManagerRuntime:
         self.pool = pool
         self.system_runtime = system_runtime or SystemRuntime()
         self.max_steps = max_steps
+        self.forced_delegate_skills = forced_delegate_skills
         bootstrap = self._bootstrap_prompt()
         self.prompt_store.write_manager_prompt(bootstrap)
         self.messages: list[dict[str, str]] = [
@@ -152,12 +154,20 @@ class ManagerRuntime:
                 continue
 
             if directive.action is ManagerAction.DELEGATE:
+                selected_skills = directive.skills
+                if self.forced_delegate_skills is not None:
+                    LOGGER.info(
+                        "BENCH DELEGATE override model_skills=%s forced_skills=%s",
+                        ",".join(directive.skills),
+                        ",".join(self.forced_delegate_skills),
+                    )
+                    selected_skills = self.forced_delegate_skills
                 LOGGER.info(
                     "MANAGER DELEGATE skills=%s task=%r",
-                    ",".join(directive.skills),
+                    ",".join(selected_skills),
                     directive.body,
                 )
-                self._delegate(directive.skills, directive.body)
+                self._delegate(selected_skills, directive.body)
                 continue
 
             if directive.action is ManagerAction.CONTINUE:
