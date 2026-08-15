@@ -10,6 +10,8 @@ from .model_client import OpenAIChatClient
 from .pool import AgentPool
 from .prompt_store import PromptStore
 from .skills import SkillBase
+from .system_events import SystemRuntime
+from .tasks import DEFAULT_TASK_FILE, TaskStore
 
 LOGGER = logging.getLogger(__name__)
 
@@ -65,11 +67,13 @@ def build_runtime(settings: Settings) -> ManagerRuntime:
         )
         for index in range(1, settings.agent_count + 1)
     ]
+    system_runtime = SystemRuntime(TaskStore(DEFAULT_TASK_FILE))
     return ManagerRuntime(
         manager_client,
         skill_base,
         prompt_store,
         AgentPool(workers),
+        system_runtime,
         max_steps=settings.max_manager_steps,
     )
 
