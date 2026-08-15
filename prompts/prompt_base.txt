@@ -31,6 +31,10 @@ rm FILE
 echo TEXT
 echo TEXT > FILE
 echo TEXT >> FILE
+./PROGRAM [ARG...]
+
+Исполняемые файлы разрешено запускать только из WORKSPACE через ./имя или ./путь/имя.
+Файл должен существовать, быть обычным файлом и иметь executable bit.
 
 Для безопасного cat SOURCE >> DEST сначала обязательно прочитай SOURCE командой cat SOURCE.
 Runtime разрешит append только если SOURCE после чтения не изменился.
