@@ -23,6 +23,7 @@ class ManagerDirective:
     agent_id: str | None = None
     system_command: str | None = None
     task_description: str | None = None
+    task_method: str | None = None
     error: str | None = None
 
 
@@ -52,7 +53,14 @@ def _looks_like_manager_control_line(line: str) -> bool:
         return True
     return any(
         text.startswith(prefix)
-        for prefix in ("DELEGATE ", "CONTINUE ", "SYSTEM ", "timer.sh ")
+        for prefix in (
+            "DELEGATE ",
+            "CONTINUE ",
+            "SYSTEM ",
+            "timer.sh ",
+            "task_timer.sh ",
+            "query_timer.sh ",
+        )
     )
 
 
@@ -86,15 +94,53 @@ def _timer_name(raw: str) -> str | None:
 
 def _timer_script_error() -> str:
     return (
-        "invalid timer.sh syntax; use one of:\n"
-        "timer.sh <period_seconds> <skill1,skill2> \"description\"\n"
+        "invalid timer syntax; use one of:\n"
+        "task_timer.sh <period_seconds> <skill1,skill2> \"description\"\n"
         "<persistent task on following lines>\n"
+        "query_timer.sh <period_seconds> <skill1,skill2> \"description\"\n"
+        "<persistent query on following lines>\n"
         "timer.sh start <task_number>\n"
         "timer.sh stop <task_number>\n"
         "timer.sh period <period_seconds> <task_number>\n"
         "timer.sh delete <task_number>\n"
         "timer.sh list\n"
         "period_seconds and task_number must be positive"
+    )
+
+
+def _parse_typed_timer_script(first: str, body: str) -> ManagerDirective:
+    try:
+        parts = shlex.split(first)
+    except ValueError as exc:
+        return ManagerDirective(None, "", error=f"invalid timer syntax: {exc}")
+
+    if len(parts) != 4 or parts[0] not in {"task_timer.sh", "query_timer.sh"}:
+        return ManagerDirective(None, "", error=_timer_script_error())
+    if not _positive_number(parts[1]):
+        return ManagerDirective(None, "", error=_timer_script_error())
+    if any(_looks_like_manager_control_line(line) for line in body.splitlines()):
+        return ManagerDirective(
+            None,
+            "",
+            error=(
+                "timer task must contain only the future task; "
+                "do not embed another control command"
+            ),
+        )
+
+    skills = _skill_list(parts[2])
+    description = parts[3].strip()
+    if skills is None or not description or not body:
+        return ManagerDirective(None, "", error=_timer_script_error())
+
+    method = "task" if parts[0] == "task_timer.sh" else "query"
+    return ManagerDirective(
+        ManagerAction.SYSTEM,
+        body,
+        skills=skills,
+        system_command=f"TASK TIMER SET {parts[1]}",
+        task_description=description,
+        task_method=method,
     )
 
 
@@ -120,8 +166,8 @@ def _parse_timer_script(first: str, body: str) -> ManagerDirective:
                 ),
             )
 
-        # Persistent TASK form. The description is shell-quoted when it contains
-        # spaces, so shlex still gives exactly four tokens here.
+        # Old persistent form is accepted only for compatibility. It is treated
+        # as method=task and is no longer exposed in the manager prompt.
         if len(parts) == 4:
             skills = _skill_list(parts[2])
             description = parts[3].strip()
@@ -133,10 +179,10 @@ def _parse_timer_script(first: str, body: str) -> ManagerDirective:
                 skills=skills,
                 system_command=f"TASK TIMER SET {arg}",
                 task_description=description,
+                task_method="task",
             )
 
-        # Legacy timer form remains accepted internally during migration, but it is
-        # no longer exposed in the manager prompt.
+        # Legacy named timer form remains accepted internally during migration.
         if len(parts) not in {2, 3}:
             return ManagerDirective(None, "", error=_timer_script_error())
         name = "default" if len(parts) == 2 else parts[2]
@@ -245,6 +291,12 @@ def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirec
             return ManagerDirective(None, "", error="WAIT must not contain additional text")
         return ManagerDirective(ManagerAction.WAIT, "")
 
+    if first == "task_timer.sh" or first.startswith("task_timer.sh "):
+        return _parse_typed_timer_script(first, body)
+
+    if first == "query_timer.sh" or first.startswith("query_timer.sh "):
+        return _parse_typed_timer_script(first, body)
+
     if first == "timer.sh" or first.startswith("timer.sh "):
         return _parse_timer_script(first, body)
 
@@ -282,7 +334,10 @@ def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirec
     return ManagerDirective(
         None,
         "",
-        error="first line must be DELEGATE, CONTINUE, timer.sh, ASK, WAIT, or REPLY",
+        error=(
+            "first line must be DELEGATE, CONTINUE, task_timer.sh, query_timer.sh, "
+            "timer.sh, ASK, WAIT, or REPLY"
+        ),
     )
 
 
@@ -300,8 +355,6 @@ def parse_agent_output(content: str, *, max_chars: int = 8192) -> AgentDirective
     body = rest.strip() if sep else ""
 
     if first == "DONE":
-        if not body:
-            return AgentDirective(None, "", error="DONE requires a concise result")
         return AgentDirective(AgentAction.DONE, body)
 
     if first == "NEED":
@@ -316,7 +369,7 @@ def parse_agent_output(content: str, *, max_chars: int = 8192) -> AgentDirective
             error=(
                 "previous response was rejected completely and no command was executed; "
                 "exactly one action is allowed per response: one command on one line, "
-                "or DONE with its result, or NEED with its reason"
+                "or DONE, or DONE with its result, or NEED with its reason"
             ),
         )
 
