@@ -64,13 +64,16 @@ class ManagerRuntime:
                 event.source,
                 event.task_id,
             )
-            self.system_runtime.activate_task(
+            result = self.system_runtime.activate_task(
                 event.task_id,
                 source=event.source,
                 name=event.name,
                 now=event.created_monotonic,
             )
-            return ManagerTurn("silent", "")
+            if result is None:
+                return ManagerTurn("silent", "")
+            LOGGER.info("MANAGER autonomous QUERY return task_id=%d text=%r", event.task_id, result)
+            return ManagerTurn("reply", result)
 
         text = event.manager_text()
         LOGGER.info(
@@ -83,11 +86,17 @@ class ManagerRuntime:
         self._append_user(text)
         return self._drive()
 
-    def _run_task_activation(self, activation: TaskActivation) -> None:
+    def _run_task_activation(self, activation: TaskActivation) -> str | None:
         task = activation.task
+
+        def query_error(message: str) -> str | None:
+            if task.method != "query":
+                return None
+            return f"Ошибка запроса TASK {task.task_id}: {message}"
+
         if not task.skills:
             LOGGER.error("SYSTEM TASK %d cannot run: no saved skills", task.task_id)
-            return
+            return query_error("нет сохранённых skills")
 
         try:
             skills = self.skill_base.require(task.skills)
@@ -98,23 +107,24 @@ class ManagerRuntime:
                 ",".join(task.skills),
                 exc,
             )
-            return
+            return query_error(str(exc))
 
         worker = self.pool.acquire()
         if worker is None:
             LOGGER.warning("SYSTEM TASK %d skipped: no FREE agent", task.task_id)
-            return
+            return query_error("нет свободного агента")
 
         LOGGER.info(
-            "SYSTEM TASK %d wake %s skills=%s description=%r",
+            "SYSTEM TASK %d wake %s method=%s skills=%s description=%r",
             task.task_id,
             worker.agent_id,
+            task.method,
             ",".join(task.skills),
             task.description,
         )
         try:
-            outcome = worker.start(task.text, skills)
-        except Exception:
+            outcome = worker.start(task.text, skills, method=task.method)
+        except Exception as exc:
             LOGGER.exception(
                 "SYSTEM TASK %d agent %s failed during activation",
                 task.task_id,
@@ -122,7 +132,7 @@ class ManagerRuntime:
             )
             if worker.state is not AgentState.FREE:
                 worker.sleep_to_base()
-            return
+            return query_error(str(exc))
 
         LOGGER.info(
             "SYSTEM TASK %d outcome agent=%s status=%s steps=%d text=%r",
@@ -138,6 +148,15 @@ class ManagerRuntime:
                 task.task_id,
             )
             worker.sleep_to_base()
+            return query_error(outcome.text)
+
+        if task.method == "task":
+            return None
+        if outcome.status != "OK":
+            return query_error(outcome.text or outcome.status)
+        if not outcome.text.strip():
+            return query_error("агент не вернул значение")
+        return outcome.text
 
     def _drive(self) -> ManagerTurn:
         last_protocol_signature: tuple[str, str] | None = None
@@ -264,6 +283,8 @@ class ManagerRuntime:
                 period = float(parts[3])
                 if directive.task_description is None:
                     raise ValueError("persistent task description is missing")
+                if directive.task_method not in {"task", "query"}:
+                    raise ValueError("persistent task method is missing")
                 if not directive.skills:
                     raise ValueError("persistent task skills are missing")
                 self.skill_base.require(directive.skills)
@@ -272,10 +293,11 @@ class ManagerRuntime:
                     directive.body,
                     directive.skills,
                     period,
+                    method=directive.task_method,
                 )
                 return (
                     f"SYSTEM_OK\nTASK {task.task_id} created and started; "
-                    f"period={period:g}s description={task.description}"
+                    f"method={task.method} period={period:g}s description={task.description}"
                 )
 
             if op in {"START", "STOP", "DELETE"}:
