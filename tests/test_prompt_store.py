@@ -43,6 +43,7 @@ class PromptStoreTest(unittest.TestCase):
 
             bootstrap = store.build_agent_bootstrap((skill,), Path("/opt/model"))
             task = store.build_agent_task("Read aquarium temperature")
+            query = store.build_agent_task("Check user.txt", "query")
 
             self.assertIn("[WORKSPACE]", bootstrap)
             self.assertIn("[SKILL mqtt]", bootstrap)
@@ -52,6 +53,10 @@ class PromptStoreTest(unittest.TestCase):
             self.assertNotIn("[TASK]", bootstrap)
             self.assertNotIn("Read aquarium temperature", bootstrap)
             self.assertEqual(task, "[TASK]\nRead aquarium temperature\n[/TASK]\n")
+            self.assertEqual(
+                query,
+                "[METHOD]\nQUERY\n[/METHOD]\n[TASK]\nCheck user.txt\n[/TASK]\n",
+            )
 
     def test_missing_skill_context_is_optional(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
