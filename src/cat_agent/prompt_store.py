@@ -77,8 +77,12 @@ class PromptStore:
         return "\n".join(parts).rstrip() + "\n"
 
     @staticmethod
-    def build_agent_task(task: str) -> str:
-        return f"[TASK]\n{task.strip()}\n[/TASK]\n"
+    def build_agent_task(task: str, method: str | None = None) -> str:
+        parts: list[str] = []
+        if method is not None:
+            parts.extend(["[METHOD]", method.upper(), "[/METHOD]"])
+        parts.extend(["[TASK]", task.strip(), "[/TASK]"])
+        return "\n".join(parts) + "\n"
 
     def build_agent_prompt(
         self,
@@ -86,9 +90,11 @@ class PromptStore:
         task: str,
         skills: tuple[Skill, ...],
         workspace: Path,
+        *,
+        method: str | None = None,
     ) -> str:
         bootstrap = self.build_agent_bootstrap(skills, workspace)
-        task_prompt = self.build_agent_task(task)
+        task_prompt = self.build_agent_task(task, method)
         text = bootstrap.rstrip() + "\n\n" + task_prompt
         self.write_agent_prompt(agent_id, text)
         return text
