@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from cat_agent.command_runtime import CommandRuntime
+from cat_agent.workspace_command_runtime import CommandRuntime
 
 
 class CommandRuntimeTest(unittest.TestCase):
@@ -56,6 +56,34 @@ class CommandRuntimeTest(unittest.TestCase):
         changed = self.runtime.execute("cat source.txt >> user.txt")
         self.assertEqual(changed.exit_code, 1)
         self.assertEqual(changed.metadata.get("error_code"), "source_changed")
+
+    def test_executes_workspace_executable_with_dot_slash(self) -> None:
+        script = self.root / "timer_test.sh"
+        script.write_text("#!/bin/sh\necho tick >> result.txt\n", encoding="utf-8")
+        script.chmod(0o755)
+
+        result = self.runtime.execute("./timer_test.sh")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.operation, "exec")
+        self.assertEqual(
+            (self.root / "result.txt").read_text(encoding="utf-8"),
+            "tick\n",
+        )
+
+    def test_rejects_workspace_file_without_executable_bit(self) -> None:
+        script = self.root / "timer_test.sh"
+        script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        script.chmod(0o644)
+
+        result = self.runtime.execute("./timer_test.sh")
+
+        self.assertEqual(result.exit_code, 126)
+        self.assertEqual(result.metadata.get("error_code"), "not_executable")
+
+    def test_rejects_dot_slash_escape_outside_workspace(self) -> None:
+        result = self.runtime.execute("./../outside.sh")
+        self.assertNotEqual(result.exit_code, 0)
 
 
 if __name__ == "__main__":
