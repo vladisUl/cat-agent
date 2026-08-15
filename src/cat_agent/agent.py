@@ -52,15 +52,25 @@ class AgentWorker:
         self._session_bootstrap: str | None = None
         self._runtime: CommandRuntime | None = None
         self._skills: tuple[Skill, ...] = ()
+        self._method: str | None = None
         self._steps_used = 0
 
-    def start(self, task: str, skills: tuple[Skill, ...]) -> AgentOutcome:
+    def start(
+        self,
+        task: str,
+        skills: tuple[Skill, ...],
+        *,
+        method: str | None = None,
+    ) -> AgentOutcome:
         if self.state is not AgentState.FREE:
             raise RuntimeError(f"{self.agent_id} is {self.state}")
+        if method not in {None, "task", "query"}:
+            raise ValueError(f"invalid task method: {method!r}")
         self._skills = skills
+        self._method = method
 
         bootstrap = self.prompt_store.build_agent_bootstrap(skills, self.workspace)
-        task_prompt = self.prompt_store.build_agent_task(task)
+        task_prompt = self.prompt_store.build_agent_task(task, method)
         self.prompt_store.write_agent_prompt(
             self.agent_id,
             bootstrap.rstrip() + "\n\n" + task_prompt,
@@ -91,8 +101,9 @@ class AgentWorker:
         self._steps_used = 0
         self.state = AgentState.RUNNING
         LOGGER.info(
-            "%s START skills=%s bootstrap_reused=%s workspace=%s task=%r",
+            "%s START method=%s skills=%s bootstrap_reused=%s workspace=%s task=%r",
             self.agent_id,
+            method or "ordinary",
             ",".join(skill.name for skill in skills),
             reused,
             self.workspace,
@@ -164,8 +175,29 @@ class AgentWorker:
                 continue
 
             if directive.action is AgentAction.DONE:
-                text = directive.body
-                LOGGER.info("%s DONE steps=%d result=%r", self.agent_id, step, text)
+                if self._method == "query" and not directive.body:
+                    message = "QUERY requires a non-empty return value after DONE"
+                    LOGGER.warning("%s step %d protocol error: %s", self.agent_id, step, message)
+                    self._messages.append(
+                        {"role": "user", "content": self._runtime.format_protocol_error(message)}
+                    )
+                    continue
+                if self._method is None and not directive.body:
+                    message = "ordinary task DONE requires a concise result"
+                    LOGGER.warning("%s step %d protocol error: %s", self.agent_id, step, message)
+                    self._messages.append(
+                        {"role": "user", "content": self._runtime.format_protocol_error(message)}
+                    )
+                    continue
+
+                text = "" if self._method == "task" else directive.body
+                LOGGER.info(
+                    "%s DONE method=%s steps=%d result=%r",
+                    self.agent_id,
+                    self._method or "ordinary",
+                    step,
+                    text,
+                )
                 self._release(preserve_session=True)
                 return AgentOutcome(self.agent_id, "OK", text, step)
 
@@ -232,4 +264,5 @@ class AgentWorker:
             self._session_bootstrap = None
         self._runtime = None
         self._skills = ()
+        self._method = None
         self._steps_used = 0
