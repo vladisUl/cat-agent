@@ -18,8 +18,18 @@ case "$MODE" in
         BACKEND="gpu"
         ACTIVATION_DATA_TYPE="fp32"
         ;;
+    e2b-cpu)
+        MODEL_PATH="/storage/models/litertlm/gemma-4-E2B-it.litertlm"
+        BACKEND="cpu"
+        ACTIVATION_DATA_TYPE=""
+        ;;
+    e2b-gpu)
+        MODEL_PATH="/storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm"
+        BACKEND="gpu"
+        ACTIVATION_DATA_TYPE="fp32"
+        ;;
     *)
-        echo "Usage: $0 [cpu|gpu] [normal|bench]" >&2
+        echo "Usage: $0 [cpu|gpu|e2b-cpu|e2b-gpu] [normal|bench]" >&2
         exit 2
         ;;
 esac
@@ -32,7 +42,7 @@ case "$PROFILE" in
         BENCH_SKILLS="mqtt,shell"
         ;;
     *)
-        echo "Usage: $0 [cpu|gpu] [normal|bench]" >&2
+        echo "Usage: $0 [cpu|gpu|e2b-cpu|e2b-gpu] [normal|bench]" >&2
         exit 2
         ;;
 esac
