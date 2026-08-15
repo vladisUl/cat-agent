@@ -41,6 +41,29 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(item.system_command, "TIMER SET default 60")
         self.assertEqual(item.body, "Проверяй test.txt.")
 
+    def test_manager_persistent_timer_task(self) -> None:
+        item = parse_manager_output(
+            'timer.sh 60 shell,mqtt "ловля котов"\nПроверять котов.'
+        )
+        self.assertEqual(item.action, ManagerAction.SYSTEM)
+        self.assertEqual(item.system_command, "TASK TIMER SET 60")
+        self.assertEqual(item.skills, ("shell", "mqtt"))
+        self.assertEqual(item.task_description, "ловля котов")
+        self.assertEqual(item.body, "Проверять котов.")
+
+    def test_manager_persistent_timer_task_control(self) -> None:
+        stop = parse_manager_output("timer.sh stop 2")
+        self.assertEqual(stop.system_command, "TASK TIMER STOP 2")
+
+        start = parse_manager_output("timer.sh start 2")
+        self.assertEqual(start.system_command, "TASK TIMER START 2")
+
+        period = parse_manager_output("timer.sh period 120 2")
+        self.assertEqual(period.system_command, "TASK TIMER PERIOD 2 120")
+
+        delete = parse_manager_output("timer.sh delete 2")
+        self.assertEqual(delete.system_command, "TASK TIMER DELETE 2")
+
     def test_manager_timer_script_control(self) -> None:
         stop = parse_manager_output("timer.sh stop cats")
         self.assertEqual(stop.action, ManagerAction.SYSTEM)
@@ -68,11 +91,11 @@ class ProtocolTest(unittest.TestCase):
             "Проверь содержимое test.txt."
         )
         self.assertIsNone(item.action)
-        self.assertIn("future event task", item.error or "")
+        self.assertIn("future task", item.error or "")
 
     def test_manager_timer_script_rejects_bad_syntax(self) -> None:
         self.assertIsNotNone(parse_manager_output("timer.sh nope\nПроверяй файл").error)
-        self.assertIsNotNone(parse_manager_output("timer.sh 60 cats extra\nПроверяй файл").error)
+        self.assertIsNotNone(parse_manager_output("timer.sh 60 cats extra more\nПроверяй файл").error)
         self.assertIsNotNone(parse_manager_output("timer.sh stop cats\nREPLY\nготово").error)
 
     def test_agent_done_need_and_command(self) -> None:
