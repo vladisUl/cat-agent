@@ -15,10 +15,16 @@ class TaskStoreTest(unittest.TestCase):
             store = TaskStore(path)
 
             first = store.create("ловля котов", "Искать котов и копировать результат.")
-            second = store.create("проверка системы", "Проверить состояние системы.")
+            second = store.create(
+                "проверка системы",
+                "Проверить состояние системы.",
+                method="query",
+            )
 
             self.assertEqual(first.task_id, 1)
+            self.assertEqual(first.method, "task")
             self.assertEqual(second.task_id, 2)
+            self.assertEqual(second.method, "query")
             self.assertTrue(path.is_file())
 
             restored = TaskStore(path)
@@ -27,6 +33,24 @@ class TaskStoreTest(unittest.TestCase):
                 restored.status_text(),
                 "TASK 1 ловля котов\nTASK 2 проверка системы",
             )
+
+    def test_old_record_without_method_defaults_to_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "task.txt"
+            path.write_text(
+                '{"task":1,"description":"old","text":"work","skills":["shell"],'
+                '"timer_period_seconds":60.0,"enabled":false}\n',
+                encoding="utf-8",
+            )
+            restored = TaskStore(path).require(1)
+            self.assertEqual(restored.method, "task")
+            self.assertFalse(restored.enabled)
+
+    def test_rejects_unknown_method(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = TaskStore(Path(temp_dir) / "task.txt")
+            with self.assertRaises(TaskStoreError):
+                store.create("bad", "work", method="report")
 
     def test_task_ids_are_system_assigned_and_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -47,33 +71,52 @@ class TaskStoreTest(unittest.TestCase):
             task = store.create("ловля котов", "Искать котов.")
             system = SystemRuntime(store)
             received: list[TaskActivation] = []
-            system.set_task_handler(received.append)
 
-            activation = system.activate_task(
+            def handler(activation: TaskActivation) -> None:
+                received.append(activation)
+                return None
+
+            system.set_task_handler(handler)
+
+            result = system.activate_task(
                 task.task_id,
                 source="timer",
                 name="periodic",
                 now=123.0,
             )
 
-            self.assertEqual(received, [activation])
+            self.assertIsNone(result)
+            self.assertEqual(len(received), 1)
+            activation = received[0]
             self.assertEqual(activation.task, task)
             self.assertEqual(activation.source, "timer")
             self.assertEqual(activation.name, "periodic")
             self.assertEqual(activation.created_monotonic, 123.0)
 
-    def test_periodic_task_survives_restart_and_timer_is_restored(self) -> None:
+    def test_system_returns_query_handler_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = TaskStore(Path(temp_dir) / "task.txt")
+            task = store.create("проверка", "Проверить файл.", method="query")
+            system = SystemRuntime(store)
+            system.set_task_handler(lambda activation: "ОК")
+
+            result = system.activate_task(task.task_id, source="timer")
+            self.assertEqual(result, "ОК")
+
+    def test_periodic_query_survives_restart_and_timer_is_restored(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "task.txt"
             first_system = SystemRuntime(TaskStore(path))
             task = first_system.create_periodic_task(
-                "ловля котов",
-                "Искать котов.",
+                "проверка котов",
+                "Проверить котов и вернуть состояние.",
                 ("shell",),
                 60.0,
+                method="query",
             )
 
             stored = TaskStore(path).require(task.task_id)
+            self.assertEqual(stored.method, "query")
             self.assertEqual(stored.skills, ("shell",))
             self.assertEqual(stored.timer_period_seconds, 60.0)
             self.assertTrue(stored.enabled)
