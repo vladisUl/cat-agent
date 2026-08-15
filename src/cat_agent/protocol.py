@@ -87,16 +87,14 @@ def _timer_name(raw: str) -> str | None:
 def _timer_script_error() -> str:
     return (
         "invalid timer.sh syntax; use one of:\n"
-        "timer.sh <period_seconds> [name]\n"
-        "<future task on following lines>\n"
         "timer.sh <period_seconds> <skill1,skill2> \"description\"\n"
         "<persistent task on following lines>\n"
-        "timer.sh start [name|task_number]\n"
-        "timer.sh stop [name|task_number]\n"
-        "timer.sh period <period_seconds> [name|task_number]\n"
-        "timer.sh delete [name|task_number]\n"
+        "timer.sh start <task_number>\n"
+        "timer.sh stop <task_number>\n"
+        "timer.sh period <period_seconds> <task_number>\n"
+        "timer.sh delete <task_number>\n"
         "timer.sh list\n"
-        "period_seconds must be positive"
+        "period_seconds and task_number must be positive"
     )
 
 
@@ -122,7 +120,7 @@ def _parse_timer_script(first: str, body: str) -> ManagerDirective:
                 ),
             )
 
-        # New persistent TASK form. The description is shell-quoted when it contains
+        # Persistent TASK form. The description is shell-quoted when it contains
         # spaces, so shlex still gives exactly four tokens here.
         if len(parts) == 4:
             skills = _skill_list(parts[2])
@@ -137,7 +135,8 @@ def _parse_timer_script(first: str, body: str) -> ManagerDirective:
                 task_description=description,
             )
 
-        # Legacy timer form kept until the manager prompt is switched.
+        # Legacy timer form remains accepted internally during migration, but it is
+        # no longer exposed in the manager prompt.
         if len(parts) not in {2, 3}:
             return ManagerDirective(None, "", error=_timer_script_error())
         name = "default" if len(parts) == 2 else parts[2]
@@ -162,6 +161,7 @@ def _parse_timer_script(first: str, body: str) -> ManagerDirective:
                     "",
                     system_command=f"TASK TIMER {operation.upper()} {task_id}",
                 )
+        # Legacy named control remains accepted internally.
         name = "default" if len(parts) == 2 else parts[2]
         if _timer_name(name) is None:
             return ManagerDirective(None, "", error=_timer_script_error())
@@ -184,7 +184,7 @@ def _parse_timer_script(first: str, body: str) -> ManagerDirective:
                     system_command=f"TASK TIMER PERIOD {task_id} {parts[2]}",
                 )
 
-        # Legacy forms.
+        # Legacy forms remain accepted internally.
         if len(parts) == 3 and _positive_number(parts[2]):
             period = parts[2]
             name = "default"
@@ -208,7 +208,11 @@ def _parse_timer_script(first: str, body: str) -> ManagerDirective:
     if operation == "list":
         if len(parts) != 2 or body:
             return ManagerDirective(None, "", error=_timer_script_error())
-        return ManagerDirective(ManagerAction.SYSTEM, "", system_command="TIMER LIST")
+        return ManagerDirective(
+            ManagerAction.SYSTEM,
+            "",
+            system_command="TASK TIMER LIST",
+        )
 
     return ManagerDirective(None, "", error=_timer_script_error())
 
