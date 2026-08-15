@@ -64,7 +64,10 @@ class ProtocolTest(unittest.TestCase):
         delete = parse_manager_output("timer.sh delete 2")
         self.assertEqual(delete.system_command, "TASK TIMER DELETE 2")
 
-    def test_manager_timer_script_control(self) -> None:
+        listing = parse_manager_output("timer.sh list")
+        self.assertEqual(listing.system_command, "TASK TIMER LIST")
+
+    def test_manager_legacy_timer_control_is_still_accepted(self) -> None:
         stop = parse_manager_output("timer.sh stop cats")
         self.assertEqual(stop.action, ManagerAction.SYSTEM)
         self.assertEqual(stop.system_command, "TIMER STOP cats")
@@ -80,9 +83,6 @@ class ProtocolTest(unittest.TestCase):
 
         delete = parse_manager_output("timer.sh delete cats")
         self.assertEqual(delete.system_command, "TIMER DELETE cats")
-
-        listing = parse_manager_output("timer.sh list")
-        self.assertEqual(listing.system_command, "TIMER LIST")
 
     def test_manager_timer_script_rejects_embedded_control(self) -> None:
         item = parse_manager_output(
