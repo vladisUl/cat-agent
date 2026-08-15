@@ -163,18 +163,25 @@ class LiteRTTUI:
         request = self._active_request
         started = self._active_started
         is_user_request = request is not None and request.kind == "user"
+        dialog_updated = False
         try:
             turn = future.result()
         except Exception as exc:
             LOGGER.exception("TUI request failed")
             if is_user_request:
                 self._append_dialog("MANAGER", f"ERROR: {exc}")
+                dialog_updated = True
         else:
             if is_user_request:
                 if turn.kind == "wait":
                     self._append_dialog("MANAGER", "WAIT")
+                    dialog_updated = True
                 elif turn.kind != "silent":
                     self._append_dialog("MANAGER", turn.text)
+                    dialog_updated = True
+            elif turn.kind == "reply" and turn.text:
+                self._append_dialog("MANAGER", turn.text)
+                dialog_updated = True
             LOGGER.info(
                 "TUI request complete kind=%s label=%s turn=%s text=%r",
                 request.kind if request is not None else "?",
@@ -183,7 +190,7 @@ class LiteRTTUI:
                 turn.text,
             )
 
-        if is_user_request:
+        if dialog_updated:
             self._dialog_scroll_lines = 0
         if started is not None:
             self._last_request_seconds = time.monotonic() - started
