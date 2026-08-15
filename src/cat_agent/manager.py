@@ -7,9 +7,10 @@ from .agent import AgentState
 from .model_client import ModelClientError, OpenAIChatClient
 from .pool import AgentPool
 from .prompt_store import MANAGER_BOOTSTRAP_ACK, PromptStore
-from .protocol import ManagerAction, parse_manager_output
+from .protocol import ManagerAction, ManagerDirective, parse_manager_output
 from .skills import SkillBase, SkillBaseError
 from .system_events import SystemEvent, SystemRuntime, TaskActivation
+from .tasks import TaskStoreError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -85,10 +86,7 @@ class ManagerRuntime:
     def _run_task_activation(self, activation: TaskActivation) -> None:
         task = activation.task
         if not task.skills:
-            LOGGER.error(
-                "SYSTEM TASK %d cannot run: no saved skills",
-                task.task_id,
-            )
+            LOGGER.error("SYSTEM TASK %d cannot run: no saved skills", task.task_id)
             return
 
         try:
@@ -160,16 +158,10 @@ class ManagerRuntime:
                 response.elapsed_seconds,
                 response.prompt_tokens if response.prompt_tokens is not None else "?",
                 response.cached_tokens if response.cached_tokens is not None else "?",
-                response.prompt_evaluated_tokens
-                if response.prompt_evaluated_tokens is not None
-                else "?",
-                f"{response.prompt_seconds:.3f}s"
-                if response.prompt_seconds is not None
-                else "?",
+                response.prompt_evaluated_tokens if response.prompt_evaluated_tokens is not None else "?",
+                f"{response.prompt_seconds:.3f}s" if response.prompt_seconds is not None else "?",
                 response.completion_tokens if response.completion_tokens is not None else "?",
-                f"{response.generation_seconds:.3f}s"
-                if response.generation_seconds is not None
-                else "?",
+                f"{response.generation_seconds:.3f}s" if response.generation_seconds is not None else "?",
             )
             LOGGER.info("manager step %d MODEL RESPONSE\n%s", step, response.content)
             self.messages.append({"role": "assistant", "content": response.content})
@@ -220,10 +212,13 @@ class ManagerRuntime:
                     directive.system_command,
                     directive.body,
                 )
-                result = self.system_runtime.execute(
-                    directive.system_command,
-                    directive.body,
-                )
+                if directive.system_command.startswith("TASK TIMER "):
+                    result = self._execute_task_timer(directive)
+                else:
+                    result = self.system_runtime.execute(
+                        directive.system_command,
+                        directive.body,
+                    )
                 self._event(result)
                 continue
 
@@ -258,6 +253,61 @@ class ManagerRuntime:
         self._reset_to_base()
         return ManagerTurn("error", f"Manager exceeded maximum of {self.max_steps} steps")
 
+    def _execute_task_timer(self, directive: ManagerDirective) -> str:
+        assert directive.system_command is not None
+        parts = directive.system_command.split()
+        try:
+            op = parts[2]
+            if op == "SET":
+                if len(parts) != 4:
+                    raise ValueError("invalid TASK TIMER SET command")
+                period = float(parts[3])
+                if directive.task_description is None:
+                    raise ValueError("persistent task description is missing")
+                if not directive.skills:
+                    raise ValueError("persistent task skills are missing")
+                self.skill_base.require(directive.skills)
+                task = self.system_runtime.create_periodic_task(
+                    directive.task_description,
+                    directive.body,
+                    directive.skills,
+                    period,
+                )
+                return (
+                    f"SYSTEM_OK\nTASK {task.task_id} created and started; "
+                    f"period={period:g}s description={task.description}"
+                )
+
+            if op in {"START", "STOP", "DELETE"}:
+                if len(parts) != 4:
+                    raise ValueError(f"invalid TASK TIMER {op} command")
+                task_id = int(parts[3])
+                if op == "START":
+                    self.system_runtime.start_task(task_id)
+                    return f"SYSTEM_OK\nTASK {task_id} started"
+                if op == "STOP":
+                    self.system_runtime.stop_task(task_id)
+                    return f"SYSTEM_OK\nTASK {task_id} stopped"
+                if not self.system_runtime.delete_task(task_id):
+                    return f"SYSTEM_ERROR\nunknown task: {task_id}"
+                return f"SYSTEM_OK\nTASK {task_id} deleted"
+
+            if op == "PERIOD":
+                if len(parts) != 5:
+                    raise ValueError("invalid TASK TIMER PERIOD command")
+                task_id = int(parts[3])
+                period = float(parts[4])
+                self.system_runtime.set_task_period(task_id, period)
+                return f"SYSTEM_OK\nTASK {task_id} period changed to {period:g}s"
+
+            if op == "LIST":
+                return f"SYSTEM_OK\n{self.system_runtime.task_status_text()}"
+
+            return f"SYSTEM_ERROR\nunknown TASK TIMER operation: {op}"
+        except (ValueError, TaskStoreError, SkillBaseError) as exc:
+            LOGGER.warning("SYSTEM persistent task command failed: %s", exc)
+            return f"SYSTEM_ERROR\n{exc}"
+
     def _delegate(self, skill_names: tuple[str, ...], task: str) -> None:
         try:
             skills = self.skill_base.require(skill_names)
@@ -273,9 +323,7 @@ class ManagerRuntime:
             return
 
         LOGGER.info("AGENT assigned id=%s skills=%s", worker.agent_id, ",".join(skill_names))
-        self._event(
-            f"EVENT STARTED {worker.agent_id}\nskills: {','.join(skill_names)}"
-        )
+        self._event(f"EVENT STARTED {worker.agent_id}\nskills: {','.join(skill_names)}")
         outcome = worker.start(task, skills)
         self._agent_outcome(outcome.agent_id, outcome.status, outcome.text)
 
