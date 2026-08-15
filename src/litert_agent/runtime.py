@@ -57,10 +57,17 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
     cpu_threads = _env_optional_positive_int("LITERT_AGENT_CPU_THREADS")
     max_num_tokens = _env_optional_positive_int("LITERT_AGENT_MAX_NUM_TOKENS")
     speculative = _env_bool("LITERT_AGENT_SPECULATIVE", False)
+    activation_data_type = _env_activation_data_type(
+        "LITERT_AGENT_ACTIVATION_DATA_TYPE"
+    )
 
     LOGGER.info("LiteRT model: %s", model_path)
     LOGGER.info("LiteRT backend: %s", backend_name)
     LOGGER.info("LiteRT speculative decoding: %s", speculative)
+    LOGGER.info(
+        "LiteRT activation data type: %s",
+        activation_data_type.name if activation_data_type is not None else "default",
+    )
 
     manager_engine, manager_init = _create_engine(
         model_path,
@@ -68,6 +75,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         cpu_threads,
         max_num_tokens,
         speculative,
+        activation_data_type,
         label="manager",
     )
     try:
@@ -77,6 +85,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
             cpu_threads,
             max_num_tokens,
             speculative,
+            activation_data_type,
             label="agent",
         )
     except Exception:
@@ -182,6 +191,7 @@ def _create_engine(
     cpu_threads: int | None,
     max_num_tokens: int | None,
     speculative: bool,
+    activation_data_type: litert_lm.ActivationDataType | None,
     *,
     label: str,
 ) -> tuple[litert_lm.Engine, float]:
@@ -191,6 +201,9 @@ def _create_engine(
         "enable_speculative_decoding": speculative,
         "enable_benchmark": True,
     }
+    if activation_data_type is not None:
+        kwargs["activation_data_type"] = activation_data_type
+
     started = time.monotonic()
     engine = litert_lm.Engine(str(model_path), **kwargs)
     engine.__enter__()
@@ -216,6 +229,18 @@ def _env_optional_positive_int(name: str) -> int | None:
     value = int(raw)
     if value <= 0:
         raise ValueError(f"{name} must be > 0 when set, got {value}")
+    return value
+
+
+def _env_activation_data_type(name: str) -> litert_lm.ActivationDataType | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    value = litert_lm.ActivationDataType.from_str(raw)
+    if value is None:
+        raise ValueError(
+            f"{name} must be one of fp32, fp16, int16, int8; got {raw!r}"
+        )
     return value
 
 
