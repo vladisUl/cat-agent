@@ -5,7 +5,7 @@ from enum import Enum
 import logging
 from pathlib import Path
 
-from .command_runtime import CommandRuntime
+from .workspace_command_runtime import CommandRuntime
 from .model_client import ModelClientError, OpenAIChatClient
 from .prompt_store import AGENT_BOOTSTRAP_ACK, PromptStore
 from .protocol import AgentAction, parse_agent_output
