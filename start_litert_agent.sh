@@ -4,50 +4,19 @@ set -e
 
 cd /opt/cat-agent
 
-MODE="${1:-cpu}"
-PROFILE="${2:-normal}"
-
-case "$MODE" in
-    cpu)
-        MODEL_PATH="/storage/models/litertlm/gemma-4-E4B-it.litertlm"
-        BACKEND="cpu"
-        ACTIVATION_DATA_TYPE=""
-        ;;
-    gpu)
-        MODEL_PATH="/storage/models/litertlm/gemma-4-E4B-it-gpu.litertlm"
-        BACKEND="gpu"
-        ACTIVATION_DATA_TYPE="fp32"
-        ;;
-    e2b-cpu)
-        MODEL_PATH="/storage/models/litertlm/gemma-4-E2B-it.litertlm"
-        BACKEND="cpu"
-        ACTIVATION_DATA_TYPE=""
-        ;;
-    e2b-gpu)
-        MODEL_PATH="/storage/models/litertlm/gemma-4-E2B-it.litertlm"
-        BACKEND="gpu"
-        ACTIVATION_DATA_TYPE=""
-        ;;
-    e2b-gpu-new)
+case "${1:-}" in
+    e2b)
         MODEL_PATH="/storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm"
         BACKEND="gpu"
         ACTIVATION_DATA_TYPE="fp32"
         ;;
-    *)
-        echo "Usage: $0 [cpu|gpu|e2b-cpu|e2b-gpu|e2b-gpu-new] [normal|bench]" >&2
-        exit 2
-        ;;
-esac
-
-case "$PROFILE" in
-    normal)
-        BENCH_SKILLS=""
-        ;;
-    bench)
-        BENCH_SKILLS="mqtt,shell"
+    e4b)
+        MODEL_PATH="/storage/models/litertlm/gemma-4-E4B-it.litertlm"
+        BACKEND="cpu"
+        ACTIVATION_DATA_TYPE=""
         ;;
     *)
-        echo "Usage: $0 [cpu|gpu|e2b-cpu|e2b-gpu|e2b-gpu-new] [normal|bench]" >&2
+        echo "Usage: $0 e2b|e4b" >&2
         exit 2
         ;;
 esac
@@ -57,6 +26,6 @@ export LITERT_AGENT_MODEL_PATH="$MODEL_PATH"
 export LITERT_AGENT_BACKEND="$BACKEND"
 export LITERT_AGENT_ACTIVATION_DATA_TYPE="$ACTIVATION_DATA_TYPE"
 export LITERT_AGENT_SPECULATIVE="0"
-export LITERT_AGENT_BENCH_SKILLS="$BENCH_SKILLS"
+export LITERT_AGENT_BENCH_SKILLS=""
 
 exec /opt/litert-lm-venv/bin/python3 -m litert_agent.main
