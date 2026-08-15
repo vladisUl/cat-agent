@@ -45,7 +45,7 @@ class TaskActivation:
     created_monotonic: float
 
 
-TaskHandler = Callable[[TaskActivation], None]
+TaskHandler = Callable[[TaskActivation], str | None]
 
 
 @dataclass(slots=True)
@@ -113,6 +113,8 @@ class SystemRuntime:
         text: str,
         skills: tuple[str, ...],
         period_seconds: float,
+        *,
+        method: str = "task",
     ) -> TaskRecord:
         if not skills:
             raise TaskStoreError("periodic task requires at least one skill")
@@ -123,6 +125,7 @@ class SystemRuntime:
         task = store.create(
             description,
             text,
+            method=method,
             skills=skills,
             timer_period_seconds=float(period_seconds),
             enabled=True,
@@ -136,8 +139,9 @@ class SystemRuntime:
                 next_fire_monotonic=now + float(period_seconds),
             )
         LOGGER.info(
-            "SYSTEM periodic task created id=%d period=%.3fs skills=%s description=%r",
+            "SYSTEM periodic task created id=%d method=%s period=%.3fs skills=%s description=%r",
             task.task_id,
+            task.method,
             period_seconds,
             ",".join(skills),
             task.description,
@@ -228,8 +232,8 @@ class SystemRuntime:
         source: str,
         name: str = "",
         now: float | None = None,
-    ) -> TaskActivation:
-        """Resolve TASK from persistent storage and hand it to the runtime callback."""
+    ) -> str | None:
+        """Resolve TASK from persistent storage, run it, and return QUERY value if any."""
         task = self._require_task_store().require(task_id)
         activation = TaskActivation(
             source=source.strip() or "system",
@@ -241,17 +245,17 @@ class SystemRuntime:
             handler = self._task_handler
 
         LOGGER.info(
-            "SYSTEM task activation id=%d source=%s name=%s description=%r",
+            "SYSTEM task activation id=%d method=%s source=%s name=%s description=%r",
             task.task_id,
+            task.method,
             activation.source,
             activation.name,
             task.description,
         )
-        if handler is not None:
-            handler(activation)
-        else:
+        if handler is None:
             LOGGER.info("SYSTEM task activation id=%d has no handler yet", task.task_id)
-        return activation
+            return None
+        return handler(activation)
 
     def capabilities_text(self) -> str:
         return "\n".join(
