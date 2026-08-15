@@ -55,6 +55,9 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
 
     backend_name = os.getenv("LITERT_AGENT_BACKEND", "cpu").strip().lower()
     cpu_threads = _env_optional_positive_int("LITERT_AGENT_CPU_THREADS")
+    gpu_decode_steps_per_sync = _env_optional_positive_int(
+        "LITERT_AGENT_GPU_DECODE_STEPS_PER_SYNC"
+    )
     max_num_tokens = _env_optional_positive_int("LITERT_AGENT_MAX_NUM_TOKENS")
     speculative = _env_bool("LITERT_AGENT_SPECULATIVE", False)
     activation_data_type = _env_activation_data_type(
@@ -70,6 +73,10 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         activation_data_type.name if activation_data_type is not None else "default",
     )
     LOGGER.info(
+        "LiteRT GPU decode steps per sync: %s",
+        gpu_decode_steps_per_sync if gpu_decode_steps_per_sync is not None else "default",
+    )
+    LOGGER.info(
         "LiteRT benchmark skills: %s",
         ",".join(bench_skills) if bench_skills is not None else "disabled",
     )
@@ -78,6 +85,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         model_path,
         backend_name,
         cpu_threads,
+        gpu_decode_steps_per_sync,
         max_num_tokens,
         speculative,
         activation_data_type,
@@ -88,6 +96,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
             model_path,
             backend_name,
             cpu_threads,
+            gpu_decode_steps_per_sync,
             max_num_tokens,
             speculative,
             activation_data_type,
@@ -198,6 +207,7 @@ def _create_engine(
     model_path: Path,
     backend_name: str,
     cpu_threads: int | None,
+    gpu_decode_steps_per_sync: int | None,
     max_num_tokens: int | None,
     speculative: bool,
     activation_data_type: litert_lm.ActivationDataType | None,
@@ -205,7 +215,11 @@ def _create_engine(
     label: str,
 ) -> tuple[litert_lm.Engine, float]:
     kwargs: dict[str, object] = {
-        "backend": _backend(backend_name, cpu_threads),
+        "backend": _backend(
+            backend_name,
+            cpu_threads,
+            gpu_decode_steps_per_sync,
+        ),
         "max_num_tokens": max_num_tokens,
         "enable_speculative_decoding": speculative,
         "enable_benchmark": True,
@@ -221,11 +235,17 @@ def _create_engine(
     return engine, elapsed
 
 
-def _backend(name: str, cpu_threads: int | None) -> litert_lm.Backend:
+def _backend(
+    name: str,
+    cpu_threads: int | None,
+    gpu_decode_steps_per_sync: int | None,
+) -> litert_lm.Backend:
     if name == "cpu":
         return litert_lm.Backend.CPU(thread_count=cpu_threads)
     if name == "gpu":
-        return litert_lm.Backend.GPU()
+        return litert_lm.Backend.GPU(
+            gpu_decode_steps_per_sync=gpu_decode_steps_per_sync
+        )
     raise ValueError(
         f"LITERT_AGENT_BACKEND must be 'cpu' or 'gpu', got {name!r}"
     )
