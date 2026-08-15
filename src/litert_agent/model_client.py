@@ -35,12 +35,14 @@ class LiteRTChatClient:
         reasoning_effort: str,
         label: str,
         allow_prefix_reset: bool = False,
+        enable_thinking: bool | None = None,
     ) -> None:
         self.engine = engine
         self.max_output_tokens = max_output_tokens
         self.reasoning_effort = reasoning_effort
         self.label = label
         self.allow_prefix_reset = allow_prefix_reset
+        self.enable_thinking = enable_thinking
         self.sampler_config = litert_lm.SamplerConfig(
             top_p=top_p,
             temperature=temperature,
@@ -102,12 +104,17 @@ class LiteRTChatClient:
 
         try:
             self.close()
-            self._renderer = self.engine.create_conversation(
-                messages=deepcopy(messages),
-                automatic_tool_calling=False,
-                sampler_config=self.sampler_config,
-                max_output_tokens=self.max_output_tokens,
-            )
+            conversation_kwargs: dict[str, object] = {
+                "messages": deepcopy(messages),
+                "automatic_tool_calling": False,
+                "sampler_config": self.sampler_config,
+                "max_output_tokens": self.max_output_tokens,
+            }
+            if self.enable_thinking is not None:
+                conversation_kwargs["extra_context"] = {
+                    "enable_thinking": self.enable_thinking
+                }
+            self._renderer = self.engine.create_conversation(**conversation_kwargs)
             self._lib = self._renderer._lib
             self._configure_renderer_ffi()
             self._configure_session_checkpoint_ffi()
