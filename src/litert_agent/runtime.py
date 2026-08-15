@@ -60,6 +60,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
     activation_data_type = _env_activation_data_type(
         "LITERT_AGENT_ACTIVATION_DATA_TYPE"
     )
+    bench_skills = _env_skill_names("LITERT_AGENT_BENCH_SKILLS")
 
     LOGGER.info("LiteRT model: %s", model_path)
     LOGGER.info("LiteRT backend: %s", backend_name)
@@ -67,6 +68,10 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
     LOGGER.info(
         "LiteRT activation data type: %s",
         activation_data_type.name if activation_data_type is not None else "default",
+    )
+    LOGGER.info(
+        "LiteRT benchmark skills: %s",
+        ",".join(bench_skills) if bench_skills is not None else "disabled",
     )
 
     manager_engine, manager_init = _create_engine(
@@ -95,6 +100,8 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
     prompt_store = PromptStore(settings.prompt_dir, settings.agent_count)
     prompt_store.validate()
     skill_base = SkillBase(settings.prompt_dir / "prompt_base.txt")
+    if bench_skills is not None:
+        skill_base.require(bench_skills)
     system_runtime = SystemRuntime()
 
     manager_client = LiteRTChatClient(
@@ -135,6 +142,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         AgentPool(workers),
         system_runtime,
         max_steps=settings.max_manager_steps,
+        forced_delegate_skills=bench_skills,
     )
 
     return LiteRTRuntimeBundle(
@@ -167,7 +175,8 @@ def warm_bundle(
         raise RuntimeError("Unexpected canonical manager bootstrap history")
     manager_warm = bundle.manager_client.prepare_prefix(manager_messages)
 
-    skills = bundle.runtime.skill_base.require((default_agent_skill,))
+    skill_names = bundle.runtime.forced_delegate_skills or (default_agent_skill,)
+    skills = bundle.runtime.skill_base.require(skill_names)
     bootstrap = bundle.runtime.prompt_store.build_agent_bootstrap(
         skills, settings.workspace
     )
@@ -242,6 +251,18 @@ def _env_activation_data_type(name: str) -> litert_lm.ActivationDataType | None:
             f"{name} must be one of fp32, fp16, int16, int8; got {raw!r}"
         )
     return value
+
+
+def _env_skill_names(name: str) -> tuple[str, ...] | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    names = tuple(part.strip() for part in raw.split(",") if part.strip())
+    if not names:
+        return None
+    if len(set(names)) != len(names):
+        raise ValueError(f"{name} contains duplicate skill names: {raw!r}")
+    return names
 
 
 def _env_bool(name: str, default: bool) -> bool:
