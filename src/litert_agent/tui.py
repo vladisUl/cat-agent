@@ -21,6 +21,8 @@ BRACKETED_PASTE_ON = "\x1b[?2004h"
 BRACKETED_PASTE_OFF = "\x1b[?2004l"
 BRACKETED_PASTE_START = "[200~"
 BRACKETED_PASTE_END = "\x1b[201~"
+COLOR_ACTIVE = 1
+COLOR_STOPPED = 2
 
 
 @dataclass(slots=True)
@@ -47,6 +49,7 @@ class LiteRTTUI:
         self._input = ""
         self._status = "IDLE"
         self._quit = False
+        self._colors_enabled = False
 
     def run(self) -> None:
         self._set_bracketed_paste(True)
@@ -61,12 +64,9 @@ class LiteRTTUI:
             curses.curs_set(0)
         except curses.error:
             pass
+        self._init_colors()
         stdscr.keypad(True)
         stdscr.timeout(100)
-        self._append_dialog(
-            "SYSTEM",
-            "LiteRT ready. /quit exits. PageUp/PageDown scroll dialog.",
-        )
 
         while not self._quit:
             self._poll_system_events()
@@ -93,8 +93,6 @@ class LiteRTTUI:
     def _poll_system_events(self) -> None:
         busy = self._runtime_busy()
         for event in self.bundle.system_runtime.poll_due(busy=busy):
-            self._append_dialog("SYSTEM", f"event {event.source}:{event.name}")
-            self._dialog_scroll_lines = 0
             self._enqueue_system_event(event)
 
     def _enqueue_system_event(self, event: SystemEvent) -> None:
@@ -164,20 +162,19 @@ class LiteRTTUI:
 
         request = self._active_request
         started = self._active_started
+        is_user_request = request is not None and request.kind == "user"
         try:
             turn = future.result()
         except Exception as exc:
             LOGGER.exception("TUI request failed")
-            self._append_dialog("ERROR", str(exc))
+            if is_user_request:
+                self._append_dialog("MANAGER", f"ERROR: {exc}")
         else:
-            if request is not None and request.kind == "system":
-                prefix = "SYSTEM/MANAGER"
-            else:
-                prefix = "MANAGER"
-            if turn.kind == "wait":
-                self._append_dialog(prefix, "WAIT")
-            else:
-                self._append_dialog(prefix, turn.text)
+            if is_user_request:
+                if turn.kind == "wait":
+                    self._append_dialog("MANAGER", "WAIT")
+                elif turn.kind != "silent":
+                    self._append_dialog("MANAGER", turn.text)
             LOGGER.info(
                 "TUI request complete kind=%s label=%s turn=%s text=%r",
                 request.kind if request is not None else "?",
@@ -186,7 +183,8 @@ class LiteRTTUI:
                 turn.text,
             )
 
-        self._dialog_scroll_lines = 0
+        if is_user_request:
+            self._dialog_scroll_lines = 0
         if started is not None:
             self._last_request_seconds = time.monotonic() - started
 
@@ -306,6 +304,18 @@ class LiteRTTUI:
         except (AttributeError, OSError):
             pass
 
+    def _init_colors(self) -> None:
+        if not curses.has_colors():
+            return
+        try:
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(COLOR_ACTIVE, curses.COLOR_GREEN, -1)
+            curses.init_pair(COLOR_STOPPED, curses.COLOR_RED, -1)
+        except curses.error:
+            return
+        self._colors_enabled = True
+
     def _draw(self, stdscr) -> None:
         stdscr.erase()
         height, width = stdscr.getmaxyx()
@@ -424,6 +434,25 @@ class LiteRTTUI:
             )
             row += 1
 
+        def put_indicator(label: str, value: str, attr: int) -> None:
+            nonlocal row
+            if row >= height - 1:
+                return
+            lead = f"{label:<12} "
+            self._safe_addstr(win, row, 2, lead, 0, width - 4)
+            x = 2 + len(lead)
+            if x < width - 2:
+                self._safe_addstr(win, row, x, "●", attr | curses.A_BOLD, 1)
+                self._safe_addstr(
+                    win,
+                    row,
+                    x + 2,
+                    value,
+                    0,
+                    width - x - 4,
+                )
+            row += 1
+
         put("STATE", self._status, bold=True)
         if self._active_started is not None:
             put("elapsed", f"{time.monotonic() - self._active_started:.1f}s")
@@ -465,22 +494,66 @@ class LiteRTTUI:
 
         row += 1
         put("EVENTS", bold=True)
-        put("sources", "timer=ready gpio=stub mqtt=stub")
-        timers = self.bundle.system_runtime.timer_snapshot()
-        if not timers:
-            put("timers", "none")
+        source_lead = f"{'sources':<12} "
+        self._safe_addstr(win, row, 2, source_lead, 0, width - 4)
+        source_x = 2 + len(source_lead)
+        active_attr = self._indicator_attr(True)
+        stub_attr = curses.A_DIM
+        for dot, text, attr in (
+            ("●", " timer", active_attr),
+            (" ·", " gpio", stub_attr),
+            (" ·", " mqtt", stub_attr),
+        ):
+            if source_x >= width - 2:
+                break
+            self._safe_addstr(win, row, source_x, dot, attr, width - source_x - 2)
+            source_x += len(dot)
+            self._safe_addstr(win, row, source_x, text, attr, width - source_x - 2)
+            source_x += len(text)
+        row += 1
+
+        tasks = self.bundle.system_runtime.task_snapshot()
+        timers = {
+            timer.task_id: timer
+            for timer in self.bundle.system_runtime.task_timer_snapshot()
+        }
+        if not tasks:
+            put("tasks", "none")
         else:
             now = time.monotonic()
-            for timer in sorted(timers, key=lambda item: item.name):
+            for task in tasks:
                 if row >= height - 1:
                     break
-                if timer.enabled and timer.next_fire_monotonic is not None:
+                timer = timers.get(task.task_id)
+                if timer is None:
+                    put_indicator(
+                        f"TASK {task.task_id}",
+                        "NO TIMER",
+                        curses.A_DIM,
+                    )
+                elif timer.enabled and timer.next_fire_monotonic is not None:
                     next_in = max(0.0, timer.next_fire_monotonic - now)
-                    state = f"{timer.period_seconds:g}s next {next_in:.1f}s"
+                    put_indicator(
+                        f"TASK {task.task_id}",
+                        f"RUN {timer.period_seconds:g}s  next {next_in:.0f}s",
+                        self._indicator_attr(True),
+                    )
                 else:
-                    state = f"{timer.period_seconds:g}s stopped"
-                put(timer.name[:12], state)
-                put("  fired/skip", f"{timer.fired}/{timer.skipped}")
+                    put_indicator(
+                        f"TASK {task.task_id}",
+                        f"STOP {timer.period_seconds:g}s",
+                        self._indicator_attr(False),
+                    )
+                if row < height - 1:
+                    self._safe_addstr(
+                        win,
+                        row,
+                        15,
+                        task.description,
+                        curses.A_DIM,
+                        max(0, width - 17),
+                    )
+                    row += 1
 
         if self._pending:
             put("queue", str(len(self._pending)))
@@ -492,6 +565,12 @@ class LiteRTTUI:
             put("size", self._format_bytes(LOG_PATH.stat().st_size))
         except OSError:
             put("size", "--")
+
+    def _indicator_attr(self, active: bool) -> int:
+        if not self._colors_enabled:
+            return curses.A_BOLD if active else curses.A_DIM
+        pair = COLOR_ACTIVE if active else COLOR_STOPPED
+        return curses.color_pair(pair)
 
     def _draw_client_stats(self, win, row: int, client, width: int, height: int) -> int:
         def put(text: str) -> None:
