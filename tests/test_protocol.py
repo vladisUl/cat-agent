@@ -41,15 +41,36 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(item.system_command, "TIMER SET default 60")
         self.assertEqual(item.body, "Проверяй test.txt.")
 
-    def test_manager_persistent_timer_task(self) -> None:
+    def test_manager_persistent_task_timer(self) -> None:
         item = parse_manager_output(
-            'timer.sh 60 shell,mqtt "ловля котов"\nПроверять котов.'
+            'task_timer.sh 60 shell,mqtt "ловля котов"\nПроверять котов.'
         )
         self.assertEqual(item.action, ManagerAction.SYSTEM)
         self.assertEqual(item.system_command, "TASK TIMER SET 60")
         self.assertEqual(item.skills, ("shell", "mqtt"))
         self.assertEqual(item.task_description, "ловля котов")
+        self.assertEqual(item.task_method, "task")
         self.assertEqual(item.body, "Проверять котов.")
+
+    def test_manager_persistent_query_timer(self) -> None:
+        item = parse_manager_output(
+            'query_timer.sh 60 shell "проверка файла"\n'
+            'Проверить user.txt. Вернуть "ОК" или "Авария".'
+        )
+        self.assertEqual(item.action, ManagerAction.SYSTEM)
+        self.assertEqual(item.system_command, "TASK TIMER SET 60")
+        self.assertEqual(item.skills, ("shell",))
+        self.assertEqual(item.task_description, "проверка файла")
+        self.assertEqual(item.task_method, "query")
+        self.assertIn("Вернуть", item.body)
+
+    def test_old_persistent_timer_form_defaults_to_task(self) -> None:
+        item = parse_manager_output(
+            'timer.sh 60 shell,mqtt "ловля котов"\nПроверять котов.'
+        )
+        self.assertEqual(item.action, ManagerAction.SYSTEM)
+        self.assertEqual(item.system_command, "TASK TIMER SET 60")
+        self.assertEqual(item.task_method, "task")
 
     def test_manager_persistent_timer_task_control(self) -> None:
         stop = parse_manager_output("timer.sh stop 2")
@@ -86,7 +107,7 @@ class ProtocolTest(unittest.TestCase):
 
     def test_manager_timer_script_rejects_embedded_control(self) -> None:
         item = parse_manager_output(
-            "timer.sh 60 cats\n"
+            'query_timer.sh 60 shell "проверка"\n'
             "DELEGATE shell\n"
             "Проверь содержимое test.txt."
         )
@@ -94,14 +115,17 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn("future task", item.error or "")
 
     def test_manager_timer_script_rejects_bad_syntax(self) -> None:
-        self.assertIsNotNone(parse_manager_output("timer.sh nope\nПроверяй файл").error)
-        self.assertIsNotNone(parse_manager_output("timer.sh 60 cats extra more\nПроверяй файл").error)
+        self.assertIsNotNone(parse_manager_output("task_timer.sh nope shell \"x\"\nРаботай").error)
+        self.assertIsNotNone(parse_manager_output("query_timer.sh 60 shell\nРаботай").error)
         self.assertIsNotNone(parse_manager_output("timer.sh stop cats\nREPLY\nготово").error)
 
     def test_agent_done_need_and_command(self) -> None:
         done = parse_agent_output("DONE\nГотово")
         self.assertEqual(done.action, AgentAction.DONE)
         self.assertEqual(done.body, "Готово")
+        empty_done = parse_agent_output("DONE")
+        self.assertEqual(empty_done.action, AgentAction.DONE)
+        self.assertEqual(empty_done.body, "")
         need = parse_agent_output("NEED\nНужен topic")
         self.assertEqual(need.action, AgentAction.NEED)
         command = parse_agent_output("ls -l")
@@ -122,7 +146,6 @@ class ProtocolTest(unittest.TestCase):
     def test_rejects_bad_shapes(self) -> None:
         self.assertIsNotNone(parse_manager_output("hello").error)
         self.assertIsNotNone(parse_agent_output("ls\ncat file").error)
-        self.assertIsNotNone(parse_agent_output("DONE").error)
 
 
 if __name__ == "__main__":
