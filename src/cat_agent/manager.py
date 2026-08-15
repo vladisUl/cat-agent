@@ -9,7 +9,7 @@ from .pool import AgentPool
 from .prompt_store import MANAGER_BOOTSTRAP_ACK, PromptStore
 from .protocol import ManagerAction, parse_manager_output
 from .skills import SkillBase, SkillBaseError
-from .system_events import SystemEvent, SystemRuntime
+from .system_events import SystemEvent, SystemRuntime, TaskActivation
 
 LOGGER = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ class ManagerRuntime:
         self.system_runtime = system_runtime or SystemRuntime()
         self.max_steps = max_steps
         self.forced_delegate_skills = forced_delegate_skills
+        self.system_runtime.set_task_handler(self._run_task_activation)
         bootstrap = self._bootstrap_prompt()
         self.prompt_store.write_manager_prompt(bootstrap)
         self.messages: list[dict[str, str]] = [
@@ -56,6 +57,20 @@ class ManagerRuntime:
         return self._drive()
 
     def system_event(self, event: SystemEvent) -> ManagerTurn:
+        if event.task_id is not None:
+            LOGGER.info(
+                "SYSTEM autonomous event source=%s task_id=%d",
+                event.source,
+                event.task_id,
+            )
+            self.system_runtime.activate_task(
+                event.task_id,
+                source=event.source,
+                name=event.name,
+                now=event.created_monotonic,
+            )
+            return ManagerTurn("silent", "")
+
         text = event.manager_text()
         LOGGER.info(
             "MANAGER SYSTEM EVENT source=%s name=%s\n%s",
@@ -66,6 +81,65 @@ class ManagerRuntime:
         self.prompt_store.write_manager_prompt(text)
         self._append_user(text)
         return self._drive()
+
+    def _run_task_activation(self, activation: TaskActivation) -> None:
+        task = activation.task
+        if not task.skills:
+            LOGGER.error(
+                "SYSTEM TASK %d cannot run: no saved skills",
+                task.task_id,
+            )
+            return
+
+        try:
+            skills = self.skill_base.require(task.skills)
+        except SkillBaseError as exc:
+            LOGGER.error(
+                "SYSTEM TASK %d cannot run skills=%s error=%s",
+                task.task_id,
+                ",".join(task.skills),
+                exc,
+            )
+            return
+
+        worker = self.pool.acquire()
+        if worker is None:
+            LOGGER.warning("SYSTEM TASK %d skipped: no FREE agent", task.task_id)
+            return
+
+        LOGGER.info(
+            "SYSTEM TASK %d wake %s skills=%s description=%r",
+            task.task_id,
+            worker.agent_id,
+            ",".join(task.skills),
+            task.description,
+        )
+        try:
+            outcome = worker.start(task.text, skills)
+        except Exception:
+            LOGGER.exception(
+                "SYSTEM TASK %d agent %s failed during activation",
+                task.task_id,
+                worker.agent_id,
+            )
+            if worker.state is not AgentState.FREE:
+                worker.sleep_to_base()
+            return
+
+        LOGGER.info(
+            "SYSTEM TASK %d outcome agent=%s status=%s steps=%d text=%r",
+            task.task_id,
+            outcome.agent_id,
+            outcome.status,
+            outcome.steps,
+            outcome.text,
+        )
+        if outcome.status == "NEED":
+            LOGGER.warning(
+                "SYSTEM TASK %d autonomous agent returned NEED; dropping working context and sleeping to BASE",
+                task.task_id,
+            )
+            worker.sleep_to_base()
 
     def _drive(self) -> ManagerTurn:
         last_protocol_signature: tuple[str, str] | None = None
