@@ -18,8 +18,16 @@ class SystemEvent:
     name: str
     task: str
     created_monotonic: float
+    task_id: int | None = None
 
     def manager_text(self) -> str:
+        if self.task_id is not None:
+            return (
+                f"[SYSTEM_EVENT]\n"
+                f"source: {self.source}\n"
+                f"task_id: {self.task_id}\n"
+                f"[/SYSTEM_EVENT]"
+            )
         return (
             f"[SYSTEM_EVENT]\n"
             f"source: {self.source}\n"
@@ -52,12 +60,24 @@ class TimerSpec:
     skipped: int = 0
 
 
+@dataclass(slots=True)
+class TaskTimerSpec:
+    task_id: int
+    period_seconds: float
+    enabled: bool
+    next_fire_monotonic: float | None
+    sequence: int = 0
+    fired: int = 0
+    skipped: int = 0
+
+
 class SystemRuntime:
     """Internal system role: owns tasks, event sources and scheduling state."""
 
     def __init__(self, task_store: TaskStore | None = None) -> None:
         self._lock = threading.RLock()
         self._timers: dict[str, TimerSpec] = {}
+        self._task_timers: dict[int, TaskTimerSpec] = {}
         self._task_store = task_store
         self._task_handler: TaskHandler | None = None
         self._source_state = {
@@ -65,6 +85,7 @@ class SystemRuntime:
             "gpio": "stub",
             "mqtt": "stub",
         }
+        self._restore_task_timers()
 
     @property
     def task_store(self) -> TaskStore | None:
@@ -74,17 +95,123 @@ class SystemRuntime:
         with self._lock:
             self._task_handler = handler
 
-    def create_task(self, description: str, text: str) -> TaskRecord:
+    def create_task(
+        self,
+        description: str,
+        text: str,
+        *,
+        skills: tuple[str, ...] = (),
+    ) -> TaskRecord:
         store = self._require_task_store()
-        task = store.create(description, text)
+        task = store.create(description, text, skills=skills)
         LOGGER.info("SYSTEM task created id=%d description=%r", task.task_id, task.description)
+        return task
+
+    def create_periodic_task(
+        self,
+        description: str,
+        text: str,
+        skills: tuple[str, ...],
+        period_seconds: float,
+    ) -> TaskRecord:
+        if not skills:
+            raise TaskStoreError("periodic task requires at least one skill")
+        if period_seconds <= 0:
+            raise ValueError("period_seconds must be > 0")
+
+        store = self._require_task_store()
+        task = store.create(
+            description,
+            text,
+            skills=skills,
+            timer_period_seconds=float(period_seconds),
+            enabled=True,
+        )
+        now = time.monotonic()
+        with self._lock:
+            self._task_timers[task.task_id] = TaskTimerSpec(
+                task_id=task.task_id,
+                period_seconds=float(period_seconds),
+                enabled=True,
+                next_fire_monotonic=now + float(period_seconds),
+            )
+        LOGGER.info(
+            "SYSTEM periodic task created id=%d period=%.3fs skills=%s description=%r",
+            task.task_id,
+            period_seconds,
+            ",".join(skills),
+            task.description,
+        )
         return task
 
     def delete_task(self, task_id: int) -> bool:
         store = self._require_task_store()
+        with self._lock:
+            self._task_timers.pop(task_id, None)
         deleted = store.delete(task_id)
         LOGGER.info("SYSTEM task delete id=%d deleted=%s", task_id, deleted)
         return deleted
+
+    def start_task(self, task_id: int) -> TaskRecord:
+        store = self._require_task_store()
+        task = store.require(task_id)
+        if task.timer_period_seconds is None:
+            raise TaskStoreError(f"task {task_id} has no timer")
+        task = store.set_enabled(task_id, True)
+        now = time.monotonic()
+        with self._lock:
+            timer = self._task_timers.get(task_id)
+            if timer is None:
+                timer = TaskTimerSpec(
+                    task_id=task_id,
+                    period_seconds=task.timer_period_seconds,
+                    enabled=True,
+                    next_fire_monotonic=now + task.timer_period_seconds,
+                )
+                self._task_timers[task_id] = timer
+            else:
+                timer.period_seconds = task.timer_period_seconds
+                timer.enabled = True
+                timer.next_fire_monotonic = now + task.timer_period_seconds
+        LOGGER.info("SYSTEM task timer started id=%d", task_id)
+        return task
+
+    def stop_task(self, task_id: int) -> TaskRecord:
+        store = self._require_task_store()
+        task = store.require(task_id)
+        if task.timer_period_seconds is None:
+            raise TaskStoreError(f"task {task_id} has no timer")
+        task = store.set_enabled(task_id, False)
+        with self._lock:
+            timer = self._task_timers.get(task_id)
+            if timer is not None:
+                timer.enabled = False
+                timer.next_fire_monotonic = None
+        LOGGER.info("SYSTEM task timer stopped id=%d", task_id)
+        return task
+
+    def set_task_period(self, task_id: int, period_seconds: float) -> TaskRecord:
+        store = self._require_task_store()
+        task = store.set_timer_period(task_id, period_seconds)
+        now = time.monotonic()
+        with self._lock:
+            timer = self._task_timers.get(task_id)
+            if timer is None:
+                timer = TaskTimerSpec(
+                    task_id=task_id,
+                    period_seconds=period_seconds,
+                    enabled=task.enabled,
+                    next_fire_monotonic=(now + period_seconds if task.enabled else None),
+                )
+                self._task_timers[task_id] = timer
+            else:
+                timer.period_seconds = period_seconds
+                timer.enabled = task.enabled
+                timer.next_fire_monotonic = (
+                    now + period_seconds if task.enabled else None
+                )
+        LOGGER.info("SYSTEM task timer period id=%d period=%.3fs", task_id, period_seconds)
+        return task
 
     def task_snapshot(self) -> tuple[TaskRecord, ...]:
         store = self._require_task_store()
@@ -102,11 +229,7 @@ class SystemRuntime:
         name: str = "",
         now: float | None = None,
     ) -> TaskActivation:
-        """Resolve TASK from persistent storage and hand it to the runtime callback.
-
-        Event sources only need to know task_id. They do not know about agents or
-        model sessions. SYSTEM resolves the saved assignment before dispatching it.
-        """
+        """Resolve TASK from persistent storage and hand it to the runtime callback."""
         task = self._require_task_store().require(task_id)
         activation = TaskActivation(
             source=source.strip() or "system",
@@ -140,6 +263,7 @@ class SystemRuntime:
         )
 
     def execute(self, command: str, body: str) -> str:
+        """Legacy SYSTEM command path retained until manager prompt is switched."""
         LOGGER.info(
             "SYSTEM command=%r body=%r",
             command,
@@ -293,8 +417,7 @@ class SystemRuntime:
                 if busy:
                     timer.skipped += 1
                     LOGGER.info(
-                        "SYSTEM timer tick skipped name=%s sequence=%d "
-                        "reason=runtime_busy",
+                        "SYSTEM timer tick skipped name=%s sequence=%d reason=runtime_busy",
                         timer.name,
                         timer.sequence,
                     )
@@ -314,9 +437,44 @@ class SystemRuntime:
                         )
                     )
 
-                # Preserve the periodic cadence without catch-up storms. Whether the
-                # due tick was emitted or skipped while busy, the next deadline is
-                # always the first deadline strictly in the future.
+                next_fire = timer.next_fire_monotonic
+                while next_fire <= current:
+                    next_fire += timer.period_seconds
+                timer.next_fire_monotonic = next_fire
+
+            for timer in self._task_timers.values():
+                if (
+                    not timer.enabled
+                    or timer.next_fire_monotonic is None
+                    or current < timer.next_fire_monotonic
+                ):
+                    continue
+
+                timer.sequence += 1
+                if busy:
+                    timer.skipped += 1
+                    LOGGER.info(
+                        "SYSTEM task timer tick skipped task=%d sequence=%d reason=runtime_busy",
+                        timer.task_id,
+                        timer.sequence,
+                    )
+                else:
+                    timer.fired += 1
+                    LOGGER.info(
+                        "SYSTEM task timer tick emitted task=%d sequence=%d",
+                        timer.task_id,
+                        timer.sequence,
+                    )
+                    events.append(
+                        SystemEvent(
+                            source="timer",
+                            name=f"task:{timer.task_id}",
+                            task="",
+                            created_monotonic=current,
+                            task_id=timer.task_id,
+                        )
+                    )
+
                 next_fire = timer.next_fire_monotonic
                 while next_fire <= current:
                     next_fire += timer.period_seconds
@@ -325,6 +483,14 @@ class SystemRuntime:
         return tuple(events)
 
     def timer_enabled(self, name: str) -> bool:
+        if name.startswith("task:"):
+            try:
+                task_id = int(name.split(":", 1)[1])
+            except ValueError:
+                return False
+            with self._lock:
+                timer = self._task_timers.get(task_id)
+                return bool(timer is not None and timer.enabled)
         with self._lock:
             timer = self._timers.get(name)
             return bool(timer is not None and timer.enabled)
@@ -345,6 +511,21 @@ class SystemRuntime:
                 for item in self._timers.values()
             )
 
+    def task_timer_snapshot(self) -> tuple[TaskTimerSpec, ...]:
+        with self._lock:
+            return tuple(
+                TaskTimerSpec(
+                    task_id=item.task_id,
+                    period_seconds=item.period_seconds,
+                    enabled=item.enabled,
+                    next_fire_monotonic=item.next_fire_monotonic,
+                    sequence=item.sequence,
+                    fired=item.fired,
+                    skipped=item.skipped,
+                )
+                for item in self._task_timers.values()
+            )
+
     def timer_status_text(self) -> str:
         timers = self.timer_snapshot()
         if not timers:
@@ -362,6 +543,27 @@ class SystemRuntime:
                 f"fired={timer.fired} skipped={timer.skipped} task={timer.task!r}"
             )
         return "\n".join(lines)
+
+    def _restore_task_timers(self) -> None:
+        if self._task_store is None:
+            return
+        now = time.monotonic()
+        for task in self._task_store.list():
+            period = task.timer_period_seconds
+            if period is None:
+                continue
+            self._task_timers[task.task_id] = TaskTimerSpec(
+                task_id=task.task_id,
+                period_seconds=period,
+                enabled=task.enabled,
+                next_fire_monotonic=(now + period if task.enabled else None),
+            )
+            LOGGER.info(
+                "SYSTEM restored task timer id=%d period=%.3fs enabled=%s",
+                task.task_id,
+                period,
+                task.enabled,
+            )
 
     def _require_task_store(self) -> TaskStore:
         if self._task_store is None:
