@@ -104,17 +104,12 @@ class LiteRTChatClient:
 
         try:
             self.close()
-            conversation_kwargs: dict[str, object] = {
-                "messages": deepcopy(messages),
-                "automatic_tool_calling": False,
-                "sampler_config": self.sampler_config,
-                "max_output_tokens": self.max_output_tokens,
-            }
-            if self.enable_thinking is not None:
-                conversation_kwargs["extra_context"] = {
-                    "enable_thinking": self.enable_thinking
-                }
-            self._renderer = self.engine.create_conversation(**conversation_kwargs)
+            self._renderer = self.engine.create_conversation(
+                messages=deepcopy(messages),
+                automatic_tool_calling=False,
+                sampler_config=self.sampler_config,
+                max_output_tokens=self.max_output_tokens,
+            )
             self._lib = self._renderer._lib
             self._configure_renderer_ffi()
             self._configure_session_checkpoint_ffi()
@@ -349,7 +344,12 @@ class LiteRTChatClient:
         assert self._renderer is not None
         assert self._lib is not None
 
-        message_json = json.dumps(message, ensure_ascii=False).encode("utf-8")
+        render_message = dict(message)
+        if self.enable_thinking is False:
+            content = render_message.get("content", "").rstrip()
+            render_message["content"] = f"{content}\n/no_think" if content else "/no_think"
+
+        message_json = json.dumps(render_message, ensure_ascii=False).encode("utf-8")
         raw = self._lib.litert_lm_conversation_render_message_to_string(
             self._renderer._ptr,
             message_json,
