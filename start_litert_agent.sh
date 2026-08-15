@@ -5,6 +5,7 @@ set -e
 cd /opt/cat-agent
 
 MODE="${1:-cpu}"
+PROFILE="${2:-normal}"
 
 case "$MODE" in
     cpu)
@@ -18,7 +19,20 @@ case "$MODE" in
         ACTIVATION_DATA_TYPE="fp32"
         ;;
     *)
-        echo "Usage: $0 [cpu|gpu]" >&2
+        echo "Usage: $0 [cpu|gpu] [normal|bench]" >&2
+        exit 2
+        ;;
+esac
+
+case "$PROFILE" in
+    normal)
+        BENCH_SKILLS=""
+        ;;
+    bench)
+        BENCH_SKILLS="mqtt,shell"
+        ;;
+    *)
+        echo "Usage: $0 [cpu|gpu] [normal|bench]" >&2
         exit 2
         ;;
 esac
@@ -28,5 +42,6 @@ export LITERT_AGENT_MODEL_PATH="$MODEL_PATH"
 export LITERT_AGENT_BACKEND="$BACKEND"
 export LITERT_AGENT_ACTIVATION_DATA_TYPE="$ACTIVATION_DATA_TYPE"
 export LITERT_AGENT_SPECULATIVE="0"
+export LITERT_AGENT_BENCH_SKILLS="$BENCH_SKILLS"
 
 exec /opt/litert-lm-venv/bin/python3 -m litert_agent.main
