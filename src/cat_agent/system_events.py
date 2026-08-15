@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import logging
 import shlex
 import threading
 import time
+
+from .tasks import TaskRecord, TaskStore, TaskStoreError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,6 +29,17 @@ class SystemEvent:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class TaskActivation:
+    source: str
+    name: str
+    task: TaskRecord
+    created_monotonic: float
+
+
+TaskHandler = Callable[[TaskActivation], None]
+
+
 @dataclass(slots=True)
 class TimerSpec:
     name: str
@@ -39,16 +53,82 @@ class TimerSpec:
 
 
 class SystemRuntime:
-    """Internal system role: owns event sources and low-level scheduling state."""
+    """Internal system role: owns tasks, event sources and scheduling state."""
 
-    def __init__(self) -> None:
+    def __init__(self, task_store: TaskStore | None = None) -> None:
         self._lock = threading.RLock()
         self._timers: dict[str, TimerSpec] = {}
+        self._task_store = task_store
+        self._task_handler: TaskHandler | None = None
         self._source_state = {
             "timer": "ready",
             "gpio": "stub",
             "mqtt": "stub",
         }
+
+    @property
+    def task_store(self) -> TaskStore | None:
+        return self._task_store
+
+    def set_task_handler(self, handler: TaskHandler | None) -> None:
+        with self._lock:
+            self._task_handler = handler
+
+    def create_task(self, description: str, text: str) -> TaskRecord:
+        store = self._require_task_store()
+        task = store.create(description, text)
+        LOGGER.info("SYSTEM task created id=%d description=%r", task.task_id, task.description)
+        return task
+
+    def delete_task(self, task_id: int) -> bool:
+        store = self._require_task_store()
+        deleted = store.delete(task_id)
+        LOGGER.info("SYSTEM task delete id=%d deleted=%s", task_id, deleted)
+        return deleted
+
+    def task_snapshot(self) -> tuple[TaskRecord, ...]:
+        store = self._require_task_store()
+        return store.list()
+
+    def task_status_text(self) -> str:
+        store = self._require_task_store()
+        return store.status_text()
+
+    def activate_task(
+        self,
+        task_id: int,
+        *,
+        source: str,
+        name: str = "",
+        now: float | None = None,
+    ) -> TaskActivation:
+        """Resolve TASK from persistent storage and hand it to the runtime callback.
+
+        Event sources only need to know task_id. They do not know about agents or
+        model sessions. SYSTEM resolves the saved assignment before dispatching it.
+        """
+        task = self._require_task_store().require(task_id)
+        activation = TaskActivation(
+            source=source.strip() or "system",
+            name=name.strip(),
+            task=task,
+            created_monotonic=time.monotonic() if now is None else now,
+        )
+        with self._lock:
+            handler = self._task_handler
+
+        LOGGER.info(
+            "SYSTEM task activation id=%d source=%s name=%s description=%r",
+            task.task_id,
+            activation.source,
+            activation.name,
+            task.description,
+        )
+        if handler is not None:
+            handler(activation)
+        else:
+            LOGGER.info("SYSTEM task activation id=%d has no handler yet", task.task_id)
+        return activation
 
     def capabilities_text(self) -> str:
         return "\n".join(
@@ -282,6 +362,11 @@ class SystemRuntime:
                 f"fired={timer.fired} skipped={timer.skipped} task={timer.task!r}"
             )
         return "\n".join(lines)
+
+    def _require_task_store(self) -> TaskStore:
+        if self._task_store is None:
+            raise TaskStoreError("task store is not configured")
+        return self._task_store
 
     @staticmethod
     def _positive_seconds(raw: str) -> float | None:
