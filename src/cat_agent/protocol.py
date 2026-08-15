@@ -22,6 +22,7 @@ class ManagerDirective:
     skills: tuple[str, ...] = ()
     agent_id: str | None = None
     system_command: str | None = None
+    task_description: str | None = None
     error: str | None = None
 
 
@@ -62,6 +63,23 @@ def _positive_number(raw: str) -> bool:
         return False
 
 
+def _positive_int(raw: str) -> int | None:
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _skill_list(raw: str) -> tuple[str, ...] | None:
+    skills = tuple(item.strip() for item in raw.split(",") if item.strip())
+    if not skills or any(not _SKILL_RE.fullmatch(item) for item in skills):
+        return None
+    if len(set(skills)) != len(skills):
+        return None
+    return skills
+
+
 def _timer_name(raw: str) -> str | None:
     return raw if _TIMER_NAME_RE.fullmatch(raw) else None
 
@@ -70,13 +88,15 @@ def _timer_script_error() -> str:
     return (
         "invalid timer.sh syntax; use one of:\n"
         "timer.sh <period_seconds> [name]\n"
-        "<future event task on following lines>\n"
-        "timer.sh start [name]\n"
-        "timer.sh stop [name]\n"
-        "timer.sh period <period_seconds> [name]\n"
-        "timer.sh delete [name]\n"
+        "<future task on following lines>\n"
+        "timer.sh <period_seconds> <skill1,skill2> \"description\"\n"
+        "<persistent task on following lines>\n"
+        "timer.sh start [name|task_number]\n"
+        "timer.sh stop [name|task_number]\n"
+        "timer.sh period <period_seconds> [name|task_number]\n"
+        "timer.sh delete [name|task_number]\n"
         "timer.sh list\n"
-        "period_seconds must be positive; omitted name means default"
+        "period_seconds must be positive"
     )
 
 
@@ -91,22 +111,38 @@ def _parse_timer_script(first: str, body: str) -> ManagerDirective:
 
     arg = parts[1]
 
-    # Natural creation form: timer.sh 60 [name]
     if _positive_number(arg):
-        if len(parts) not in {2, 3}:
-            return ManagerDirective(None, "", error=_timer_script_error())
-        name = "default" if len(parts) == 2 else parts[2]
-        if _timer_name(name) is None or not body:
-            return ManagerDirective(None, "", error=_timer_script_error())
         if any(_looks_like_manager_control_line(line) for line in body.splitlines()):
             return ManagerDirective(
                 None,
                 "",
                 error=(
-                    "timer.sh task must contain only the future event task; "
+                    "timer.sh task must contain only the future task; "
                     "do not embed another control command"
                 ),
             )
+
+        # New persistent TASK form. The description is shell-quoted when it contains
+        # spaces, so shlex still gives exactly four tokens here.
+        if len(parts) == 4:
+            skills = _skill_list(parts[2])
+            description = parts[3].strip()
+            if skills is None or not description or not body:
+                return ManagerDirective(None, "", error=_timer_script_error())
+            return ManagerDirective(
+                ManagerAction.SYSTEM,
+                body,
+                skills=skills,
+                system_command=f"TASK TIMER SET {arg}",
+                task_description=description,
+            )
+
+        # Legacy timer form kept until the manager prompt is switched.
+        if len(parts) not in {2, 3}:
+            return ManagerDirective(None, "", error=_timer_script_error())
+        name = "default" if len(parts) == 2 else parts[2]
+        if _timer_name(name) is None or not body:
+            return ManagerDirective(None, "", error=_timer_script_error())
         return ManagerDirective(
             ManagerAction.SYSTEM,
             body,
@@ -118,6 +154,14 @@ def _parse_timer_script(first: str, body: str) -> ManagerDirective:
     if operation in {"start", "stop", "delete"}:
         if len(parts) not in {2, 3} or body:
             return ManagerDirective(None, "", error=_timer_script_error())
+        if len(parts) == 3:
+            task_id = _positive_int(parts[2])
+            if task_id is not None:
+                return ManagerDirective(
+                    ManagerAction.SYSTEM,
+                    "",
+                    system_command=f"TASK TIMER {operation.upper()} {task_id}",
+                )
         name = "default" if len(parts) == 2 else parts[2]
         if _timer_name(name) is None:
             return ManagerDirective(None, "", error=_timer_script_error())
@@ -131,8 +175,16 @@ def _parse_timer_script(first: str, body: str) -> ManagerDirective:
         if body or len(parts) not in {3, 4}:
             return ManagerDirective(None, "", error=_timer_script_error())
 
-        # Preferred natural form: timer.sh period 120 [name].
-        # Also accept timer.sh period name 120 so a model can recover naturally.
+        if len(parts) == 4 and _positive_number(parts[2]):
+            task_id = _positive_int(parts[3])
+            if task_id is not None:
+                return ManagerDirective(
+                    ManagerAction.SYSTEM,
+                    "",
+                    system_command=f"TASK TIMER PERIOD {task_id} {parts[2]}",
+                )
+
+        # Legacy forms.
         if len(parts) == 3 and _positive_number(parts[2]):
             period = parts[2]
             name = "default"
@@ -192,8 +244,6 @@ def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirec
     if first == "timer.sh" or first.startswith("timer.sh "):
         return _parse_timer_script(first, body)
 
-    # Legacy internal form is still accepted for compatibility, but it is no
-    # longer exposed to the model. timer.sh is the model-facing interface.
     if first.startswith("SYSTEM "):
         command = first[len("SYSTEM ") :].strip()
         if not command:
