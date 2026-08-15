@@ -12,14 +12,22 @@ case "$MODE" in
         MODEL_PATH="/storage/models/litertlm/gemma-4-E4B-it.litertlm"
         BACKEND="cpu"
         ACTIVATION_DATA_TYPE=""
+        ENABLE_THINKING=""
         ;;
     gpu)
         MODEL_PATH="/storage/models/litertlm/gemma-4-E4B-it-gpu.litertlm"
         BACKEND="gpu"
         ACTIVATION_DATA_TYPE="fp32"
+        ENABLE_THINKING=""
+        ;;
+    qwen)
+        MODEL_PATH="/storage/models/litertlm/qwen3_4b_mixed_int4.litertlm"
+        BACKEND="cpu"
+        ACTIVATION_DATA_TYPE=""
+        ENABLE_THINKING="0"
         ;;
     *)
-        echo "Usage: $0 [cpu|gpu] [normal|bench]" >&2
+        echo "Usage: $0 [cpu|gpu|qwen] [normal|bench]" >&2
         exit 2
         ;;
 esac
@@ -32,7 +40,7 @@ case "$PROFILE" in
         BENCH_SKILLS="mqtt,shell"
         ;;
     *)
-        echo "Usage: $0 [cpu|gpu] [normal|bench]" >&2
+        echo "Usage: $0 [cpu|gpu|qwen] [normal|bench]" >&2
         exit 2
         ;;
 esac
@@ -43,5 +51,6 @@ export LITERT_AGENT_BACKEND="$BACKEND"
 export LITERT_AGENT_ACTIVATION_DATA_TYPE="$ACTIVATION_DATA_TYPE"
 export LITERT_AGENT_SPECULATIVE="0"
 export LITERT_AGENT_BENCH_SKILLS="$BENCH_SKILLS"
+export LITERT_AGENT_ENABLE_THINKING="$ENABLE_THINKING"
 
 exec /opt/litert-lm-venv/bin/python3 -m litert_agent.main
