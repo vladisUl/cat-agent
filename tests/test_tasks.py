@@ -62,6 +62,52 @@ class TaskStoreTest(unittest.TestCase):
             self.assertEqual(activation.name, "periodic")
             self.assertEqual(activation.created_monotonic, 123.0)
 
+    def test_periodic_task_survives_restart_and_timer_is_restored(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "task.txt"
+            first_system = SystemRuntime(TaskStore(path))
+            task = first_system.create_periodic_task(
+                "ловля котов",
+                "Искать котов.",
+                ("shell",),
+                60.0,
+            )
+
+            stored = TaskStore(path).require(task.task_id)
+            self.assertEqual(stored.skills, ("shell",))
+            self.assertEqual(stored.timer_period_seconds, 60.0)
+            self.assertTrue(stored.enabled)
+
+            restarted = SystemRuntime(TaskStore(path))
+            timers = restarted.task_timer_snapshot()
+            self.assertEqual(len(timers), 1)
+            self.assertEqual(timers[0].task_id, task.task_id)
+            self.assertTrue(timers[0].enabled)
+            assert timers[0].next_fire_monotonic is not None
+
+            events = restarted.poll_due(timers[0].next_fire_monotonic)
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0].task_id, task.task_id)
+            self.assertEqual(events[0].source, "timer")
+            self.assertEqual(events[0].task, "")
+
+    def test_stopped_periodic_task_stays_stopped_after_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "task.txt"
+            system = SystemRuntime(TaskStore(path))
+            task = system.create_periodic_task(
+                "ловля котов",
+                "Искать котов.",
+                ("shell",),
+                60.0,
+            )
+            system.stop_task(task.task_id)
+
+            restarted = SystemRuntime(TaskStore(path))
+            timer = restarted.task_timer_snapshot()[0]
+            self.assertFalse(timer.enabled)
+            self.assertIsNone(timer.next_fire_monotonic)
+
 
 if __name__ == "__main__":
     unittest.main()
