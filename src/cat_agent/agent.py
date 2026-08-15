@@ -108,6 +108,11 @@ class AgentWorker:
         LOGGER.info("%s CONTINUE context=%r", self.agent_id, context)
         return self._drive()
 
+    def sleep_to_base(self) -> None:
+        """Finish an autonomous activation and leave only the reusable BASE context."""
+        LOGGER.info("%s SLEEP TO BASE state=%s", self.agent_id, self.state.value)
+        self._release(preserve_session=True)
+
     def _drive(self) -> AgentOutcome:
         assert self._messages is not None
         assert self._runtime is not None
