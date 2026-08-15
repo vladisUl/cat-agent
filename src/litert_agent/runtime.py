@@ -61,6 +61,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         "LITERT_AGENT_ACTIVATION_DATA_TYPE"
     )
     bench_skills = _env_skill_names("LITERT_AGENT_BENCH_SKILLS")
+    enable_thinking = _env_optional_bool("LITERT_AGENT_ENABLE_THINKING")
 
     LOGGER.info("LiteRT model: %s", model_path)
     LOGGER.info("LiteRT backend: %s", backend_name)
@@ -72,6 +73,12 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
     LOGGER.info(
         "LiteRT benchmark skills: %s",
         ",".join(bench_skills) if bench_skills is not None else "disabled",
+    )
+    LOGGER.info(
+        "LiteRT thinking: %s",
+        "default"
+        if enable_thinking is None
+        else ("enabled" if enable_thinking else "disabled"),
     )
 
     manager_engine, manager_init = _create_engine(
@@ -112,6 +119,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         reasoning_effort=settings.reasoning_effort,
         label="manager",
         allow_prefix_reset=False,
+        enable_thinking=enable_thinking,
     )
     agent_client = LiteRTChatClient(
         agent_engine,
@@ -121,6 +129,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         reasoning_effort=settings.reasoning_effort,
         label="agent",
         allow_prefix_reset=True,
+        enable_thinking=enable_thinking,
     )
 
     workers = [
@@ -263,6 +272,18 @@ def _env_skill_names(name: str) -> tuple[str, ...] | None:
     if len(set(names)) != len(names):
         raise ValueError(f"{name} contains duplicate skill names: {raw!r}")
     return names
+
+
+def _env_optional_bool(name: str) -> bool | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean when set, got {raw!r}")
 
 
 def _env_bool(name: str, default: bool) -> bool:
