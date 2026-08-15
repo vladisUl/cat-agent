@@ -35,14 +35,12 @@ class LiteRTChatClient:
         reasoning_effort: str,
         label: str,
         allow_prefix_reset: bool = False,
-        enable_thinking: bool | None = None,
     ) -> None:
         self.engine = engine
         self.max_output_tokens = max_output_tokens
         self.reasoning_effort = reasoning_effort
         self.label = label
         self.allow_prefix_reset = allow_prefix_reset
-        self.enable_thinking = enable_thinking
         self.sampler_config = litert_lm.SamplerConfig(
             top_p=top_p,
             temperature=temperature,
@@ -104,18 +102,12 @@ class LiteRTChatClient:
 
         try:
             self.close()
-            conversation_kwargs: dict[str, object] = {
-                "messages": deepcopy(messages),
-                "automatic_tool_calling": False,
-                "sampler_config": self.sampler_config,
-                "max_output_tokens": self.max_output_tokens,
-            }
-            if self.enable_thinking is not None:
-                conversation_kwargs["extra_context"] = {
-                    "enable_thinking": self.enable_thinking
-                }
-
-            self._renderer = self.engine.create_conversation(**conversation_kwargs)
+            self._renderer = self.engine.create_conversation(
+                messages=deepcopy(messages),
+                automatic_tool_calling=False,
+                sampler_config=self.sampler_config,
+                max_output_tokens=self.max_output_tokens,
+            )
             self._lib = self._renderer._lib
             self._configure_renderer_ffi()
             self._configure_session_checkpoint_ffi()
@@ -125,18 +117,7 @@ class LiteRTChatClient:
             )
             if not raw:
                 raise RuntimeError("render_preface_to_string failed")
-            rendered_preface = raw.decode("utf-8")
-
-            # Qwen3's chat template renders a trailing assistant message
-            # differently once a following user message exists. That breaks KV
-            # prefix reuse when our canonical BASE ends in assistant READY.
-            # In non-thinking mode we therefore derive the stable historical
-            # representation of BASE by rendering two synthetic next-user
-            # turns and taking their common prefix up to READY's <|im_end|>.
-            if self.enable_thinking is False:
-                rendered_preface = self._stable_qwen_preface(rendered_preface)
-
-            self._base_preface = rendered_preface
+            self._base_preface = raw.decode("utf-8")
 
             self._session = self.engine.create_session(
                 apply_prompt_template=False,
@@ -357,36 +338,7 @@ class LiteRTChatClient:
             raise RuntimeError(f"save_checkpoint returned {result}")
         self._checkpoint_ready = True
 
-    def _stable_qwen_preface(self, rendered_preface: str) -> str:
-        probe_a = self._render_message_raw({"role": "user", "content": "A"})
-        probe_z = self._render_message_raw({"role": "user", "content": "Z"})
-
-        common_len = 0
-        for left, right in zip(probe_a, probe_z):
-            if left != right:
-                break
-            common_len += 1
-        common = probe_a[:common_len]
-
-        end_token = "<|im_end|>"
-        end_at = common.rfind(end_token)
-        if end_at < 0:
-            raise RuntimeError(
-                "Qwen3 prefix stabilization could not locate trailing <|im_end|>"
-            )
-        stable = common[: end_at + len(end_token)]
-        if not stable:
-            raise RuntimeError("Qwen3 prefix stabilization produced an empty prefix")
-
-        LOGGER.info(
-            "litert-session-qwen-prefix %s original_chars=%d stable_chars=%d",
-            self.label,
-            len(rendered_preface),
-            len(stable),
-        )
-        return stable
-
-    def _render_message_raw(self, message: dict[str, str]) -> str:
+    def _render_user_turn(self, message: dict[str, str]) -> str:
         assert self._renderer is not None
         assert self._lib is not None
 
@@ -397,10 +349,8 @@ class LiteRTChatClient:
         )
         if not raw:
             raise RuntimeError("render_message_to_string failed")
-        return raw.decode("utf-8")
 
-    def _render_user_turn(self, message: dict[str, str]) -> str:
-        rendered = self._render_message_raw(message)
+        rendered = raw.decode("utf-8")
         if not rendered.startswith(self._base_preface):
             raise RuntimeError(
                 "Rendered user turn does not extend canonical base preface"
