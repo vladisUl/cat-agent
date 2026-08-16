@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -31,8 +32,9 @@ class PromptStoreTest(unittest.TestCase):
             )
 
             self.assertIn("You are an agent.", prompt)
-            self.assertIn("[SKILL mqtt]\nUse MQTT.\n[/SKILL]", prompt)
-            self.assertIn("[CONTEXT mqtt]", prompt)
+            self.assertIn('"workspace": "/opt/model"', prompt)
+            self.assertIn('"name": "mqtt"', prompt)
+            self.assertIn('"instructions": "Use MQTT."', prompt)
             self.assertIn("broker: 192.168.0.21", prompt)
             self.assertIn("topic: zigbee2mqtt/temp_ulica", prompt)
 
@@ -56,20 +58,27 @@ class PromptStoreTest(unittest.TestCase):
             )
             task = store.build_agent_task("Read aquarium temperature")
             query = store.build_agent_task("Check user.txt", "query")
+            context = store.build_agent_context("Имя файла: answer.txt")
 
-            self.assertIn("[WORKSPACE]", bootstrap)
-            self.assertIn("[SKILL mqtt]", bootstrap)
-            self.assertIn("[CONTEXT mqtt]", bootstrap)
-            self.assertIn("[BASE]", bootstrap)
-            self.assertNotIn("READY", bootstrap)
-            self.assertNotIn("[TASK]", bootstrap)
+            bootstrap_json = json.loads(bootstrap)
+            self.assertEqual(bootstrap_json["workspace"], "/opt/model")
+            self.assertEqual(bootstrap_json["skills"][0]["name"], "mqtt")
+            self.assertEqual(bootstrap_json["skills"][0]["instructions"], "Use MQTT.")
+            self.assertIn("broker: 192.168.0.21", bootstrap_json["skills"][0]["context"])
             self.assertNotIn("Read aquarium temperature", bootstrap)
             self.assertTrue(system_context.startswith("You are an agent."))
-            self.assertIn("[WORKSPACE]", system_context)
-            self.assertEqual(task, "[TASK]\nRead aquarium temperature\n[/TASK]\n")
+
             self.assertEqual(
-                query,
-                "[METHOD]\nQUERY\n[/METHOD]\n[TASK]\nCheck user.txt\n[/TASK]\n",
+                json.loads(task),
+                {"task": "Read aquarium temperature"},
+            )
+            self.assertEqual(
+                json.loads(query),
+                {"method": "query", "task": "Check user.txt"},
+            )
+            self.assertEqual(
+                json.loads(context),
+                {"context": "Имя файла: answer.txt"},
             )
 
     def test_missing_skill_context_is_optional(self) -> None:
@@ -82,10 +91,11 @@ class PromptStoreTest(unittest.TestCase):
             store = PromptStore(prompt_dir, agent_count=1)
             skill = Skill(name="shell", description="Shell", prompt="Use shell.")
 
-            bootstrap = store.build_agent_bootstrap((skill,), Path("/opt/model"))
+            bootstrap = json.loads(store.build_agent_bootstrap((skill,), Path("/opt/model")))
 
-            self.assertIn("[SKILL shell]\nUse shell.\n[/SKILL]", bootstrap)
-            self.assertNotIn("[CONTEXT shell]", bootstrap)
+            self.assertEqual(bootstrap["skills"][0]["name"], "shell")
+            self.assertEqual(bootstrap["skills"][0]["instructions"], "Use shell.")
+            self.assertNotIn("context", bootstrap["skills"][0])
 
 
 if __name__ == "__main__":
