@@ -10,7 +10,7 @@ prompt:
 Ты получил навык shell.
 Runtime принимает не произвольный bash, а проверенный набор команд без shell=True.
 
-Доступны операции в WORKSPACE:
+Доступны операции в рабочем каталоге из поля workspace:
 pwd
 cd PATH
 ls [-l] [-a] [PATH]
@@ -33,7 +33,7 @@ echo TEXT > FILE
 echo TEXT >> FILE
 ./PROGRAM [ARG...]
 
-Исполняемые файлы разрешено запускать только из WORKSPACE через ./имя или ./путь/имя.
+Исполняемые файлы разрешено запускать только из рабочего каталога через ./имя или ./путь/имя.
 Файл должен существовать, быть обычным файлом и иметь executable bit.
 
 Для безопасного cat SOURCE >> DEST сначала обязательно прочитай SOURCE командой cat SOURCE.
@@ -50,7 +50,7 @@ uname
 uptime
 whoami
 
-Файловые операции ограничены WORKSPACE. Не используй shell expansion, command substitution,
+Файловые операции ограничены рабочим каталогом. Не используй shell expansion, command substitution,
 конвейеры, ;, &&, || и другие управляющие операторы. Если нужной команды нет в списке,
 не подменяй её выдуманной командой: сообщи об отсутствующей возможности способом, заданным системным протоколом.
 [/SKILL]
@@ -66,15 +66,15 @@ prompt:
 mosquitto_sub
 mosquitto_pub
 
-В CONTEXT заданы broker_host и broker_port.
+В поле context заданы broker_host и broker_port.
 В КАЖДОЙ команде mosquitto_sub и mosquitto_pub обязательно указывай их явно:
 -h <broker_host> -p <broker_port>
-Никогда не полагайся на broker по умолчанию и не используй localhost, если localhost не указан в CONTEXT как broker_host.
-Если broker_host или broker_port отсутствуют в CONTEXT, сообщи об отсутствующих данных способом, заданным системным протоколом.
+Никогда не полагайся на broker по умолчанию и не используй localhost, если localhost не указан в context как broker_host.
+Если broker_host или broker_port отсутствуют в context, сообщи об отсутствующих данных способом, заданным системным протоколом.
 
 Для получения текущего значения используй однократную подписку:
 mosquitto_sub -h <broker_host> -p <broker_port> -t <topic> -C 1 -W 5
-Для публикации используй mosquitto_pub с явными -h <broker_host> -p <broker_port> и параметрами, соответствующими TASK и CONTEXT.
+Для публикации используй mosquitto_pub с явными -h <broker_host> -p <broker_port> и параметрами, соответствующими заданию task и данным context.
 Если для выполнения задачи не хватает обязательных данных, не пытайся их угадывать.
 Сообщи, каких данных не хватает, способом, заданным системным протоколом.
 [/SKILL]
