@@ -95,6 +95,7 @@ def main() -> int:
     runtime = build_runtime(settings)
     if not runtime.client.wait_until_ready(lambda: False):
         return 1
+    runtime.system_runtime.arm_task_timers()
 
     print("cat-agent llama ready. Commands: /quit")
     while True:
