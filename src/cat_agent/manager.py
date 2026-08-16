@@ -6,7 +6,7 @@ import logging
 from .agent import AgentState
 from .model_client import ModelClientError, OpenAIChatClient
 from .pool import AgentPool
-from .prompt_store import MANAGER_BOOTSTRAP_ACK, PromptStore
+from .prompt_store import PromptStore
 from .protocol import ManagerAction, ManagerDirective, parse_manager_output
 from .skills import SkillBase, SkillBaseError
 from .system_events import SystemEvent, SystemRuntime, TaskActivation
@@ -42,11 +42,14 @@ class ManagerRuntime:
         self.forced_delegate_skills = forced_delegate_skills
         self.system_runtime.set_task_handler(self._run_task_activation)
         bootstrap = self._bootstrap_prompt()
-        self.prompt_store.write_manager_prompt(bootstrap)
+        system_context = (
+            self.prompt_store.manager_system_prompt().strip()
+            + "\n\n"
+            + bootstrap.strip()
+        )
+        self.prompt_store.write_manager_prompt(system_context)
         self.messages: list[dict[str, str]] = [
-            {"role": "system", "content": self.prompt_store.manager_system_prompt()},
-            {"role": "user", "content": bootstrap},
-            {"role": "assistant", "content": MANAGER_BOOTSTRAP_ACK},
+            {"role": "system", "content": system_context},
         ]
         self._base_messages = [dict(item) for item in self.messages]
 
