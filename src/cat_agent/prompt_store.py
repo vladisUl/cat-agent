@@ -4,9 +4,6 @@ from pathlib import Path
 
 from .skills import Skill
 
-MANAGER_BOOTSTRAP_ACK = "READY"
-AGENT_BOOTSTRAP_ACK = "READY"
-
 
 class PromptStore:
     def __init__(self, prompt_dir: Path, agent_count: int) -> None:
@@ -68,13 +65,22 @@ class PromptStore:
         parts.extend(
             [
                 "",
-                "[BOOTSTRAP]",
+                "[BASE]",
                 "Контекст агента загружен. Следующее сообщение user содержит TASK.",
-                f"Подтверди инициализацию словом {AGENT_BOOTSTRAP_ACK}.",
-                "[/BOOTSTRAP]",
+                "[/BASE]",
             ]
         )
         return "\n".join(parts).rstrip() + "\n"
+
+    def build_agent_system_context(
+        self,
+        agent_id: str,
+        skills: tuple[Skill, ...],
+        workspace: Path,
+    ) -> str:
+        system_prompt = self.agent_system_prompt(agent_id).strip()
+        bootstrap = self.build_agent_bootstrap(skills, workspace).strip()
+        return f"{system_prompt}\n\n{bootstrap}"
 
     @staticmethod
     def build_agent_task(task: str, method: str | None = None) -> str:
@@ -93,9 +99,9 @@ class PromptStore:
         *,
         method: str | None = None,
     ) -> str:
-        bootstrap = self.build_agent_bootstrap(skills, workspace)
+        system_context = self.build_agent_system_context(agent_id, skills, workspace)
         task_prompt = self.build_agent_task(task, method)
-        text = bootstrap.rstrip() + "\n\n" + task_prompt
+        text = system_context.rstrip() + "\n\n" + task_prompt
         self.write_agent_prompt(agent_id, text)
         return text
 
