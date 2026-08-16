@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .skills import Skill
@@ -38,39 +39,22 @@ class PromptStore:
         skills: tuple[Skill, ...],
         workspace: Path,
     ) -> str:
-        parts = [
-            "[WORKSPACE]",
-            str(workspace),
-            "[/WORKSPACE]",
-        ]
+        skill_items: list[dict[str, str]] = []
         for skill in skills:
-            parts.extend(
-                [
-                    "",
-                    f"[SKILL {skill.name}]",
-                    skill.prompt.strip(),
-                    "[/SKILL]",
-                ]
-            )
+            item = {
+                "name": skill.name,
+                "instructions": skill.prompt.strip(),
+            }
             context = self._skill_context(skill.name)
             if context:
-                parts.extend(
-                    [
-                        "",
-                        f"[CONTEXT {skill.name}]",
-                        context,
-                        f"[/CONTEXT]",
-                    ]
-                )
-        parts.extend(
-            [
-                "",
-                "[BASE]",
-                "Контекст агента загружен. Следующее сообщение user содержит TASK.",
-                "[/BASE]",
-            ]
-        )
-        return "\n".join(parts).rstrip() + "\n"
+                item["context"] = context
+            skill_items.append(item)
+
+        payload = {
+            "workspace": str(workspace),
+            "skills": skill_items,
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
     def build_agent_system_context(
         self,
@@ -84,11 +68,19 @@ class PromptStore:
 
     @staticmethod
     def build_agent_task(task: str, method: str | None = None) -> str:
-        parts: list[str] = []
+        payload: dict[str, str] = {}
         if method is not None:
-            parts.extend(["[METHOD]", method.upper(), "[/METHOD]"])
-        parts.extend(["[TASK]", task.strip(), "[/TASK]"])
-        return "\n".join(parts) + "\n"
+            payload["method"] = method
+        payload["task"] = task.strip()
+        return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+    @staticmethod
+    def build_agent_context(context: str) -> str:
+        return json.dumps(
+            {"context": context.strip()},
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
 
     def build_agent_prompt(
         self,
