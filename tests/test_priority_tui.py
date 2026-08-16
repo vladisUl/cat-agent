@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
+from cat_agent.manager import ManagerTurn
 from cat_agent.system_events import SystemEvent, SystemRuntime
 from litert_agent.priority_tui import (
     DEFAULT_EVENT_PRIORITY,
@@ -11,9 +12,39 @@ from litert_agent.priority_tui import (
 )
 
 
+class FakeRuntime:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self._task_steps = 0
+
+    def begin_autonomous_task(self, event: SystemEvent):
+        self.calls.append("begin")
+        return SimpleNamespace(worker=SimpleNamespace(agent_id="agent1"))
+
+    def step_autonomous_task(self, execution):
+        del execution
+        self._task_steps += 1
+        self.calls.append(f"task-step-{self._task_steps}")
+        if self._task_steps == 1:
+            return None
+        return ManagerTurn("silent", "")
+
+    def user_message(self, text: str) -> ManagerTurn:
+        self.calls.append(f"user:{text}")
+        return ManagerTurn("reply", "ОК")
+
+    def system_event(self, event: SystemEvent) -> ManagerTurn:
+        self.calls.append(f"system:{event.source}:{event.name}")
+        return ManagerTurn("silent", "")
+
+
 class PriorityTUITest(unittest.TestCase):
     def setUp(self) -> None:
-        bundle = SimpleNamespace(system_runtime=SystemRuntime())
+        self.runtime = FakeRuntime()
+        bundle = SimpleNamespace(
+            system_runtime=SystemRuntime(),
+            runtime=self.runtime,
+        )
         self.tui = PriorityLiteRTTUI(bundle)  # type: ignore[arg-type]
 
     def tearDown(self) -> None:
@@ -101,6 +132,72 @@ class PriorityTUITest(unittest.TestCase):
     def test_external_event_cannot_outrank_manager(self) -> None:
         with self.assertRaises(ValueError):
             self.tui.make_event_callback(priority=MANAGER_PRIORITY)
+
+    def test_user_runs_between_tt_steps_of_one_background_activation(self) -> None:
+        self.tui.enqueue_external_event(
+            SystemEvent("gpio", "task:1", "", 10.0, 1),
+            priority=DEFAULT_EVENT_PRIORITY,
+            coalesce=True,
+        )
+
+        self.tui._start_next()
+        assert self.tui._active_future is not None
+        self.tui._active_future.result(timeout=1)
+        self.tui._poll_future()
+
+        self.assertIsNotNone(self.tui._background_execution)
+        self.assertEqual(
+            self.runtime.calls,
+            ["begin", "task-step-1"],
+        )
+
+        self.tui._input = "температура на улице"
+        self.tui._submit_input()
+        self.tui._start_next()
+        assert self.tui._active_future is not None
+        self.tui._active_future.result(timeout=1)
+        self.tui._poll_future()
+
+        self.assertEqual(
+            self.runtime.calls,
+            ["begin", "task-step-1", "user:температура на улице"],
+        )
+        self.assertIsNotNone(self.tui._background_execution)
+
+        self.tui._start_next()
+        assert self.tui._active_future is not None
+        self.tui._active_future.result(timeout=1)
+        self.tui._poll_future()
+
+        self.assertEqual(
+            self.runtime.calls,
+            [
+                "begin",
+                "task-step-1",
+                "user:температура на улице",
+                "task-step-2",
+            ],
+        )
+        self.assertIsNone(self.tui._background_execution)
+
+    def test_duplicate_event_is_coalesced_while_activation_is_tt_paused(self) -> None:
+        event = SystemEvent("gpio", "task:1", "", 10.0, 1)
+        self.tui.enqueue_external_event(
+            event,
+            priority=DEFAULT_EVENT_PRIORITY,
+            coalesce=True,
+        )
+        self.tui._start_next()
+        assert self.tui._active_future is not None
+        self.tui._active_future.result(timeout=1)
+        self.tui._poll_future()
+
+        self.tui.enqueue_external_event(
+            SystemEvent("gpio", "task:1", "", 20.0, 1),
+            priority=DEFAULT_EVENT_PRIORITY,
+            coalesce=True,
+        )
+        self.assertEqual(len(self.tui._pending), 0)
 
 
 if __name__ == "__main__":
