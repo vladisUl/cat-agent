@@ -12,7 +12,7 @@ from cat_agent.agent import AgentWorker
 from cat_agent.config import Settings
 from cat_agent.manager import ManagerRuntime
 from cat_agent.pool import AgentPool
-from cat_agent.prompt_store import AGENT_BOOTSTRAP_ACK, MANAGER_BOOTSTRAP_ACK, PromptStore
+from cat_agent.prompt_store import PromptStore
 from cat_agent.skills import SkillBase
 from cat_agent.system_events import SystemRuntime
 from cat_agent.tasks import DEFAULT_TASK_FILE, TaskStore
@@ -167,27 +167,23 @@ def warm_bundle(
     *,
     default_agent_skill: str = "mqtt",
 ) -> tuple[WarmResult, WarmResult]:
-    manager_messages = bundle.runtime.messages[:3]
+    manager_messages = bundle.runtime.messages[:]
     if (
-        len(manager_messages) != 3
-        or manager_messages[-1].get("role") != "assistant"
-        or manager_messages[-1].get("content") != MANAGER_BOOTSTRAP_ACK
+        len(manager_messages) != 1
+        or manager_messages[0].get("role") != "system"
     ):
-        raise RuntimeError("Unexpected canonical manager bootstrap history")
+        raise RuntimeError("Unexpected canonical manager system base")
     manager_warm = bundle.manager_client.prepare_prefix(manager_messages)
 
     skill_names = bundle.runtime.forced_delegate_skills or (default_agent_skill,)
     skills = bundle.runtime.skill_base.require(skill_names)
-    bootstrap = bundle.runtime.prompt_store.build_agent_bootstrap(
-        skills, settings.workspace
+    agent_system_context = bundle.runtime.prompt_store.build_agent_system_context(
+        "agent1",
+        skills,
+        settings.workspace,
     )
     agent_messages = [
-        {
-            "role": "system",
-            "content": bundle.runtime.prompt_store.agent_system_prompt("agent1"),
-        },
-        {"role": "user", "content": bootstrap},
-        {"role": "assistant", "content": AGENT_BOOTSTRAP_ACK},
+        {"role": "system", "content": agent_system_context},
     ]
     agent_warm = bundle.agent_client.prepare_prefix(agent_messages)
     bundle.manager_warm = manager_warm
