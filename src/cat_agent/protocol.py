@@ -134,6 +134,16 @@ def _parse_typed_timer_script(first: str, body: str) -> ManagerDirective:
     if skills is None or not description or not body:
         return ManagerDirective(None, "", error=_timer_script_error())
 
+    if parts[0] == "task_timer.sh" and re.search(r"\bвернуть\b", body, re.IGNORECASE):
+        return ManagerDirective(
+            None,
+            "",
+            error=(
+                "task_timer.sh cannot request a returned value; "
+                "use query_timer.sh when the periodic work must return a result"
+            ),
+        )
+
     method = "task" if parts[0] == "task_timer.sh" else "query"
     return ManagerDirective(
         ManagerAction.SYSTEM,
@@ -322,6 +332,19 @@ def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirec
             return ManagerDirective(None, "", error="DELEGATE contains duplicate skills")
         if not body:
             return ManagerDirective(None, "", error="DELEGATE requires a task on following lines")
+        first_body_line = next(
+            (line.strip() for line in body.splitlines() if line.strip()),
+            "",
+        )
+        if _looks_like_manager_control_line(first_body_line):
+            return ManagerDirective(
+                None,
+                "",
+                error=(
+                    "DELEGATE body must be an agent task; "
+                    "do not delegate manager control commands"
+                ),
+            )
         return ManagerDirective(ManagerAction.DELEGATE, body, skills=skills)
 
     if first.startswith("CONTINUE "):
