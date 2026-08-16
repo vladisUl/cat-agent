@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import json
 import re
 import shlex
 
@@ -350,17 +351,41 @@ def parse_agent_output(content: str, *, max_chars: int = 8192) -> AgentDirective
     if text.startswith("```") or text.endswith("```"):
         return AgentDirective(None, "", error="Markdown code fences are not accepted")
 
-    first, sep, rest = text.partition("\n")
-    first = first.strip()
-    body = rest.strip() if sep else ""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        if text.startswith("{") or text.startswith("["):
+            return AgentDirective(None, "", error=f"invalid JSON response: {exc.msg}")
+    else:
+        if not isinstance(payload, dict):
+            return AgentDirective(None, "", error="JSON response must be an object")
 
-    if first == "DONE":
-        return AgentDirective(AgentAction.DONE, body)
+        keys = set(payload)
+        if keys == {"result"}:
+            result = payload["result"]
+            if not isinstance(result, str):
+                return AgentDirective(None, "", error='JSON field "result" must be a string')
+            return AgentDirective(AgentAction.DONE, result.strip())
 
-    if first == "NEED":
-        if not body:
-            return AgentDirective(None, "", error="NEED requires a description of missing information")
-        return AgentDirective(AgentAction.NEED, body)
+        if keys == {"done"}:
+            if payload["done"] is not True:
+                return AgentDirective(None, "", error='JSON completion must be {"done": true}')
+            return AgentDirective(AgentAction.DONE, "")
+
+        if keys == {"need"}:
+            need = payload["need"]
+            if not isinstance(need, str) or not need.strip():
+                return AgentDirective(None, "", error='JSON field "need" must be a non-empty string')
+            return AgentDirective(AgentAction.NEED, need.strip())
+
+        return AgentDirective(
+            None,
+            "",
+            error=(
+                'JSON response must be exactly one of: {"result":"..."}, '
+                '{"done":true}, or {"need":"..."}'
+            ),
+        )
 
     if "\n" in text or "\r" in text:
         return AgentDirective(
@@ -368,8 +393,7 @@ def parse_agent_output(content: str, *, max_chars: int = 8192) -> AgentDirective
             "",
             error=(
                 "previous response was rejected completely and no command was executed; "
-                "exactly one action is allowed per response: one command on one line, "
-                "or DONE, or DONE with its result, or NEED with its reason"
+                "reply with exactly one Linux command on one line or one JSON result object"
             ),
         )
 
