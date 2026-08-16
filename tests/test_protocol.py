@@ -22,6 +22,13 @@ class ProtocolTest(unittest.TestCase):
         self.assertIsNone(item.action)
         self.assertEqual(item.error, "DELEGATE contains duplicate skills")
 
+    def test_manager_delegate_rejects_embedded_manager_control(self) -> None:
+        item = parse_manager_output(
+            'DELEGATE shell\ntask_timer.sh 0 shell "удаление запроса 1"\nУдалить запрос 1.'
+        )
+        self.assertIsNone(item.action)
+        self.assertIn("do not delegate manager control commands", item.error or "")
+
     def test_manager_continue(self) -> None:
         item = parse_manager_output("CONTINUE agent2\nbroker=127.0.0.1")
         self.assertEqual(item.action, ManagerAction.CONTINUE)
@@ -51,6 +58,14 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(item.task_description, "ловля котов")
         self.assertEqual(item.task_method, "task")
         self.assertEqual(item.body, "Проверять котов.")
+
+    def test_manager_task_timer_rejects_returned_value(self) -> None:
+        item = parse_manager_output(
+            'task_timer.sh 60 shell "проверка user.txt"\n'
+            'Проверять user.txt. Если существует, вернуть "Да", иначе вернуть "Нет".'
+        )
+        self.assertIsNone(item.action)
+        self.assertIn("use query_timer.sh", item.error or "")
 
     def test_manager_persistent_query_timer(self) -> None:
         item = parse_manager_output(
