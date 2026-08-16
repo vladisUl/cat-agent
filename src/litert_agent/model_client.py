@@ -95,9 +95,13 @@ class LiteRTChatClient:
         self._warm_result = None
 
     def prepare_prefix(self, messages: list[dict[str, str]]) -> WarmResult:
-        if len(messages) < 3 or messages[-1].get("role") != "assistant":
+        if (
+            len(messages) != 1
+            or messages[0].get("role") != "system"
+            or not messages[0].get("content", "").strip()
+        ):
             raise ModelClientError(
-                "LiteRT Session prefix must end in canonical assistant ACK"
+                "LiteRT Session base must be exactly one non-empty system message"
             )
 
         try:
@@ -276,10 +280,10 @@ class LiteRTChatClient:
             raise ModelClientError(f"LiteRT-LM Session request failed: {exc}") from exc
 
     def _try_reset_prefix(self, messages: list[dict[str, str]]) -> bool:
-        if not self.allow_prefix_reset or len(messages) != 4:
+        if not self.allow_prefix_reset or len(messages) != 2:
             return False
-        prefix = messages[:3]
-        if [item.get("role") for item in prefix] != ["system", "user", "assistant"]:
+        prefix = messages[:1]
+        if prefix[0].get("role") != "system":
             return False
         if self._checkpoint_ready and prefix == self._base_messages:
             self.reset_to_base(prefix)
