@@ -113,7 +113,8 @@ class AgentWorker:
     def continue_with(self, context: str) -> AgentOutcome:
         if self.state is not AgentState.WAITING or self._messages is None:
             raise RuntimeError(f"{self.agent_id} is not waiting for context")
-        self._messages.append({"role": "user", "content": f"ADDITIONAL CONTEXT:\n{context.strip()}"})
+        context_prompt = self.prompt_store.build_agent_context(context)
+        self._messages.append({"role": "user", "content": context_prompt})
         self.state = AgentState.RUNNING
         LOGGER.info("%s CONTINUE context=%r", self.agent_id, context)
         return self._drive()
@@ -129,6 +130,11 @@ class AgentWorker:
         repeated: dict[tuple[str, int, str, str], int] = {}
 
         while self._steps_used < self.max_steps:
+            if not self._messages or self._messages[-1]["role"] != "user":
+                raise RuntimeError(
+                    f"TT violation: {self.agent_id} model call requires a fresh user tick"
+                )
+
             self._steps_used += 1
             step = self._steps_used
             try:
@@ -175,14 +181,21 @@ class AgentWorker:
 
             if directive.action is AgentAction.DONE:
                 if self._method == "query" and not directive.body:
-                    message = "QUERY requires a non-empty return value after DONE"
+                    message = 'query completion requires a non-empty string in {"result":"..."}'
+                    LOGGER.warning("%s step %d protocol error: %s", self.agent_id, step, message)
+                    self._messages.append(
+                        {"role": "user", "content": self._runtime.format_protocol_error(message)}
+                    )
+                    continue
+                if self._method == "task" and directive.body:
+                    message = 'task completion must be {"done":true}'
                     LOGGER.warning("%s step %d protocol error: %s", self.agent_id, step, message)
                     self._messages.append(
                         {"role": "user", "content": self._runtime.format_protocol_error(message)}
                     )
                     continue
                 if self._method is None and not directive.body:
-                    message = "ordinary task DONE requires a concise result"
+                    message = 'ordinary task completion requires a non-empty string in {"result":"..."}'
                     LOGGER.warning("%s step %d protocol error: %s", self.agent_id, step, message)
                     self._messages.append(
                         {"role": "user", "content": self._runtime.format_protocol_error(message)}
@@ -191,7 +204,7 @@ class AgentWorker:
 
                 text = "" if self._method == "task" else directive.body
                 LOGGER.info(
-                    "%s DONE method=%s steps=%d result=%r",
+                    "%s COMPLETE method=%s steps=%d result=%r",
                     self.agent_id,
                     self._method or "ordinary",
                     step,
@@ -201,6 +214,13 @@ class AgentWorker:
                 return AgentOutcome(self.agent_id, "OK", text, step)
 
             if directive.action is AgentAction.NEED:
+                if self._method == "query":
+                    message = 'query must return {"result":"..."}; {"need":"..."} is not allowed'
+                    LOGGER.warning("%s step %d protocol error: %s", self.agent_id, step, message)
+                    self._messages.append(
+                        {"role": "user", "content": self._runtime.format_protocol_error(message)}
+                    )
+                    continue
                 self.state = AgentState.WAITING
                 LOGGER.info("%s NEED steps=%d text=%r", self.agent_id, step, directive.body)
                 return AgentOutcome(self.agent_id, "NEED", directive.body, step)
