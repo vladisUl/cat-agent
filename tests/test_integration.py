@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -42,7 +43,7 @@ class IntegrationTest(unittest.TestCase):
                 [
                     "DELEGATE shell\nПосмотри список файлов и верни имена.",
                     "ls",
-                    "DONE\nВ каталоге есть alpha.txt.",
+                    '{"result":"В каталоге есть alpha.txt."}',
                     "REPLY\nВ рабочем каталоге есть alpha.txt.",
                 ]
             )
@@ -69,7 +70,7 @@ class IntegrationTest(unittest.TestCase):
             self.assertIn("alpha.txt", turn.text)
 
             built = (prompt_dir / "prompt_agent_1.txt").read_text(encoding="utf-8")
-            self.assertIn("[SKILL shell]", built)
+            self.assertIn('"name": "shell"', built)
             self.assertIn("Посмотри список файлов", built)
 
             first_agent_call = client.calls[1]
@@ -78,9 +79,14 @@ class IntegrationTest(unittest.TestCase):
                 ["system", "user"],
             )
             self.assertNotIn("READY", str(first_agent_call))
-            self.assertNotIn("[TASK]", first_agent_call[0]["content"])
-            self.assertIn("[TASK]", first_agent_call[1]["content"])
-            self.assertIn("Посмотри список файлов", first_agent_call[1]["content"])
+            self.assertNotIn("Посмотри список файлов", first_agent_call[0]["content"])
+            first_tick = json.loads(first_agent_call[1]["content"])
+            self.assertEqual(first_tick, {"task": "Посмотри список файлов и верни имена."})
+
+            second_agent_call = client.calls[2]
+            self.assertEqual(second_agent_call[-1]["role"], "user")
+            self.assertIn("[exit_code=0]", second_agent_call[-1]["content"])
+            self.assertIn("alpha.txt", second_agent_call[-1]["content"])
             self.assertEqual(len(client.reset_calls), 2)
 
     def test_repeated_matching_agent_tasks_reuse_clean_base(self) -> None:
@@ -93,8 +99,8 @@ class IntegrationTest(unittest.TestCase):
 
             client = FakeClient(
                 [
-                    "DONE\nПервая задача выполнена.",
-                    "DONE\nВторая задача выполнена.",
+                    '{"result":"Первая задача выполнена."}',
+                    '{"result":"Вторая задача выполнена."}',
                 ]
             )
             store = PromptStore(prompt_dir, 3)
@@ -176,11 +182,11 @@ class IntegrationTest(unittest.TestCase):
             client = FakeClient(
                 [
                     "DELEGATE shell\nПрочитай файл, имя которого должен сообщить пользователь.",
-                    "NEED\nНужно имя файла.",
+                    '{"need":"Нужно имя файла."}',
                     "ASK\nКак называется файл?",
                     "CONTINUE agent1\nИмя файла: answer.txt",
                     "cat answer.txt",
-                    "DONE\nВ файле записано 42.",
+                    '{"result":"В файле записано 42."}',
                     "REPLY\nВ файле записано 42.",
                 ]
             )
@@ -213,6 +219,10 @@ class IntegrationTest(unittest.TestCase):
             self.assertIn("42", second.text)
             self.assertEqual(worker.state.value, "FREE")
             self.assertEqual(len(client.reset_calls), 2)
+
+            continue_agent_call = client.calls[4]
+            context_tick = json.loads(continue_agent_call[-1]["content"])
+            self.assertEqual(context_tick, {"context": "Имя файла: answer.txt"})
 
 
 if __name__ == "__main__":
