@@ -95,6 +95,26 @@ class SystemRuntime:
         with self._lock:
             self._task_handler = handler
 
+    def arm_task_timers(self, now: float | None = None) -> None:
+        """Start countdowns for enabled TASK timers after the runtime is fully ready."""
+        current = time.monotonic() if now is None else now
+        with self._lock:
+            for timer in self._task_timers.values():
+                timer.next_fire_monotonic = (
+                    current + timer.period_seconds if timer.enabled else None
+                )
+                LOGGER.info(
+                    "SYSTEM task timer armed id=%d period=%.3fs enabled=%s next=%s",
+                    timer.task_id,
+                    timer.period_seconds,
+                    timer.enabled,
+                    (
+                        f"{timer.next_fire_monotonic:.3f}"
+                        if timer.next_fire_monotonic is not None
+                        else "none"
+                    ),
+                )
+
     def create_task(
         self,
         description: str,
@@ -551,7 +571,6 @@ class SystemRuntime:
     def _restore_task_timers(self) -> None:
         if self._task_store is None:
             return
-        now = time.monotonic()
         for task in self._task_store.list():
             period = task.timer_period_seconds
             if period is None:
@@ -560,10 +579,10 @@ class SystemRuntime:
                 task_id=task.task_id,
                 period_seconds=period,
                 enabled=task.enabled,
-                next_fire_monotonic=(now + period if task.enabled else None),
+                next_fire_monotonic=None,
             )
             LOGGER.info(
-                "SYSTEM restored task timer id=%d period=%.3fs enabled=%s",
+                "SYSTEM restored task timer id=%d period=%.3fs enabled=%s state=unarmed",
                 task.task_id,
                 period,
                 task.enabled,
