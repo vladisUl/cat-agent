@@ -33,7 +33,7 @@ class LiteRTRuntimeBundle:
     manager_engine: litert_lm.Engine
     agent_engine: litert_lm.Engine
     manager_client: LiteRTChatClient
-    agent_client: LiteRTChatClient
+    agent_clients: tuple[LiteRTChatClient, ...]
     manager_engine_init_seconds: float
     agent_engine_init_seconds: float
     model_path: Path
@@ -42,9 +42,14 @@ class LiteRTRuntimeBundle:
     manager_warm: WarmResult | None = None
     agent_warm: WarmResult | None = None
 
+    @property
+    def agent_client(self) -> LiteRTChatClient:
+        return self.agent_clients[0]
+
     def close(self) -> None:
         self.manager_client.close()
-        self.agent_client.close()
+        for client in self.agent_clients:
+            client.close()
         self.manager_engine.close()
         self.agent_engine.close()
 
@@ -114,20 +119,23 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         label="manager",
         allow_prefix_reset=False,
     )
-    agent_client = LiteRTChatClient(
-        agent_engine,
-        max_output_tokens=settings.agent_max_output_tokens,
-        temperature=settings.temperature,
-        top_p=settings.top_p,
-        reasoning_effort=settings.reasoning_effort,
-        label="agent",
-        allow_prefix_reset=True,
+    agent_clients = tuple(
+        LiteRTChatClient(
+            agent_engine,
+            max_output_tokens=settings.agent_max_output_tokens,
+            temperature=settings.temperature,
+            top_p=settings.top_p,
+            reasoning_effort=settings.reasoning_effort,
+            label=f"agent{index}",
+            allow_prefix_reset=True,
+        )
+        for index in range(1, settings.agent_count + 1)
     )
 
     workers = [
         AgentWorker(
             f"agent{index}",
-            agent_client,
+            agent_clients[index - 1],
             prompt_store,
             settings.workspace,
             max_steps=settings.max_agent_steps,
@@ -152,7 +160,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         manager_engine=manager_engine,
         agent_engine=agent_engine,
         manager_client=manager_client,
-        agent_client=agent_client,
+        agent_clients=agent_clients,
         manager_engine_init_seconds=manager_init,
         agent_engine_init_seconds=agent_init,
         model_path=model_path,
