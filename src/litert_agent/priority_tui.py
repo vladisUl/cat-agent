@@ -6,7 +6,11 @@ import logging
 import threading
 import time
 
-from cat_agent.manager import AutonomousTaskExecution, ManagerTurn
+from cat_agent.manager import (
+    AutonomousTaskCompletion,
+    AutonomousTaskExecution,
+    ManagerTurn,
+)
 from cat_agent.system_events import SystemEvent
 
 from .tui import LiteRTTUI
@@ -17,11 +21,17 @@ MANAGER_PRIORITY = 0
 DEFAULT_EVENT_PRIORITY = 100
 
 
+@dataclass(frozen=True, slots=True)
+class _ManagerQueryResult:
+    task_id: int
+    result: str
+
+
 @dataclass(slots=True)
 class _PriorityRequest:
     kind: str
     label: str
-    payload: str | SystemEvent
+    payload: str | SystemEvent | _ManagerQueryResult
     queued_at: float
     priority: int
     coalesce_key: str | None = None
@@ -30,7 +40,7 @@ class _PriorityRequest:
 @dataclass(slots=True)
 class _TaskSliceResult:
     execution: AutonomousTaskExecution | None
-    turn: ManagerTurn | None
+    completion: AutonomousTaskCompletion | None
 
 
 class PriorityLiteRTTUI(LiteRTTUI):
@@ -150,6 +160,26 @@ class PriorityLiteRTTUI(LiteRTTUI):
             priority,
         )
 
+    def _enqueue_manager_query_result(self, completion: AutonomousTaskCompletion) -> None:
+        assert completion.query_task_id is not None
+        request = _PriorityRequest(
+            kind="manager",
+            label=f"query-result:task:{completion.query_task_id}",
+            payload=_ManagerQueryResult(
+                task_id=completion.query_task_id,
+                result=completion.query_result,
+            ),
+            queued_at=time.monotonic(),
+            priority=MANAGER_PRIORITY,
+        )
+        with self._queue_lock:
+            self._pending.append(request)
+        LOGGER.info(
+            "TUI queued manager query result task=%d priority=%d",
+            completion.query_task_id,
+            MANAGER_PRIORITY,
+        )
+
     def _submit_input(self) -> None:
         text = self._input.strip()
         self._input = ""
@@ -200,10 +230,9 @@ class PriorityLiteRTTUI(LiteRTTUI):
                 )
                 return
 
-            # A saved TASK/QUERY is cooperative: one executor job equals one
-            # agent TT. If another autonomous task ever preempts an already
-            # suspended one, keep the nested event synchronous for now rather
-            # than overwrite the suspended context.
+            # Saved TASK/QUERY work is cooperative: one executor job equals one
+            # agent TT. Equal-priority background events wait for the current
+            # activation to finish; higher-priority work can enter at TT boundaries.
             if event.task_id is not None and background is None:
                 self._start_first_task_slice(request, event)
                 return
@@ -228,6 +257,13 @@ class PriorityLiteRTTUI(LiteRTTUI):
             self._active_future = self._executor.submit(
                 self.bundle.runtime.user_message,
                 request.payload,
+            )
+        elif request.kind == "manager":
+            assert isinstance(request.payload, _ManagerQueryResult)
+            self._active_future = self._executor.submit(
+                self.bundle.runtime.autonomous_query_result,
+                request.payload.task_id,
+                request.payload.result,
             )
         else:
             assert isinstance(request.payload, SystemEvent)
@@ -280,21 +316,21 @@ class PriorityLiteRTTUI(LiteRTTUI):
 
     def _run_first_task_slice(self, event: SystemEvent) -> _TaskSliceResult:
         started = self.bundle.runtime.begin_autonomous_task(event)
-        if isinstance(started, ManagerTurn):
+        if isinstance(started, AutonomousTaskCompletion):
             return _TaskSliceResult(None, started)
-        turn = self.bundle.runtime.step_autonomous_task(started)
-        if turn is None:
+        completion = self.bundle.runtime.step_autonomous_task(started)
+        if completion is None:
             return _TaskSliceResult(started, None)
-        return _TaskSliceResult(None, turn)
+        return _TaskSliceResult(None, completion)
 
     def _run_next_task_slice(
         self,
         execution: AutonomousTaskExecution,
     ) -> _TaskSliceResult:
-        turn = self.bundle.runtime.step_autonomous_task(execution)
-        if turn is None:
+        completion = self.bundle.runtime.step_autonomous_task(execution)
+        if completion is None:
             return _TaskSliceResult(execution, None)
-        return _TaskSliceResult(None, turn)
+        return _TaskSliceResult(None, completion)
 
     def _poll_future(self) -> None:
         if not self._active_is_task_slice:
@@ -312,8 +348,10 @@ class PriorityLiteRTTUI(LiteRTTUI):
             result = future.result()
         except Exception as exc:
             LOGGER.exception("TUI task slice failed")
-            turn = ManagerTurn("error", str(exc))
-            result = _TaskSliceResult(None, turn)
+            result = _TaskSliceResult(
+                None,
+                AutonomousTaskCompletion(turn=ManagerTurn("error", str(exc))),
+            )
 
         if result.execution is not None:
             assert request is not None
@@ -326,16 +364,26 @@ class PriorityLiteRTTUI(LiteRTTUI):
                 result.execution.worker.agent_id,
             )
         else:
-            turn = result.turn or ManagerTurn("silent", "")
-            if turn.kind == "reply" and turn.text:
-                self._append_dialog("MANAGER", turn.text)
-                dialog_updated = True
-            LOGGER.info(
-                "TUI task activation complete label=%s turn=%s text=%r",
-                request.label if request is not None else "?",
-                turn.kind,
-                turn.text,
+            completion = result.completion or AutonomousTaskCompletion(
+                turn=ManagerTurn("silent", "")
             )
+            if completion.query_task_id is not None:
+                self._enqueue_manager_query_result(completion)
+                LOGGER.info(
+                    "TUI task activation agent phase complete label=%s query-result queued",
+                    request.label if request is not None else "?",
+                )
+            else:
+                turn = completion.turn or ManagerTurn("silent", "")
+                if turn.kind == "reply" and turn.text:
+                    self._append_dialog("MANAGER", turn.text)
+                    dialog_updated = True
+                LOGGER.info(
+                    "TUI task activation complete label=%s turn=%s text=%r",
+                    request.label if request is not None else "?",
+                    turn.kind,
+                    turn.text,
+                )
 
         if dialog_updated:
             self._dialog_scroll_lines = 0
