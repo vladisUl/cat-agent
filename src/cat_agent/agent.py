@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .workspace_command_runtime import CommandRuntime
 from .model_client import ModelClientError, OpenAIChatClient
-from .prompt_store import AGENT_BOOTSTRAP_ACK, PromptStore
+from .prompt_store import PromptStore
 from .protocol import AgentAction, parse_agent_output
 from .skills import Skill
 
@@ -69,28 +69,27 @@ class AgentWorker:
         self._skills = skills
         self._method = method
 
-        bootstrap = self.prompt_store.build_agent_bootstrap(skills, self.workspace)
+        system_context = self.prompt_store.build_agent_system_context(
+            self.agent_id,
+            skills,
+            self.workspace,
+        )
         task_prompt = self.prompt_store.build_agent_task(task, method)
         self.prompt_store.write_agent_prompt(
             self.agent_id,
-            bootstrap.rstrip() + "\n\n" + task_prompt,
+            system_context.rstrip() + "\n\n" + task_prompt,
         )
 
-        reused = self._messages is not None and self._session_bootstrap == bootstrap
+        reused = self._messages is not None and self._session_bootstrap == system_context
         if reused:
             assert self._messages is not None
             self._messages.append({"role": "user", "content": task_prompt})
         else:
             self._messages = [
-                {
-                    "role": "system",
-                    "content": self.prompt_store.agent_system_prompt(self.agent_id),
-                },
-                {"role": "user", "content": bootstrap},
-                {"role": "assistant", "content": AGENT_BOOTSTRAP_ACK},
+                {"role": "system", "content": system_context},
                 {"role": "user", "content": task_prompt},
             ]
-            self._session_bootstrap = bootstrap
+            self._session_bootstrap = system_context
 
         self._runtime = CommandRuntime(
             self.workspace,
@@ -248,7 +247,7 @@ class AgentWorker:
     def _release(self, *, preserve_session: bool) -> None:
         self.state = AgentState.FREE
         if preserve_session and self._messages is not None:
-            base_messages = [dict(item) for item in self._messages[:3]]
+            base_messages = [dict(self._messages[0])]
             try:
                 reset_to_base = getattr(self.client, "reset_to_base", None)
                 if callable(reset_to_base):
