@@ -3,14 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 
-from .agent import AgentState
+from .agent import AgentState, AgentWorker
 from .model_client import ModelClientError, OpenAIChatClient
 from .pool import AgentPool
 from .prompt_store import PromptStore
 from .protocol import ManagerAction, ManagerDirective, parse_manager_output
 from .skills import SkillBase, SkillBaseError
 from .system_events import SystemEvent, SystemRuntime, TaskActivation
-from .tasks import TaskStoreError
+from .tasks import TaskRecord, TaskStoreError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -19,6 +19,12 @@ LOGGER = logging.getLogger(__name__)
 class ManagerTurn:
     kind: str
     text: str
+
+
+@dataclass(slots=True)
+class AutonomousTaskExecution:
+    activation: TaskActivation
+    worker: AgentWorker
 
 
 class ManagerRuntime:
@@ -94,6 +100,149 @@ class ManagerRuntime:
         )
         self.prompt_store.write_manager_prompt(text)
         self._append_user(text)
+        return self._drive()
+
+    def begin_autonomous_task(
+        self,
+        event: SystemEvent,
+    ) -> AutonomousTaskExecution | ManagerTurn:
+        """Start a saved TASK/QUERY but do not run more than setup work."""
+        if event.task_id is None:
+            raise ValueError("autonomous task event requires task_id")
+        store = self.system_runtime.task_store
+        if store is None:
+            return ManagerTurn("error", "Task store is not configured")
+        try:
+            task = store.require(event.task_id)
+        except TaskStoreError as exc:
+            LOGGER.warning("SYSTEM TASK %d cannot start: %s", event.task_id, exc)
+            return ManagerTurn("silent", "")
+
+        activation = TaskActivation(
+            source=event.source.strip() or "system",
+            name=event.name.strip(),
+            task=task,
+            created_monotonic=event.created_monotonic,
+        )
+        LOGGER.info(
+            "SYSTEM task activation id=%d method=%s source=%s name=%s description=%r",
+            task.task_id,
+            task.method,
+            activation.source,
+            activation.name,
+            task.description,
+        )
+
+        if not task.skills:
+            LOGGER.error("SYSTEM TASK %d cannot run: no saved skills", task.task_id)
+            return self._autonomous_error_turn(task, "нет сохранённых skills")
+
+        try:
+            skills = self.skill_base.require(task.skills)
+        except SkillBaseError as exc:
+            LOGGER.error(
+                "SYSTEM TASK %d cannot run skills=%s error=%s",
+                task.task_id,
+                ",".join(task.skills),
+                exc,
+            )
+            return self._autonomous_error_turn(task, str(exc))
+
+        worker = self.pool.acquire()
+        if worker is None:
+            LOGGER.warning("SYSTEM TASK %d cannot start: no FREE agent", task.task_id)
+            return self._autonomous_error_turn(task, "нет свободного агента")
+
+        LOGGER.info(
+            "SYSTEM TASK %d wake %s method=%s skills=%s description=%r",
+            task.task_id,
+            worker.agent_id,
+            task.method,
+            ",".join(task.skills),
+            task.description,
+        )
+        try:
+            worker.begin(task.text, skills, method=task.method)
+        except Exception as exc:
+            LOGGER.exception(
+                "SYSTEM TASK %d agent %s failed during activation setup",
+                task.task_id,
+                worker.agent_id,
+            )
+            if worker.state is not AgentState.FREE:
+                worker.sleep_to_base()
+            return self._autonomous_error_turn(task, str(exc))
+
+        return AutonomousTaskExecution(activation=activation, worker=worker)
+
+    def step_autonomous_task(
+        self,
+        execution: AutonomousTaskExecution,
+    ) -> ManagerTurn | None:
+        """Run exactly one agent TT. None means the same activation must resume later."""
+        task = execution.activation.task
+        worker = execution.worker
+        try:
+            outcome = worker.step()
+        except Exception as exc:
+            LOGGER.exception(
+                "SYSTEM TASK %d agent %s failed during TT step",
+                task.task_id,
+                worker.agent_id,
+            )
+            if worker.state is not AgentState.FREE:
+                worker.sleep_to_base()
+            return self._autonomous_error_turn(task, str(exc))
+
+        if outcome is None:
+            LOGGER.info(
+                "SYSTEM TASK %d paused at TT boundary agent=%s steps=%d",
+                task.task_id,
+                worker.agent_id,
+                worker._steps_used,
+            )
+            return None
+
+        LOGGER.info(
+            "SYSTEM TASK %d outcome agent=%s status=%s steps=%d text=%r",
+            task.task_id,
+            outcome.agent_id,
+            outcome.status,
+            outcome.steps,
+            outcome.text,
+        )
+        if outcome.status == "NEED":
+            LOGGER.warning(
+                "SYSTEM TASK %d autonomous agent returned NEED; dropping working context and sleeping to BASE",
+                task.task_id,
+            )
+            worker.sleep_to_base()
+            return self._autonomous_error_turn(task, outcome.text)
+
+        if task.method == "task":
+            return ManagerTurn("silent", "")
+        if outcome.status != "OK":
+            return self._autonomous_error_turn(task, outcome.text or outcome.status)
+        if not outcome.text.strip():
+            return self._autonomous_error_turn(task, "агент не вернул значение")
+        return self._autonomous_query_turn(task, outcome.text)
+
+    def _autonomous_error_turn(self, task: TaskRecord, message: str) -> ManagerTurn:
+        if task.method != "query":
+            return ManagerTurn("silent", "")
+        return self._autonomous_query_turn(
+            task,
+            f"Ошибка запроса TASK {task.task_id}: {message}",
+        )
+
+    def _autonomous_query_turn(self, task: TaskRecord, result: str) -> ManagerTurn:
+        tick = f"SYSTEM_QUERY_RESULT TASK {task.task_id}\n{result.strip()}"
+        LOGGER.info(
+            "MANAGER autonomous QUERY tick task_id=%d\n%s",
+            task.task_id,
+            tick,
+        )
+        self._event(tick)
         return self._drive()
 
     def _run_task_activation(self, activation: TaskActivation) -> str | None:
