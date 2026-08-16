@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
-from cat_agent.manager import ManagerTurn
+from cat_agent.manager import AutonomousTaskCompletion, ManagerTurn
 from cat_agent.system_events import SystemEvent, SystemRuntime
 from litert_agent.priority_tui import (
     DEFAULT_EVENT_PRIORITY,
@@ -27,11 +27,15 @@ class FakeRuntime:
         self.calls.append(f"task-step-{self._task_steps}")
         if self._task_steps == 1:
             return None
-        return ManagerTurn("silent", "")
+        return AutonomousTaskCompletion(turn=ManagerTurn("silent", ""))
 
     def user_message(self, text: str) -> ManagerTurn:
         self.calls.append(f"user:{text}")
         return ManagerTurn("reply", "ОК")
+
+    def autonomous_query_result(self, task_id: int, result: str) -> ManagerTurn:
+        self.calls.append(f"query-result:{task_id}:{result}")
+        return ManagerTurn("reply", result)
 
     def system_event(self, event: SystemEvent) -> ManagerTurn:
         self.calls.append(f"system:{event.source}:{event.name}")
