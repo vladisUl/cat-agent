@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from cat_agent.agent import AgentWorker
-from cat_agent.manager import ManagerRuntime
+from cat_agent.manager import AutonomousTaskCompletion, AutonomousTaskExecution, ManagerRuntime
 from cat_agent.model_client import ChatResponse
 from cat_agent.pool import AgentPool
 from cat_agent.prompt_store import PromptStore
@@ -140,6 +140,50 @@ class TaskMethodTest(unittest.TestCase):
                 client.calls[2][-1]["content"],
                 f"SYSTEM_QUERY_RESULT TASK {task.task_id}\nАвария",
             )
+
+    def test_stepwise_query_yields_after_agent_tt_before_manager_tt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            manager, system, client = self._runtime(
+                root,
+                [
+                    '{"result":"ОК"}',
+                    "REPLY\nОК",
+                ],
+            )
+            task = system.create_periodic_task(
+                "проверка",
+                "Проверить состояние и вернуть результат.",
+                ("shell",),
+                60.0,
+                method="query",
+            )
+            event = SystemEvent(
+                "timer",
+                f"task:{task.task_id}",
+                "",
+                1.0,
+                task.task_id,
+            )
+
+            started = manager.begin_autonomous_task(event)
+            self.assertIsInstance(started, AutonomousTaskExecution)
+            assert isinstance(started, AutonomousTaskExecution)
+
+            completion = manager.step_autonomous_task(started)
+            self.assertIsInstance(completion, AutonomousTaskCompletion)
+            assert isinstance(completion, AutonomousTaskCompletion)
+            self.assertEqual(completion.query_task_id, task.task_id)
+            self.assertEqual(completion.query_result, "ОК")
+            self.assertEqual(len(client.calls), 1)
+
+            turn = manager.autonomous_query_result(
+                completion.query_task_id,
+                completion.query_result,
+            )
+            self.assertEqual(turn.kind, "reply")
+            self.assertEqual(turn.text, "ОК")
+            self.assertEqual(len(client.calls), 2)
 
 
 if __name__ == "__main__":
