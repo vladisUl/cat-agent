@@ -77,10 +77,16 @@ class TaskMethodTest(unittest.TestCase):
             self.assertEqual(len(client.calls), 1)
             self.assertIn("[METHOD]\nTASK\n[/METHOD]", client.calls[0][-1]["content"])
 
-    def test_autonomous_query_returns_value_without_manager_model_call(self) -> None:
+    def test_autonomous_query_result_is_new_manager_tick(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            manager, system, client = self._runtime(root, ["DONE\nОК"])
+            manager, system, client = self._runtime(
+                root,
+                [
+                    "DONE\nОК",
+                    "REPLY\nОК",
+                ],
+            )
             task = system.create_periodic_task(
                 "проверка",
                 'Проверить состояние. Вернуть "ОК" или "Авария".',
@@ -93,13 +99,25 @@ class TaskMethodTest(unittest.TestCase):
             )
             self.assertEqual(turn.kind, "reply")
             self.assertEqual(turn.text, "ОК")
-            self.assertEqual(len(client.calls), 1)
+            self.assertEqual(len(client.calls), 2)
             self.assertIn("[METHOD]\nQUERY\n[/METHOD]", client.calls[0][-1]["content"])
+            self.assertEqual(client.calls[1][-1]["role"], "user")
+            self.assertEqual(
+                client.calls[1][-1]["content"],
+                f"SYSTEM_QUERY_RESULT TASK {task.task_id}\nОК",
+            )
 
-    def test_query_rejects_empty_done_until_value_is_returned(self) -> None:
+    def test_query_rejects_empty_done_until_value_then_ticks_manager(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            manager, system, client = self._runtime(root, ["DONE", "DONE\nАвария"])
+            manager, system, client = self._runtime(
+                root,
+                [
+                    "DONE",
+                    "DONE\nАвария",
+                    "REPLY\nАвария",
+                ],
+            )
             task = system.create_periodic_task(
                 "проверка",
                 "Проверить состояние и вернуть результат.",
@@ -112,8 +130,12 @@ class TaskMethodTest(unittest.TestCase):
             )
             self.assertEqual(turn.kind, "reply")
             self.assertEqual(turn.text, "Авария")
-            self.assertEqual(len(client.calls), 2)
+            self.assertEqual(len(client.calls), 3)
             self.assertIn("QUERY requires a non-empty return value", client.calls[1][-1]["content"])
+            self.assertEqual(
+                client.calls[2][-1]["content"],
+                f"SYSTEM_QUERY_RESULT TASK {task.task_id}\nАвария",
+            )
 
 
 if __name__ == "__main__":
