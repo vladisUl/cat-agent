@@ -72,8 +72,15 @@ class ManagerRuntime:
             )
             if result is None:
                 return ManagerTurn("silent", "")
-            LOGGER.info("MANAGER autonomous QUERY return task_id=%d text=%r", event.task_id, result)
-            return ManagerTurn("reply", result)
+
+            tick = f"SYSTEM_QUERY_RESULT TASK {event.task_id}\n{result.strip()}"
+            LOGGER.info(
+                "MANAGER autonomous QUERY tick task_id=%d\n%s",
+                event.task_id,
+                tick,
+            )
+            self._event(tick)
+            return self._drive()
 
         text = event.manager_text()
         LOGGER.info(
