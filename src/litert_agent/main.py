@@ -8,8 +8,8 @@ import litert_lm
 
 from cat_agent.config import Settings
 
+from .priority_tui import PriorityLiteRTTUI
 from .runtime import build_bundle, warm_bundle
-from .tui import LiteRTTUI
 
 LOGGER = logging.getLogger(__name__)
 LOG_DIR = Path("/var/log/litertlm")
@@ -48,7 +48,7 @@ def main() -> int:
         LOGGER.info("SYSTEM persistent task timers armed after model warmup")
 
         _remove_console_handler(console_handler)
-        LiteRTTUI(bundle).run()
+        PriorityLiteRTTUI(bundle).run()
         return 0
     finally:
         bundle.close()
