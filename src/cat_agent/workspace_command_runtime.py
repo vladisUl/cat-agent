@@ -1,105 +1,57 @@
 from __future__ import annotations
 
-import os
-from pathlib import Path
 import subprocess
 
 from .command_runtime import CommandResult, CommandRuntime as RestrictedCommandRuntime
 
 
 class CommandRuntime(RestrictedCommandRuntime):
-    """Restricted command runtime plus direct execution of WORKSPACE programs."""
+    """Use a real bash process when the agent has the shell skill.
+
+    Commands still start in the configured workspace and keep the runtime timeout,
+    but bash syntax itself is not restricted. Runtimes without the shell skill
+    continue to use the restricted command implementation from command_runtime.py.
+    """
 
     def execute(self, command: str) -> CommandResult:
-        try:
-            tokens = self._tokenize(command)
-        except ValueError:
-            return super().execute(command)
-
-        if (
-            "shell" in self.skill_names
-            and tokens
-            and tokens[0].startswith("./")
-        ):
-            return self._workspace_executable(command, tokens)
-
+        if "shell" in self.skill_names:
+            return self._bash(command)
         return super().execute(command)
 
-    def _workspace_executable(
-        self,
-        command: str,
-        tokens: list[str],
-    ) -> CommandResult:
-        display = tokens[0]
-        try:
-            program = self._existing(display)
-        except FileNotFoundError:
-            return self._error(
-                command,
-                "exec",
-                127,
-                f"bash: {display}: No such file or directory",
-                "not_found",
-            )
-        except PermissionError as exc:
-            return self._error(
-                command,
-                "exec",
-                126,
-                f"bash: {display}: {exc}",
-                "path_outside_workspace",
-            )
-
-        if not program.is_file():
-            return self._error(
-                command,
-                "exec",
-                126,
-                f"bash: {display}: not a regular file",
-                "not_file",
-            )
-        if not os.access(program, os.X_OK):
-            return self._error(
-                command,
-                "exec",
-                126,
-                f"bash: {display}: Permission denied",
-                "not_executable",
-            )
-
-        argv = [str(program), *tokens[1:]]
+    def _bash(self, command: str) -> CommandResult:
         try:
             completed = subprocess.run(
-                argv,
+                ["/bin/bash", "-c", command],
                 cwd=self.cwd,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
                 check=False,
             )
-        except FileNotFoundError:
-            return self._error(
-                command,
-                "exec",
-                127,
-                f"bash: {display}: cannot execute: required interpreter not found",
-                "interpreter_not_found",
-            )
-        except subprocess.TimeoutExpired:
-            return self._error(
-                command,
-                "exec",
-                124,
-                f"bash: {display}: command timed out",
-                "timeout",
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+            if stderr and not stderr.endswith("\n"):
+                stderr += "\n"
+            stderr += "bash: command timed out"
+            return CommandResult(
+                command=command,
+                exit_code=124,
+                stdout=stdout,
+                stderr=stderr,
+                cwd=self.cwd,
+                operation="bash",
+                metadata={"error_code": "timeout"},
             )
         except OSError as exc:
-            return self._error(
-                command,
-                "exec",
-                126,
-                f"bash: {display}: {exc}",
-                "exec_error",
+            return CommandResult(
+                command=command,
+                exit_code=126,
+                stdout="",
+                stderr=f"bash: {exc}",
+                cwd=self.cwd,
+                operation="bash",
+                metadata={"error_code": "exec_error"},
             )
 
         return CommandResult(
@@ -108,6 +60,6 @@ class CommandRuntime(RestrictedCommandRuntime):
             stdout=completed.stdout,
             stderr=completed.stderr,
             cwd=self.cwd,
-            operation="exec",
-            metadata={"path": str(program)},
+            operation="bash",
+            metadata={"shell": "/bin/bash"},
         )
