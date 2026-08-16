@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -61,7 +62,7 @@ class TaskMethodTest(unittest.TestCase):
     def test_autonomous_task_returns_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            manager, system, client = self._runtime(root, ["DONE"])
+            manager, system, client = self._runtime(root, ['{"done":true}'])
             task = system.create_periodic_task(
                 "действие",
                 "Выполнить действие.",
@@ -75,7 +76,9 @@ class TaskMethodTest(unittest.TestCase):
             self.assertEqual(turn.kind, "silent")
             self.assertEqual(turn.text, "")
             self.assertEqual(len(client.calls), 1)
-            self.assertIn("[METHOD]\nTASK\n[/METHOD]", client.calls[0][-1]["content"])
+            tick = json.loads(client.calls[0][-1]["content"])
+            self.assertEqual(tick["method"], "task")
+            self.assertEqual(tick["task"], "Выполнить действие.")
 
     def test_autonomous_query_result_is_new_manager_tick(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -83,7 +86,7 @@ class TaskMethodTest(unittest.TestCase):
             manager, system, client = self._runtime(
                 root,
                 [
-                    "DONE\nОК",
+                    '{"result":"ОК"}',
                     "REPLY\nОК",
                 ],
             )
@@ -100,21 +103,22 @@ class TaskMethodTest(unittest.TestCase):
             self.assertEqual(turn.kind, "reply")
             self.assertEqual(turn.text, "ОК")
             self.assertEqual(len(client.calls), 2)
-            self.assertIn("[METHOD]\nQUERY\n[/METHOD]", client.calls[0][-1]["content"])
+            tick = json.loads(client.calls[0][-1]["content"])
+            self.assertEqual(tick["method"], "query")
             self.assertEqual(client.calls[1][-1]["role"], "user")
             self.assertEqual(
                 client.calls[1][-1]["content"],
                 f"SYSTEM_QUERY_RESULT TASK {task.task_id}\nОК",
             )
 
-    def test_query_rejects_empty_done_until_value_then_ticks_manager(self) -> None:
+    def test_query_rejects_done_without_result_until_value_then_ticks_manager(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             manager, system, client = self._runtime(
                 root,
                 [
-                    "DONE",
-                    "DONE\nАвария",
+                    '{"done":true}',
+                    '{"result":"Авария"}',
                     "REPLY\nАвария",
                 ],
             )
@@ -131,7 +135,7 @@ class TaskMethodTest(unittest.TestCase):
             self.assertEqual(turn.kind, "reply")
             self.assertEqual(turn.text, "Авария")
             self.assertEqual(len(client.calls), 3)
-            self.assertIn("QUERY requires a non-empty return value", client.calls[1][-1]["content"])
+            self.assertIn("query completion requires", client.calls[1][-1]["content"])
             self.assertEqual(
                 client.calls[2][-1]["content"],
                 f"SYSTEM_QUERY_RESULT TASK {task.task_id}\nАвария",
