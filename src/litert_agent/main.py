@@ -44,6 +44,9 @@ def main() -> int:
             agent_warm.elapsed_seconds,
         )
 
+        bundle.system_runtime.arm_task_timers()
+        LOGGER.info("SYSTEM persistent task timers armed after model warmup")
+
         _remove_console_handler(console_handler)
         LiteRTTUI(bundle).run()
         return 0
