@@ -9,7 +9,7 @@ from cat_agent.agent import AgentWorker
 from cat_agent.manager import ManagerRuntime
 from cat_agent.model_client import ChatResponse
 from cat_agent.pool import AgentPool
-from cat_agent.prompt_store import AGENT_BOOTSTRAP_ACK, PromptStore
+from cat_agent.prompt_store import PromptStore
 from cat_agent.skills import SkillBase
 
 
@@ -74,13 +74,13 @@ class IntegrationTest(unittest.TestCase):
 
             first_agent_call = client.calls[1]
             self.assertEqual(
-                [message["role"] for message in first_agent_call[:4]],
-                ["system", "user", "assistant", "user"],
+                [message["role"] for message in first_agent_call],
+                ["system", "user"],
             )
-            self.assertEqual(first_agent_call[2]["content"], AGENT_BOOTSTRAP_ACK)
-            self.assertNotIn("[TASK]", first_agent_call[1]["content"])
-            self.assertIn("[TASK]", first_agent_call[3]["content"])
-            self.assertIn("Посмотри список файлов", first_agent_call[3]["content"])
+            self.assertNotIn("READY", str(first_agent_call))
+            self.assertNotIn("[TASK]", first_agent_call[0]["content"])
+            self.assertIn("[TASK]", first_agent_call[1]["content"])
+            self.assertIn("Посмотри список файлов", first_agent_call[1]["content"])
             self.assertEqual(len(client.reset_calls), 2)
 
     def test_repeated_matching_agent_tasks_reuse_clean_base(self) -> None:
@@ -119,13 +119,13 @@ class IntegrationTest(unittest.TestCase):
             self.assertEqual(second.status, "OK")
             second_call = client.calls[1]
 
-            self.assertEqual(first_call[:3], second_call[:3])
-            self.assertEqual(len(second_call), 4)
+            self.assertEqual(first_call[:1], second_call[:1])
+            self.assertEqual(len(second_call), 2)
             self.assertEqual(second_call[-1]["role"], "user")
             self.assertIn("температуру в аквариуме", second_call[-1]["content"])
             self.assertNotIn("Первая задача выполнена", str(second_call))
             self.assertEqual(len(client.reset_calls), 2)
-            self.assertEqual(client.reset_calls[0], first_call[:3])
+            self.assertEqual(client.reset_calls[0], first_call[:1])
 
     def test_manager_replies_start_next_request_from_clean_base(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -156,8 +156,10 @@ class IntegrationTest(unittest.TestCase):
 
             self.assertEqual(first.kind, "reply")
             self.assertEqual(second.kind, "reply")
-            self.assertEqual(client.calls[0][:3], client.calls[1][:3])
-            self.assertEqual(len(client.calls[1]), 4)
+            self.assertEqual(client.calls[0][:1], client.calls[1][:1])
+            self.assertEqual(len(client.calls[1]), 2)
+            self.assertEqual(client.calls[1][0]["role"], "system")
+            self.assertEqual(client.calls[1][1]["role"], "user")
             self.assertIn("Вторая задача", client.calls[1][-1]["content"])
             self.assertNotIn("Первая задача", str(client.calls[1]))
             self.assertEqual(len(client.reset_calls), 2)
