@@ -119,33 +119,51 @@ class ProtocolTest(unittest.TestCase):
         self.assertIsNotNone(parse_manager_output("query_timer.sh 60 shell\nРаботай").error)
         self.assertIsNotNone(parse_manager_output("timer.sh stop cats\nREPLY\nготово").error)
 
-    def test_agent_done_need_and_command(self) -> None:
-        done = parse_agent_output("DONE\nГотово")
+    def test_agent_json_result_need_done_and_command(self) -> None:
+        result = parse_agent_output('{"result":"Готово"}')
+        self.assertEqual(result.action, AgentAction.DONE)
+        self.assertEqual(result.body, "Готово")
+
+        done = parse_agent_output('{"done":true}')
         self.assertEqual(done.action, AgentAction.DONE)
-        self.assertEqual(done.body, "Готово")
-        empty_done = parse_agent_output("DONE")
-        self.assertEqual(empty_done.action, AgentAction.DONE)
-        self.assertEqual(empty_done.body, "")
-        need = parse_agent_output("NEED\nНужен topic")
+        self.assertEqual(done.body, "")
+
+        need = parse_agent_output('{"need":"Нужен topic"}')
         self.assertEqual(need.action, AgentAction.NEED)
+        self.assertEqual(need.body, "Нужен topic")
+
         command = parse_agent_output("ls -l")
         self.assertEqual(command.action, AgentAction.COMMAND)
         self.assertEqual(command.command, "ls -l")
+
+    def test_agent_accepts_pretty_json_result(self) -> None:
+        item = parse_agent_output('{\n  "result": "ОК"\n}')
+        self.assertEqual(item.action, AgentAction.DONE)
+        self.assertEqual(item.body, "ОК")
 
     def test_agent_rejects_multiple_actions(self) -> None:
         two_commands = parse_agent_output("test -e test.txt\ncat test.txt")
         self.assertIsNone(two_commands.action)
         self.assertIn("no command was executed", two_commands.error or "")
 
-        command_and_need = parse_agent_output(
-            "cat test.txt\nNEED\nФайл test.txt не существует."
+        command_and_json = parse_agent_output(
+            'cat test.txt\n{"result":"Файл прочитан"}'
         )
-        self.assertIsNone(command_and_need.action)
-        self.assertIn("no command was executed", command_and_need.error or "")
+        self.assertIsNone(command_and_json.action)
+        self.assertIn("no command was executed", command_and_json.error or "")
 
-    def test_rejects_bad_shapes(self) -> None:
+        mixed_json = parse_agent_output('{"result":"ОК","done":true}')
+        self.assertIsNone(mixed_json.action)
+        self.assertIn("exactly one of", mixed_json.error or "")
+
+    def test_agent_rejects_bad_json_shapes(self) -> None:
+        self.assertIsNotNone(parse_agent_output('{"result":').error)
+        self.assertIsNotNone(parse_agent_output('{"done":false}').error)
+        self.assertIsNotNone(parse_agent_output('{"need":""}').error)
+        self.assertIsNotNone(parse_agent_output('["result","ОК"]').error)
+
+    def test_rejects_bad_manager_shape(self) -> None:
         self.assertIsNotNone(parse_manager_output("hello").error)
-        self.assertIsNotNone(parse_agent_output("ls\ncat file").error)
 
 
 if __name__ == "__main__":
