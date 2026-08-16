@@ -103,7 +103,7 @@ class TaskStoreTest(unittest.TestCase):
             result = system.activate_task(task.task_id, source="timer")
             self.assertEqual(result, "ОК")
 
-    def test_periodic_query_survives_restart_and_timer_is_restored(self) -> None:
+    def test_periodic_query_survives_restart_but_countdown_waits_for_arm(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "task.txt"
             first_system = SystemRuntime(TaskStore(path))
@@ -126,15 +126,20 @@ class TaskStoreTest(unittest.TestCase):
             self.assertEqual(len(timers), 1)
             self.assertEqual(timers[0].task_id, task.task_id)
             self.assertTrue(timers[0].enabled)
-            assert timers[0].next_fire_monotonic is not None
+            self.assertIsNone(timers[0].next_fire_monotonic)
+            self.assertEqual(restarted.poll_due(1000000.0), ())
 
-            events = restarted.poll_due(timers[0].next_fire_monotonic)
+            restarted.arm_task_timers(now=100.0)
+            timer = restarted.task_timer_snapshot()[0]
+            self.assertEqual(timer.next_fire_monotonic, 160.0)
+
+            events = restarted.poll_due(160.0)
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0].task_id, task.task_id)
             self.assertEqual(events[0].source, "timer")
             self.assertEqual(events[0].task, "")
 
-    def test_stopped_periodic_task_stays_stopped_after_restart(self) -> None:
+    def test_stopped_periodic_task_stays_stopped_after_restart_and_arm(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "task.txt"
             system = SystemRuntime(TaskStore(path))
@@ -147,6 +152,11 @@ class TaskStoreTest(unittest.TestCase):
             system.stop_task(task.task_id)
 
             restarted = SystemRuntime(TaskStore(path))
+            timer = restarted.task_timer_snapshot()[0]
+            self.assertFalse(timer.enabled)
+            self.assertIsNone(timer.next_fire_monotonic)
+
+            restarted.arm_task_timers(now=100.0)
             timer = restarted.task_timer_snapshot()[0]
             self.assertFalse(timer.enabled)
             self.assertIsNone(timer.next_fire_monotonic)
