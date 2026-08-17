@@ -7,7 +7,7 @@ The project explores manager/agent orchestration, prepared skills, local inferen
 Python handles runtime mechanics, transport, tools and state. Models operate inside supplied prompts and skills and decide how to carry out delegated work.
 
 Source layout:
-- `src/cat_agent/` — shared manager/agent core used by all backends.
+- `src/orchestration/` — shared manager/agent orchestration core used by all backends.
 - `src/llama_agent/` — llama.cpp/OpenAI-compatible frontend.
 - `src/litert_agent/` — LiteRT-LM frontend/runtime.
 
