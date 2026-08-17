@@ -10,7 +10,7 @@ import litert_lm
 
 from cat_agent.agent import AgentWorker
 from cat_agent.config import Settings
-from cat_agent.manager import ManagerRuntime
+from cat_agent.direct_manager import DirectSessionManagerRuntime
 from cat_agent.pool import AgentPool
 from cat_agent.prompt_store import PromptStore
 from cat_agent.skills import SkillBase
@@ -28,11 +28,12 @@ DEFAULT_MODEL = Path(
 
 @dataclass(slots=True)
 class LiteRTRuntimeBundle:
-    runtime: ManagerRuntime
+    runtime: DirectSessionManagerRuntime
     system_runtime: SystemRuntime
     manager_engine: litert_lm.Engine
     agent_engine: litert_lm.Engine
     manager_client: LiteRTChatClient
+    direct_client: LiteRTChatClient
     agent_clients: tuple[LiteRTChatClient, ...]
     manager_engine_init_seconds: float
     agent_engine_init_seconds: float
@@ -40,6 +41,7 @@ class LiteRTRuntimeBundle:
     backend_name: str
     speculative: bool
     manager_warm: WarmResult | None = None
+    direct_warm: WarmResult | None = None
     agent_warm: WarmResult | None = None
 
     @property
@@ -48,6 +50,7 @@ class LiteRTRuntimeBundle:
 
     def close(self) -> None:
         self.manager_client.close()
+        self.direct_client.close()
         for client in self.agent_clients:
             client.close()
         self.manager_engine.close()
@@ -119,6 +122,15 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         label="manager",
         allow_prefix_reset=False,
     )
+    direct_client = LiteRTChatClient(
+        agent_engine,
+        max_output_tokens=settings.agent_max_output_tokens,
+        temperature=settings.temperature,
+        top_p=settings.top_p,
+        reasoning_effort=settings.reasoning_effort,
+        label="manager-direct",
+        allow_prefix_reset=True,
+    )
     agent_clients = tuple(
         LiteRTChatClient(
             agent_engine,
@@ -144,8 +156,9 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         )
         for index in range(1, settings.agent_count + 1)
     ]
-    runtime = ManagerRuntime(
+    runtime = DirectSessionManagerRuntime(
         manager_client,
+        direct_client,
         skill_base,
         prompt_store,
         AgentPool(workers),
@@ -160,6 +173,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         manager_engine=manager_engine,
         agent_engine=agent_engine,
         manager_client=manager_client,
+        direct_client=direct_client,
         agent_clients=agent_clients,
         manager_engine_init_seconds=manager_init,
         agent_engine_init_seconds=agent_init,
@@ -183,6 +197,14 @@ def warm_bundle(
         raise RuntimeError("Unexpected canonical manager system base")
     manager_warm = bundle.manager_client.prepare_prefix(manager_messages)
 
+    direct_messages = bundle.runtime.direct_base_messages
+    if (
+        len(direct_messages) != 1
+        or direct_messages[0].get("role") != "system"
+    ):
+        raise RuntimeError("Unexpected canonical manager direct system base")
+    direct_warm = bundle.direct_client.prepare_prefix(direct_messages)
+
     skill_names = bundle.runtime.forced_delegate_skills or (default_agent_skill,)
     skills = bundle.runtime.skill_base.require(skill_names)
     agent_system_context = bundle.runtime.prompt_store.build_agent_system_context(
@@ -195,6 +217,7 @@ def warm_bundle(
     ]
     agent_warm = bundle.agent_client.prepare_prefix(agent_messages)
     bundle.manager_warm = manager_warm
+    bundle.direct_warm = direct_warm
     bundle.agent_warm = agent_warm
     return manager_warm, agent_warm
 
