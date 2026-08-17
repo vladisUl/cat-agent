@@ -5,7 +5,7 @@ import json
 import threading
 import unittest
 
-from cat_agent.model_client import OpenAIChatClient
+from orchestration.model_client import OpenAIChatClient
 
 
 class _Handler(BaseHTTPRequestHandler):
