@@ -90,23 +90,30 @@ class ManagerRuntime:
     def user_message(self, text: str) -> ManagerTurn:
         user_text = text.strip()
         folded = user_text.casefold()
+        model_text = user_text
+
         if folded == "чат":
             self._chat_mode = True
             self._close_chat_after_reply = False
         elif folded == "конец чата":
             self._close_chat_after_reply = True
             self._force_self = False
-        elif folded == "сам" or folded.startswith("сам "):
-            self._force_self = True
+        else:
+            parts = user_text.split(maxsplit=1)
+            if parts and parts[0].casefold() == "сам":
+                self._force_self = True
+                task_text = parts[1].strip() if len(parts) == 2 else ""
+                model_text = f"[SELF_MODE]\n{task_text}".rstrip()
 
         LOGGER.info(
-            "MANAGER USER MESSAGE chat=%s self=%s\n%s",
+            "MANAGER USER MESSAGE chat=%s self=%s raw=%r model=%r",
             self._chat_mode,
             self._force_self,
             user_text,
+            model_text,
         )
         self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
-        self._append_user(user_text)
+        self._append_user(model_text)
         return self._drive()
 
     def system_event(self, event: SystemEvent) -> ManagerTurn:
@@ -392,13 +399,13 @@ class ManagerRuntime:
                 directive = ManagerDirective(
                     None,
                     "",
-                    error="САМ forbids DELEGATE; execute one real tool command directly",
+                    error="SELF_MODE forbids DELEGATE; execute one real tool command directly",
                 )
             if directive.action is ManagerAction.SELF:
                 directive = ManagerDirective(
                     None,
                     "",
-                    error="SELF is obsolete; in САМ mode execute one real tool command directly",
+                    error="SELF is obsolete; in SELF_MODE execute one real tool command directly",
                 )
 
             if directive.error:
