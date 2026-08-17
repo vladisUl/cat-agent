@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -10,7 +11,6 @@ from cat_agent.manager import ManagerRuntime
 from cat_agent.model_client import ChatResponse
 from cat_agent.pool import AgentPool
 from cat_agent.prompt_store import PromptStore
-from cat_agent.protocol import ManagerAction, parse_manager_output
 from cat_agent.skills import SkillBase
 from cat_agent.system_events import SystemRuntime
 from cat_agent.tasks import TaskStore
@@ -63,13 +63,7 @@ class ManagerSelfChatTest(unittest.TestCase):
         )
         return manager, client, worker
 
-    def test_direct_command_protocol_is_only_enabled_by_runtime(self) -> None:
-        command = parse_manager_output("printf ok", allow_command=True)
-        self.assertEqual(command.action, ManagerAction.COMMAND)
-        self.assertEqual(command.command, "printf ok")
-        self.assertIsNotNone(parse_manager_output("printf ok").error)
-
-    def test_manager_base_contains_all_tool_instructions_and_context(self) -> None:
+    def test_manager_base_contains_tools_and_agent_execution_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manager, _client, _worker = self._runtime(Path(temp), ["REPLY\nunused"])
             base = manager.messages[0]["content"]
@@ -77,14 +71,16 @@ class ManagerSelfChatTest(unittest.TestCase):
             self.assertIn('"name": "shell"', base)
             self.assertIn('"name": "mqtt"', base)
             self.assertIn("broker_host: 192.168.0.21", base)
+            self.assertIn("[AGENT_EXECUTION_PROTOCOL]", base)
+            self.assertIn("Ты ИИ-агент-исполнитель.", base)
 
-    def test_manager_self_strips_sam_and_executes_directly(self) -> None:
+    def test_manager_direct_strips_sam_and_uses_agent_task_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manager, client, worker = self._runtime(
                 Path(temp),
                 [
                     "printf self-ok",
-                    "REPLY\nself-ok",
+                    '{"result":"self-ok"}',
                 ],
             )
 
@@ -94,12 +90,10 @@ class ManagerSelfChatTest(unittest.TestCase):
             self.assertEqual(turn.text, "self-ok")
             self.assertEqual(worker.state, AgentState.FREE)
             self.assertEqual(len(client.calls), 2)
-            self.assertEqual(
-                client.calls[0][-1]["content"],
-                "[SELF_MODE]\nвыведи self-ok",
-            )
+            first_tick = json.loads(client.calls[0][-1]["content"])
+            self.assertEqual(first_tick, {"task": "выведи self-ok"})
             self.assertNotIn("СаМ", client.calls[0][-1]["content"])
-            self.assertNotIn("SELF_READY", client.calls[1][-1]["content"])
+            self.assertNotIn("SELF_MODE", client.calls[0][-1]["content"])
             self.assertIn("self-ok", client.calls[1][-1]["content"])
             self.assertEqual(len(client.reset_calls), 1)
 
@@ -114,24 +108,31 @@ class ManagerSelfChatTest(unittest.TestCase):
 
             self.assertEqual(turn.text, "обычный режим")
             self.assertEqual(client.calls[0][-1]["content"], "самолет летит")
-            self.assertNotIn("[SELF_MODE]", client.calls[0][-1]["content"])
 
-    def test_self_rejects_delegate_and_retries_with_direct_command(self) -> None:
+    def test_manager_direct_need_uses_same_context_protocol_as_agent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manager, client, worker = self._runtime(
                 Path(temp),
                 [
-                    "DELEGATE shell\nвыведи self-ok",
-                    "printf self-ok",
-                    "REPLY\nself-ok",
+                    '{"need":"Нужно имя файла."}',
+                    "cat answer.txt",
+                    '{"result":"42"}',
                 ],
             )
+            workspace = worker.workspace
+            (workspace / "answer.txt").write_text("42\n", encoding="utf-8")
 
-            turn = manager.user_message("сам выведи self-ok")
-
-            self.assertEqual(turn.text, "self-ok")
+            first = manager.user_message("сам прочитай нужный файл")
+            self.assertEqual(first.kind, "ask")
+            self.assertEqual(first.text, "Нужно имя файла.")
             self.assertEqual(worker.state, AgentState.FREE)
-            self.assertIn("SELF_MODE forbids DELEGATE", client.calls[1][-1]["content"])
+
+            second = manager.user_message("answer.txt")
+            self.assertEqual(second.kind, "reply")
+            self.assertEqual(second.text, "42")
+            context_tick = json.loads(client.calls[1][-1]["content"])
+            self.assertEqual(context_tick, {"context": "answer.txt"})
+            self.assertEqual(len(client.reset_calls), 1)
 
     def test_chat_preserves_context_until_end_chat(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
