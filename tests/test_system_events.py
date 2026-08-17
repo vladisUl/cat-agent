@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from cat_agent.system_events import SystemRuntime
+from orchestration.system_events import SystemRuntime
 
 
 class SystemEventsTest(unittest.TestCase):

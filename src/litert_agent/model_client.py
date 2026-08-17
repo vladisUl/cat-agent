@@ -10,7 +10,7 @@ from typing import Callable
 
 import litert_lm
 
-from cat_agent.model_client import ChatResponse, ModelClientError
+from orchestration.model_client import ChatResponse, ModelClientError
 
 LOGGER = logging.getLogger(__name__)
 

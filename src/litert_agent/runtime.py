@@ -8,14 +8,14 @@ import time
 
 import litert_lm
 
-from cat_agent.agent import AgentWorker
-from cat_agent.config import Settings
-from cat_agent.direct_manager import DirectSessionManagerRuntime
-from cat_agent.pool import AgentPool
-from cat_agent.prompt_store import PromptStore
-from cat_agent.skills import SkillBase
-from cat_agent.system_events import SystemRuntime
-from cat_agent.tasks import DEFAULT_TASK_FILE, TaskStore
+from orchestration.agent import AgentWorker
+from orchestration.config import Settings
+from orchestration.direct_manager import DirectSessionManagerRuntime
+from orchestration.pool import AgentPool
+from orchestration.prompt_store import PromptStore
+from orchestration.skills import SkillBase
+from orchestration.system_events import SystemRuntime
+from orchestration.tasks import DEFAULT_TASK_FILE, TaskStore
 
 from .model_client import LiteRTChatClient, WarmResult
 

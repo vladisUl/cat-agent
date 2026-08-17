@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from cat_agent.protocol import (
+from orchestration.protocol import (
     AgentAction,
     ManagerAction,
     parse_agent_output,

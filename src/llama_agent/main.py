@@ -3,15 +3,15 @@ from __future__ import annotations
 import logging
 import sys
 
-from cat_agent.agent import AgentWorker
-from cat_agent.config import Settings
-from cat_agent.manager import ManagerRuntime
-from cat_agent.model_client import OpenAIChatClient
-from cat_agent.pool import AgentPool
-from cat_agent.prompt_store import PromptStore
-from cat_agent.skills import SkillBase
-from cat_agent.system_events import SystemRuntime
-from cat_agent.tasks import DEFAULT_TASK_FILE, TaskStore
+from orchestration.agent import AgentWorker
+from orchestration.config import Settings
+from orchestration.manager import ManagerRuntime
+from orchestration.model_client import OpenAIChatClient
+from orchestration.pool import AgentPool
+from orchestration.prompt_store import PromptStore
+from orchestration.skills import SkillBase
+from orchestration.system_events import SystemRuntime
+from orchestration.tasks import DEFAULT_TASK_FILE, TaskStore
 
 LOGGER = logging.getLogger(__name__)
 

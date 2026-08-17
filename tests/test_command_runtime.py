@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from cat_agent.workspace_command_runtime import CommandRuntime
+from orchestration.workspace_command_runtime import CommandRuntime
 
 
 class CommandRuntimeTest(unittest.TestCase):

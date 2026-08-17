@@ -5,8 +5,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from cat_agent.prompt_store import PromptStore
-from cat_agent.skills import Skill
+from orchestration.prompt_store import PromptStore
+from orchestration.skills import Skill
 
 
 class PromptStoreTest(unittest.TestCase):

@@ -6,12 +6,12 @@ import logging
 import threading
 import time
 
-from cat_agent.manager import (
+from orchestration.manager import (
     AutonomousTaskCompletion,
     AutonomousTaskExecution,
     ManagerTurn,
 )
-from cat_agent.system_events import SystemEvent
+from orchestration.system_events import SystemEvent
 
 from .tui import LiteRTTUI
 

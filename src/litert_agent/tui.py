@@ -10,8 +10,8 @@ import sys
 import textwrap
 import time
 
-from cat_agent.manager import ManagerTurn
-from cat_agent.system_events import SystemEvent
+from orchestration.manager import ManagerTurn
+from orchestration.system_events import SystemEvent
 
 from .runtime import LiteRTRuntimeBundle
 
