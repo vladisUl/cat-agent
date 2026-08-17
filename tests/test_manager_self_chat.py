@@ -78,7 +78,7 @@ class ManagerSelfChatTest(unittest.TestCase):
             self.assertIn('"name": "mqtt"', base)
             self.assertIn("broker_host: 192.168.0.21", base)
 
-    def test_manager_self_executes_directly_without_agent_or_self_ready(self) -> None:
+    def test_manager_self_strips_sam_and_executes_directly(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manager, client, worker = self._runtime(
                 Path(temp),
@@ -88,16 +88,33 @@ class ManagerSelfChatTest(unittest.TestCase):
                 ],
             )
 
-            turn = manager.user_message("САМ выведи self-ok")
+            turn = manager.user_message("СаМ выведи self-ok")
 
             self.assertEqual(turn.kind, "reply")
             self.assertEqual(turn.text, "self-ok")
             self.assertEqual(worker.state, AgentState.FREE)
             self.assertEqual(len(client.calls), 2)
-            self.assertIn("САМ выведи self-ok", client.calls[0][-1]["content"])
+            self.assertEqual(
+                client.calls[0][-1]["content"],
+                "[SELF_MODE]\nвыведи self-ok",
+            )
+            self.assertNotIn("СаМ", client.calls[0][-1]["content"])
             self.assertNotIn("SELF_READY", client.calls[1][-1]["content"])
             self.assertIn("self-ok", client.calls[1][-1]["content"])
             self.assertEqual(len(client.reset_calls), 1)
+
+    def test_sam_must_be_the_exact_first_word(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            manager, client, _worker = self._runtime(
+                Path(temp),
+                ["REPLY\nобычный режим"],
+            )
+
+            turn = manager.user_message("самолет летит")
+
+            self.assertEqual(turn.text, "обычный режим")
+            self.assertEqual(client.calls[0][-1]["content"], "самолет летит")
+            self.assertNotIn("[SELF_MODE]", client.calls[0][-1]["content"])
 
     def test_self_rejects_delegate_and_retries_with_direct_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -110,11 +127,11 @@ class ManagerSelfChatTest(unittest.TestCase):
                 ],
             )
 
-            turn = manager.user_message("САМ выведи self-ok")
+            turn = manager.user_message("сам выведи self-ok")
 
             self.assertEqual(turn.text, "self-ok")
             self.assertEqual(worker.state, AgentState.FREE)
-            self.assertIn("САМ forbids DELEGATE", client.calls[1][-1]["content"])
+            self.assertIn("SELF_MODE forbids DELEGATE", client.calls[1][-1]["content"])
 
     def test_chat_preserves_context_until_end_chat(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
