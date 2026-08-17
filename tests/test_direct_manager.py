@@ -5,14 +5,14 @@ import shutil
 import tempfile
 import unittest
 
-from cat_agent.agent import AgentWorker
-from cat_agent.direct_manager import DirectSessionManagerRuntime
-from cat_agent.model_client import ChatResponse
-from cat_agent.pool import AgentPool
-from cat_agent.prompt_store import PromptStore
-from cat_agent.skills import SkillBase
-from cat_agent.system_events import SystemRuntime
-from cat_agent.tasks import TaskStore
+from orchestration.agent import AgentWorker
+from orchestration.direct_manager import DirectSessionManagerRuntime
+from orchestration.model_client import ChatResponse
+from orchestration.pool import AgentPool
+from orchestration.prompt_store import PromptStore
+from orchestration.skills import SkillBase
+from orchestration.system_events import SystemRuntime
+from orchestration.tasks import TaskStore
 
 
 class FakeClient:
