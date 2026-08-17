@@ -10,6 +10,8 @@ import shlex
 class ManagerAction(str, Enum):
     DELEGATE = "DELEGATE"
     CONTINUE = "CONTINUE"
+    SELF = "SELF"
+    COMMAND = "COMMAND"
     SYSTEM = "SYSTEM"
     ASK = "ASK"
     WAIT = "WAIT"
@@ -22,6 +24,7 @@ class ManagerDirective:
     body: str
     skills: tuple[str, ...] = ()
     agent_id: str | None = None
+    command: str | None = None
     system_command: str | None = None
     task_description: str | None = None
     task_method: str | None = None
@@ -57,6 +60,7 @@ def _looks_like_manager_control_line(line: str) -> bool:
         for prefix in (
             "DELEGATE ",
             "CONTINUE ",
+            "SELF ",
             "SYSTEM ",
             "timer.sh ",
             "task_timer.sh ",
@@ -274,7 +278,12 @@ def _parse_timer_script(first: str, body: str) -> ManagerDirective:
     return ManagerDirective(None, "", error=_timer_script_error())
 
 
-def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirective:
+def parse_manager_output(
+    content: str,
+    *,
+    max_chars: int = 8192,
+    allow_command: bool = False,
+) -> ManagerDirective:
     text = content.strip()
     if not text:
         return ManagerDirective(None, "", error="empty response")
@@ -301,6 +310,14 @@ def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirec
         if body:
             return ManagerDirective(None, "", error="WAIT must not contain additional text")
         return ManagerDirective(ManagerAction.WAIT, "")
+
+    if first.startswith("SELF "):
+        if body:
+            return ManagerDirective(None, "", error="SELF must not contain additional text")
+        skills = _skill_list(first[len("SELF ") :].strip())
+        if skills is None:
+            return ManagerDirective(None, "", error="SELF requires a valid unique skill list")
+        return ManagerDirective(ManagerAction.SELF, "", skills=skills)
 
     if first == "task_timer.sh" or first.startswith("task_timer.sh "):
         return _parse_typed_timer_script(first, body)
@@ -355,11 +372,20 @@ def parse_manager_output(content: str, *, max_chars: int = 8192) -> ManagerDirec
             return ManagerDirective(None, "", error="CONTINUE requires additional context")
         return ManagerDirective(ManagerAction.CONTINUE, body, agent_id=agent_id)
 
+    if allow_command:
+        if "\n" in text or "\r" in text:
+            return ManagerDirective(
+                None,
+                "",
+                error="SELF tool command must be exactly one line",
+            )
+        return ManagerDirective(ManagerAction.COMMAND, "", command=text)
+
     return ManagerDirective(
         None,
         "",
         error=(
-            "first line must be DELEGATE, CONTINUE, task_timer.sh, query_timer.sh, "
+            "first line must be DELEGATE, CONTINUE, SELF, task_timer.sh, query_timer.sh, "
             "timer.sh, ASK, WAIT, or REPLY"
         ),
     )
