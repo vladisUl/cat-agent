@@ -57,7 +57,23 @@ class ManagerRuntime:
         self._chat_mode = False
         self._close_chat_after_reply = False
         self._force_self = False
-        self._self_runtime: CommandRuntime | None = None
+
+        template = self.pool.get("agent1")
+        if template is None:
+            raise RuntimeError("manager requires agent1 runtime template")
+        self._manager_skills = self.skill_base.require(self.skill_base.names())
+        self._manager_workspace = template.workspace
+        self._self_runtime = CommandRuntime(
+            template.workspace,
+            tuple(skill.name for skill in self._manager_skills),
+            max_file_bytes=template.max_file_bytes,
+            timeout_seconds=template.command_timeout_seconds,
+        )
+        self._manager_tools_bootstrap = self.prompt_store.build_agent_bootstrap(
+            self._manager_skills,
+            self._manager_workspace,
+        ).strip()
+
         self.system_runtime.set_task_handler(self._run_task_activation)
         bootstrap = self._bootstrap_prompt()
         system_context = (
@@ -80,7 +96,6 @@ class ManagerRuntime:
         elif folded == "конец чата":
             self._close_chat_after_reply = True
             self._force_self = False
-            self._self_runtime = None
         elif folded == "сам" or folded.startswith("сам "):
             self._force_self = True
 
@@ -371,13 +386,19 @@ class ManagerRuntime:
             self.messages.append({"role": "assistant", "content": response.content})
             directive = parse_manager_output(
                 response.content,
-                allow_command=self._self_runtime is not None,
+                allow_command=self._force_self,
             )
             if directive.action is ManagerAction.DELEGATE and self._force_self:
                 directive = ManagerDirective(
                     None,
                     "",
-                    error="САМ forbids DELEGATE; choose skills with SELF and work directly",
+                    error="САМ forbids DELEGATE; execute one real tool command directly",
+                )
+            if directive.action is ManagerAction.SELF:
+                directive = ManagerDirective(
+                    None,
+                    "",
+                    error="SELF is obsolete; in САМ mode execute one real tool command directly",
                 )
 
             if directive.error:
@@ -408,7 +429,6 @@ class ManagerRuntime:
             if directive.action is ManagerAction.REPLY:
                 text = directive.body
                 LOGGER.info("MANAGER REPLY %r", text)
-                self._self_runtime = None
                 self._force_self = False
                 if self._close_chat_after_reply:
                     self._chat_mode = False
@@ -428,13 +448,7 @@ class ManagerRuntime:
                 LOGGER.info("MANAGER WAIT")
                 return ManagerTurn("wait", "Manager is waiting for an external event.")
 
-            if directive.action is ManagerAction.SELF:
-                self._force_self = False
-                self._start_self(directive.skills)
-                continue
-
             if directive.action is ManagerAction.COMMAND:
-                assert self._self_runtime is not None
                 assert directive.command is not None
                 LOGGER.info("MANAGER SELF TOOL COMMAND %s", directive.command)
                 result = self._self_runtime.execute(directive.command)
@@ -496,33 +510,6 @@ class ManagerRuntime:
         LOGGER.error("Manager exceeded maximum of %d steps", self.max_steps)
         self._abort_context()
         return ManagerTurn("error", f"Manager exceeded maximum of {self.max_steps} steps")
-
-    def _start_self(self, skill_names: tuple[str, ...]) -> None:
-        try:
-            skills = self.skill_base.require(skill_names)
-        except SkillBaseError as exc:
-            LOGGER.warning("SELF_FAILED skills=%s error=%s", skill_names, exc)
-            self._event(f"SELF_FAILED\n{exc}")
-            return
-
-        template = self.pool.get("agent1")
-        if template is None:
-            LOGGER.error("SELF_FAILED agent1 runtime template is unavailable")
-            self._event("SELF_FAILED\nNo runtime template is available.")
-            return
-
-        self._self_runtime = CommandRuntime(
-            template.workspace,
-            tuple(skill.name for skill in skills),
-            max_file_bytes=template.max_file_bytes,
-            timeout_seconds=template.command_timeout_seconds,
-        )
-        bootstrap = self.prompt_store.build_agent_bootstrap(
-            skills,
-            template.workspace,
-        ).strip()
-        LOGGER.info("MANAGER SELF ready skills=%s", ",".join(skill_names))
-        self._event(f"SELF_READY\n{bootstrap}")
 
     def _execute_task_timer(self, directive: ManagerDirective) -> str:
         assert directive.system_command is not None
@@ -638,7 +625,6 @@ class ManagerRuntime:
         self._chat_mode = False
         self._close_chat_after_reply = False
         self._force_self = False
-        self._self_runtime = None
         self._reset_to_base()
 
     def _reset_to_base(self) -> None:
@@ -656,6 +642,9 @@ class ManagerRuntime:
             "[AVAILABLE_SKILLS]\n"
             f"{self.skill_base.catalog_text()}\n"
             "[/AVAILABLE_SKILLS]\n\n"
+            "[MANAGER_TOOLS]\n"
+            f"{self._manager_tools_bootstrap}\n"
+            "[/MANAGER_TOOLS]\n\n"
             "[AGENT_CONTAINERS]\n"
             f"{self.pool.status_text()}\n"
             "[/AGENT_CONTAINERS]\n\n"
