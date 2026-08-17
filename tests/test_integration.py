@@ -149,11 +149,20 @@ class IntegrationTest(unittest.TestCase):
             )
             store = PromptStore(prompt_dir, 1)
             store.validate()
+            worker = AgentWorker(
+                "agent1",
+                client,  # type: ignore[arg-type]
+                store,
+                workspace,
+                max_steps=4,
+                max_file_bytes=1024,
+                command_timeout_seconds=2,
+            )
             manager = ManagerRuntime(
                 client,  # type: ignore[arg-type]
                 SkillBase(prompt_dir / "prompt_base.txt"),
                 store,
-                AgentPool([]),
+                AgentPool([worker]),
                 max_steps=4,
             )
 
