@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from cat_agent.skills import SkillBase
+from orchestration.skills import SkillBase
 
 
 class SkillBaseTest(unittest.TestCase):
