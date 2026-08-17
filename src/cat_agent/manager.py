@@ -7,7 +7,13 @@ from .agent import AgentState, AgentWorker
 from .model_client import ModelClientError, OpenAIChatClient
 from .pool import AgentPool
 from .prompt_store import PromptStore
-from .protocol import ManagerAction, ManagerDirective, parse_manager_output
+from .protocol import (
+    AgentAction,
+    ManagerAction,
+    ManagerDirective,
+    parse_agent_output,
+    parse_manager_output,
+)
 from .skills import SkillBase, SkillBaseError
 from .system_events import SystemEvent, SystemRuntime, TaskActivation
 from .tasks import TaskRecord, TaskStoreError
@@ -56,14 +62,16 @@ class ManagerRuntime:
         self.forced_delegate_skills = forced_delegate_skills
         self._chat_mode = False
         self._close_chat_after_reply = False
-        self._force_self = False
+        self._direct_mode = False
+        self._direct_waiting = False
+        self._direct_repeated: dict[tuple[str, int, str, str], int] = {}
 
         template = self.pool.get("agent1")
         if template is None:
             raise RuntimeError("manager requires agent1 runtime template")
         self._manager_skills = self.skill_base.require(self.skill_base.names())
         self._manager_workspace = template.workspace
-        self._self_runtime = CommandRuntime(
+        self._direct_runtime = CommandRuntime(
             template.workspace,
             tuple(skill.name for skill in self._manager_skills),
             max_file_bytes=template.max_file_bytes,
@@ -73,6 +81,7 @@ class ManagerRuntime:
             self._manager_skills,
             self._manager_workspace,
         ).strip()
+        self._agent_execution_protocol = self.prompt_store.agent_system_prompt("agent1").strip()
 
         self.system_runtime.set_task_handler(self._run_task_activation)
         bootstrap = self._bootstrap_prompt()
@@ -90,31 +99,66 @@ class ManagerRuntime:
     def user_message(self, text: str) -> ManagerTurn:
         user_text = text.strip()
         folded = user_text.casefold()
-        model_text = user_text
 
         if folded == "чат":
             self._chat_mode = True
             self._close_chat_after_reply = False
-        elif folded == "конец чата":
+            LOGGER.info("MANAGER USER MESSAGE chat=True direct=False raw=%r", user_text)
+            self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
+            self._append_user(user_text)
+            return self._drive_manager()
+
+        if folded == "конец чата":
             self._close_chat_after_reply = True
-            self._force_self = False
-        else:
-            parts = user_text.split(maxsplit=1)
-            if parts and parts[0].casefold() == "сам":
-                self._force_self = True
-                task_text = parts[1].strip() if len(parts) == 2 else ""
-                model_text = f"[SELF_MODE]\n{task_text}".rstrip()
+            self._direct_mode = False
+            self._direct_waiting = False
+            self._direct_repeated = {}
+            LOGGER.info(
+                "MANAGER USER MESSAGE chat=%s direct=False raw=%r",
+                self._chat_mode,
+                user_text,
+            )
+            self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
+            self._append_user(user_text)
+            return self._drive_manager()
+
+        if self._direct_waiting:
+            model_text = self.prompt_store.build_agent_context(user_text).strip()
+            self._direct_waiting = False
+            LOGGER.info(
+                "MANAGER DIRECT CONTINUE raw=%r model=%r",
+                user_text,
+                model_text,
+            )
+            self.prompt_store.write_manager_prompt(model_text)
+            self._append_user(model_text)
+            return self._drive_direct()
+
+        parts = user_text.split(maxsplit=1)
+        if parts and parts[0].casefold() == "сам":
+            task_text = parts[1].strip() if len(parts) == 2 else ""
+            model_text = self.prompt_store.build_agent_task(task_text).strip()
+            self._direct_mode = True
+            self._direct_waiting = False
+            self._direct_repeated = {}
+            LOGGER.info(
+                "MANAGER USER MESSAGE chat=%s direct=True raw=%r model=%r",
+                self._chat_mode,
+                user_text,
+                model_text,
+            )
+            self.prompt_store.write_manager_prompt(model_text)
+            self._append_user(model_text)
+            return self._drive_direct()
 
         LOGGER.info(
-            "MANAGER USER MESSAGE chat=%s self=%s raw=%r model=%r",
+            "MANAGER USER MESSAGE chat=%s direct=False raw=%r",
             self._chat_mode,
-            self._force_self,
             user_text,
-            model_text,
         )
         self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
-        self._append_user(model_text)
-        return self._drive()
+        self._append_user(user_text)
+        return self._drive_manager()
 
     def system_event(self, event: SystemEvent) -> ManagerTurn:
         if event.task_id is not None:
@@ -142,7 +186,7 @@ class ManagerRuntime:
         )
         self.prompt_store.write_manager_prompt(text)
         self._append_user(text)
-        return self._drive()
+        return self._drive_manager()
 
     def autonomous_query_result(self, task_id: int, result: str) -> ManagerTurn:
         tick = f"SYSTEM_QUERY_RESULT TASK {task_id}\n{result.strip()}"
@@ -152,7 +196,7 @@ class ManagerRuntime:
             tick,
         )
         self._event(tick)
-        return self._drive()
+        return self._drive_manager()
 
     def begin_autonomous_task(
         self,
@@ -365,7 +409,135 @@ class ManagerRuntime:
             return query_error("агент не вернул значение")
         return outcome.text
 
-    def _drive(self) -> ManagerTurn:
+    def _drive_direct(self) -> ManagerTurn:
+        for step in range(1, self.max_steps + 1):
+            if not self.messages or self.messages[-1]["role"] != "user":
+                self._abort_context()
+                return ManagerTurn(
+                    "error",
+                    "TT violation: manager direct model call requires a fresh user tick",
+                )
+
+            try:
+                response = self.client.chat(self.messages)
+            except ModelClientError as exc:
+                LOGGER.exception("manager direct step %d model request failed", step)
+                self._abort_context()
+                return ManagerTurn("error", f"Model request failed: {exc}")
+
+            LOGGER.info(
+                "manager direct step %d response in %.3f s: prompt=%s cached=%s new=%s "
+                "prefill=%s completion=%s generate=%s",
+                step,
+                response.elapsed_seconds,
+                response.prompt_tokens if response.prompt_tokens is not None else "?",
+                response.cached_tokens if response.cached_tokens is not None else "?",
+                response.prompt_evaluated_tokens
+                if response.prompt_evaluated_tokens is not None
+                else "?",
+                f"{response.prompt_seconds:.3f}s"
+                if response.prompt_seconds is not None
+                else "?",
+                response.completion_tokens if response.completion_tokens is not None else "?",
+                f"{response.generation_seconds:.3f}s"
+                if response.generation_seconds is not None
+                else "?",
+            )
+            LOGGER.info(
+                "manager direct step %d MODEL RESPONSE\n%s",
+                step,
+                response.content,
+            )
+            self.messages.append({"role": "assistant", "content": response.content})
+            directive = parse_agent_output(response.content)
+
+            if directive.error:
+                LOGGER.warning(
+                    "manager direct step %d protocol error: %s",
+                    step,
+                    directive.error,
+                )
+                self._append_user(
+                    self._direct_runtime.format_protocol_error(directive.error)
+                )
+                continue
+
+            if directive.action is AgentAction.DONE:
+                if not directive.body:
+                    message = (
+                        'ordinary task completion requires a non-empty string '
+                        'in {"result":"..."}'
+                    )
+                    LOGGER.warning(
+                        "manager direct step %d protocol error: %s",
+                        step,
+                        message,
+                    )
+                    self._append_user(
+                        self._direct_runtime.format_protocol_error(message)
+                    )
+                    continue
+
+                text = directive.body
+                LOGGER.info(
+                    "MANAGER DIRECT COMPLETE steps=%d result=%r",
+                    step,
+                    text,
+                )
+                self._direct_mode = False
+                self._direct_waiting = False
+                self._direct_repeated = {}
+                if not self._chat_mode:
+                    self._reset_to_base()
+                else:
+                    LOGGER.info("MANAGER CHAT context preserved after DIRECT result")
+                return ManagerTurn("reply", text)
+
+            if directive.action is AgentAction.NEED:
+                self._direct_waiting = True
+                LOGGER.info("MANAGER DIRECT NEED steps=%d text=%r", step, directive.body)
+                return ManagerTurn("ask", directive.body)
+
+            assert directive.command is not None
+            LOGGER.info("MANAGER DIRECT TOOL COMMAND %s", directive.command)
+            result = self._direct_runtime.execute(directive.command)
+            formatted = self._direct_runtime.format_result(result)
+            LOGGER.info(
+                "MANAGER DIRECT TOOL RESULT operation=%s exit=%d metadata=%r\n%s",
+                result.operation,
+                result.exit_code,
+                result.metadata,
+                formatted,
+            )
+
+            signature = (
+                directive.command,
+                result.exit_code,
+                result.stdout,
+                result.stderr,
+            )
+            self._direct_repeated[signature] = self._direct_repeated.get(signature, 0) + 1
+            if self._direct_repeated[signature] > 2:
+                LOGGER.error(
+                    "MANAGER DIRECT FAILED same command/result repeated more than twice: %s",
+                    directive.command,
+                )
+                self._abort_context()
+                return ManagerTurn(
+                    "error",
+                    "same command with the same result repeated more than twice",
+                )
+
+            self._append_user(formatted)
+
+        LOGGER.error("Manager direct execution exceeded maximum of %d steps", self.max_steps)
+        self._abort_context()
+        return ManagerTurn(
+            "error",
+            f"Manager direct execution exceeded maximum of {self.max_steps} steps",
+        )
+
+    def _drive_manager(self) -> ManagerTurn:
         last_protocol_signature: tuple[str, str] | None = None
         repeated_protocol_errors = 0
 
@@ -391,21 +563,13 @@ class ManagerRuntime:
             )
             LOGGER.info("manager step %d MODEL RESPONSE\n%s", step, response.content)
             self.messages.append({"role": "assistant", "content": response.content})
-            directive = parse_manager_output(
-                response.content,
-                allow_command=self._force_self,
-            )
-            if directive.action is ManagerAction.DELEGATE and self._force_self:
+            directive = parse_manager_output(response.content)
+
+            if directive.action in {ManagerAction.SELF, ManagerAction.COMMAND}:
                 directive = ManagerDirective(
                     None,
                     "",
-                    error="SELF_MODE forbids DELEGATE; execute one real tool command directly",
-                )
-            if directive.action is ManagerAction.SELF:
-                directive = ManagerDirective(
-                    None,
-                    "",
-                    error="SELF is obsolete; in SELF_MODE execute one real tool command directly",
+                    error="unsupported manager control response",
                 )
 
             if directive.error:
@@ -436,7 +600,6 @@ class ManagerRuntime:
             if directive.action is ManagerAction.REPLY:
                 text = directive.body
                 LOGGER.info("MANAGER REPLY %r", text)
-                self._force_self = False
                 if self._close_chat_after_reply:
                     self._chat_mode = False
                     self._close_chat_after_reply = False
@@ -454,21 +617,6 @@ class ManagerRuntime:
             if directive.action is ManagerAction.WAIT:
                 LOGGER.info("MANAGER WAIT")
                 return ManagerTurn("wait", "Manager is waiting for an external event.")
-
-            if directive.action is ManagerAction.COMMAND:
-                assert directive.command is not None
-                LOGGER.info("MANAGER SELF TOOL COMMAND %s", directive.command)
-                result = self._self_runtime.execute(directive.command)
-                formatted = self._self_runtime.format_result(result)
-                LOGGER.info(
-                    "MANAGER SELF TOOL RESULT operation=%s exit=%d metadata=%r\n%s",
-                    result.operation,
-                    result.exit_code,
-                    result.metadata,
-                    formatted,
-                )
-                self._event(formatted)
-                continue
 
             if directive.action is ManagerAction.SYSTEM:
                 assert directive.system_command is not None
@@ -631,7 +779,9 @@ class ManagerRuntime:
     def _abort_context(self) -> None:
         self._chat_mode = False
         self._close_chat_after_reply = False
-        self._force_self = False
+        self._direct_mode = False
+        self._direct_waiting = False
+        self._direct_repeated = {}
         self._reset_to_base()
 
     def _reset_to_base(self) -> None:
@@ -652,6 +802,9 @@ class ManagerRuntime:
             "[MANAGER_TOOLS]\n"
             f"{self._manager_tools_bootstrap}\n"
             "[/MANAGER_TOOLS]\n\n"
+            "[AGENT_EXECUTION_PROTOCOL]\n"
+            f"{self._agent_execution_protocol}\n"
+            "[/AGENT_EXECUTION_PROTOCOL]\n\n"
             "[AGENT_CONTAINERS]\n"
             f"{self.pool.status_text()}\n"
             "[/AGENT_CONTAINERS]\n\n"
