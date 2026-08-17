@@ -5,10 +5,10 @@ import shutil
 import tempfile
 import unittest
 
-from cat_agent.agent import AgentState, AgentWorker
-from cat_agent.model_client import ChatResponse
-from cat_agent.prompt_store import PromptStore
-from cat_agent.skills import SkillBase
+from orchestration.agent import AgentState, AgentWorker
+from orchestration.model_client import ChatResponse
+from orchestration.prompt_store import PromptStore
+from orchestration.skills import SkillBase
 
 
 class FakeClient:
