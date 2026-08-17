@@ -4,8 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from cat_agent.system_events import SystemRuntime, TaskActivation
-from cat_agent.tasks import TaskStore, TaskStoreError
+from orchestration.system_events import SystemRuntime, TaskActivation
+from orchestration.tasks import TaskStore, TaskStoreError
 
 
 class TaskStoreTest(unittest.TestCase):
