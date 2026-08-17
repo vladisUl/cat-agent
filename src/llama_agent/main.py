@@ -3,15 +3,15 @@ from __future__ import annotations
 import logging
 import sys
 
-from .agent import AgentWorker
-from .config import Settings
-from .manager import ManagerRuntime
-from .model_client import OpenAIChatClient
-from .pool import AgentPool
-from .prompt_store import PromptStore
-from .skills import SkillBase
-from .system_events import SystemRuntime
-from .tasks import DEFAULT_TASK_FILE, TaskStore
+from cat_agent.agent import AgentWorker
+from cat_agent.config import Settings
+from cat_agent.manager import ManagerRuntime
+from cat_agent.model_client import OpenAIChatClient
+from cat_agent.pool import AgentPool
+from cat_agent.prompt_store import PromptStore
+from cat_agent.skills import SkillBase
+from cat_agent.system_events import SystemRuntime
+from cat_agent.tasks import DEFAULT_TASK_FILE, TaskStore
 
 LOGGER = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    LOGGER.info("cat-agent llama backend starting")
+    LOGGER.info("llama-agent backend starting")
     LOGGER.info("Workspace: %s", settings.workspace)
     LOGGER.info("Prompt dir: %s", settings.prompt_dir)
     LOGGER.info("Model endpoint: %s model=%s", settings.api_base_url, settings.model)
@@ -97,7 +97,7 @@ def main() -> int:
         return 1
     runtime.system_runtime.arm_task_timers()
 
-    print("cat-agent llama ready. Commands: /quit")
+    print("llama-agent ready. Commands: /quit")
     while True:
         try:
             text = input("you> ").strip()
@@ -113,7 +113,7 @@ def main() -> int:
         prefix = "manager" if turn.kind in {"reply", "ask"} else turn.kind
         print(f"{prefix}> {turn.text}")
 
-    LOGGER.info("cat-agent llama backend stopped")
+    LOGGER.info("llama-agent backend stopped")
     return 0
 
 
