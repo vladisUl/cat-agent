@@ -6,7 +6,7 @@ import sys
 
 import litert_lm
 
-from cat_agent.config import Settings
+from orchestration.config import Settings
 
 from .priority_tui import PriorityLiteRTTUI
 from .runtime import build_bundle, warm_bundle
