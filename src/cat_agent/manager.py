@@ -11,6 +11,7 @@ from .protocol import ManagerAction, ManagerDirective, parse_manager_output
 from .skills import SkillBase, SkillBaseError
 from .system_events import SystemEvent, SystemRuntime, TaskActivation
 from .tasks import TaskRecord, TaskStoreError
+from .workspace_command_runtime import CommandRuntime
 
 LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +54,10 @@ class ManagerRuntime:
         self.system_runtime = system_runtime or SystemRuntime()
         self.max_steps = max_steps
         self.forced_delegate_skills = forced_delegate_skills
+        self._chat_mode = False
+        self._close_chat_after_reply = False
+        self._force_self = False
+        self._self_runtime: CommandRuntime | None = None
         self.system_runtime.set_task_handler(self._run_task_activation)
         bootstrap = self._bootstrap_prompt()
         system_context = (
@@ -68,7 +73,23 @@ class ManagerRuntime:
 
     def user_message(self, text: str) -> ManagerTurn:
         user_text = text.strip()
-        LOGGER.info("MANAGER USER MESSAGE\n%s", user_text)
+        folded = user_text.casefold()
+        if folded == "чат":
+            self._chat_mode = True
+            self._close_chat_after_reply = False
+        elif folded == "конец чата":
+            self._close_chat_after_reply = True
+            self._force_self = False
+            self._self_runtime = None
+        elif folded == "сам" or folded.startswith("сам "):
+            self._force_self = True
+
+        LOGGER.info(
+            "MANAGER USER MESSAGE chat=%s self=%s\n%s",
+            self._chat_mode,
+            self._force_self,
+            user_text,
+        )
         self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
         self._append_user(user_text)
         return self._drive()
@@ -331,7 +352,7 @@ class ManagerRuntime:
                 response = self.client.chat(self.messages)
             except ModelClientError as exc:
                 LOGGER.exception("manager step %d model request failed", step)
-                self._reset_to_base()
+                self._abort_context()
                 return ManagerTurn("error", f"Model request failed: {exc}")
 
             LOGGER.info(
@@ -348,7 +369,17 @@ class ManagerRuntime:
             )
             LOGGER.info("manager step %d MODEL RESPONSE\n%s", step, response.content)
             self.messages.append({"role": "assistant", "content": response.content})
-            directive = parse_manager_output(response.content)
+            directive = parse_manager_output(
+                response.content,
+                allow_command=self._self_runtime is not None,
+            )
+            if directive.action is ManagerAction.DELEGATE and self._force_self:
+                directive = ManagerDirective(
+                    None,
+                    "",
+                    error="САМ forbids DELEGATE; choose skills with SELF and work directly",
+                )
+
             if directive.error:
                 LOGGER.warning("manager step %d protocol error: %s", step, directive.error)
                 signature = (response.content.strip(), directive.error)
@@ -364,7 +395,7 @@ class ManagerRuntime:
                         "manager repeated identical protocol error %d times; aborting current request",
                         repeated_protocol_errors,
                     )
-                    self._reset_to_base()
+                    self._abort_context()
                     return ManagerTurn(
                         "error",
                         "Manager repeated the same invalid control response 3 times; current request aborted",
@@ -377,7 +408,16 @@ class ManagerRuntime:
             if directive.action is ManagerAction.REPLY:
                 text = directive.body
                 LOGGER.info("MANAGER REPLY %r", text)
-                self._reset_to_base()
+                self._self_runtime = None
+                self._force_self = False
+                if self._close_chat_after_reply:
+                    self._chat_mode = False
+                    self._close_chat_after_reply = False
+                    self._reset_to_base()
+                elif not self._chat_mode:
+                    self._reset_to_base()
+                else:
+                    LOGGER.info("MANAGER CHAT context preserved after REPLY")
                 return ManagerTurn("reply", text)
 
             if directive.action is ManagerAction.ASK:
@@ -387,6 +427,27 @@ class ManagerRuntime:
             if directive.action is ManagerAction.WAIT:
                 LOGGER.info("MANAGER WAIT")
                 return ManagerTurn("wait", "Manager is waiting for an external event.")
+
+            if directive.action is ManagerAction.SELF:
+                self._force_self = False
+                self._start_self(directive.skills)
+                continue
+
+            if directive.action is ManagerAction.COMMAND:
+                assert self._self_runtime is not None
+                assert directive.command is not None
+                LOGGER.info("MANAGER SELF TOOL COMMAND %s", directive.command)
+                result = self._self_runtime.execute(directive.command)
+                formatted = self._self_runtime.format_result(result)
+                LOGGER.info(
+                    "MANAGER SELF TOOL RESULT operation=%s exit=%d metadata=%r\n%s",
+                    result.operation,
+                    result.exit_code,
+                    result.metadata,
+                    formatted,
+                )
+                self._event(formatted)
+                continue
 
             if directive.action is ManagerAction.SYSTEM:
                 assert directive.system_command is not None
@@ -433,8 +494,35 @@ class ManagerRuntime:
                 continue
 
         LOGGER.error("Manager exceeded maximum of %d steps", self.max_steps)
-        self._reset_to_base()
+        self._abort_context()
         return ManagerTurn("error", f"Manager exceeded maximum of {self.max_steps} steps")
+
+    def _start_self(self, skill_names: tuple[str, ...]) -> None:
+        try:
+            skills = self.skill_base.require(skill_names)
+        except SkillBaseError as exc:
+            LOGGER.warning("SELF_FAILED skills=%s error=%s", skill_names, exc)
+            self._event(f"SELF_FAILED\n{exc}")
+            return
+
+        template = self.pool.get("agent1")
+        if template is None:
+            LOGGER.error("SELF_FAILED agent1 runtime template is unavailable")
+            self._event("SELF_FAILED\nNo runtime template is available.")
+            return
+
+        self._self_runtime = CommandRuntime(
+            template.workspace,
+            tuple(skill.name for skill in skills),
+            max_file_bytes=template.max_file_bytes,
+            timeout_seconds=template.command_timeout_seconds,
+        )
+        bootstrap = self.prompt_store.build_agent_bootstrap(
+            skills,
+            template.workspace,
+        ).strip()
+        LOGGER.info("MANAGER SELF ready skills=%s", ",".join(skill_names))
+        self._event(f"SELF_READY\n{bootstrap}")
 
     def _execute_task_timer(self, directive: ManagerDirective) -> str:
         assert directive.system_command is not None
@@ -545,6 +633,13 @@ class ManagerRuntime:
             self.messages[-1]["content"] = f"{previous}\n\n{content}" if previous else content
             return
         self.messages.append({"role": "user", "content": content})
+
+    def _abort_context(self) -> None:
+        self._chat_mode = False
+        self._close_chat_after_reply = False
+        self._force_self = False
+        self._self_runtime = None
+        self._reset_to_base()
 
     def _reset_to_base(self) -> None:
         try:
