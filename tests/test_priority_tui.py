@@ -3,8 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
-from cat_agent.manager import AutonomousTaskCompletion, ManagerTurn
-from cat_agent.system_events import SystemEvent, SystemRuntime
+from orchestration.manager import AutonomousTaskCompletion, ManagerTurn
+from orchestration.system_events import SystemEvent, SystemRuntime
 from litert_agent.priority_tui import (
     DEFAULT_EVENT_PRIORITY,
     MANAGER_PRIORITY,
