@@ -42,7 +42,7 @@ class IntegrationTest(unittest.TestCase):
             client = FakeClient(
                 [
                     "DELEGATE shell\nПосмотри список файлов и верни имена.",
-                    "ls",
+                    "/work#ls",
                     '{"result":"В каталоге есть alpha.txt."}',
                     "REPLY\nВ рабочем каталоге есть alpha.txt.",
                 ]
@@ -194,7 +194,7 @@ class IntegrationTest(unittest.TestCase):
                     '{"need":"Нужно имя файла."}',
                     "ASK\nКак называется файл?",
                     "CONTINUE agent1\nИмя файла: answer.txt",
-                    "cat answer.txt",
+                    "/work#cat answer.txt",
                     '{"result":"В файле записано 42."}',
                     "REPLY\nВ файле записано 42.",
                 ]
