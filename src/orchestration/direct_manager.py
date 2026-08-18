@@ -4,6 +4,7 @@ import logging
 
 from .manager import ManagerRuntime, ManagerTurn
 from .model_client import ModelClientError, OpenAIChatClient
+from .workspace_command_runtime import unwrap_work_command
 
 LOGGER = logging.getLogger(__name__)
 
@@ -92,14 +93,15 @@ class DirectSessionManagerRuntime(ManagerRuntime):
                 LOGGER.info("MANAGER DIRECT NEED steps=%d text=%r", step, body)
                 return ManagerTurn("ask", body)
 
-            if output.startswith("/work#"):
-                command = output[len("/work#"):].strip()
-                if not command or "\n" in command or "\r" in command:
-                    message = "direct command must be one non-empty line after /work#"
-                    LOGGER.warning("manager direct step %d protocol error: %s", step, message)
-                    self._append_direct_user(self._direct_runtime.format_protocol_error(message))
-                    continue
+            try:
+                command = unwrap_work_command(output)
+            except ValueError as exc:
+                message = str(exc)
+                LOGGER.warning("manager direct step %d protocol error: %s", step, message)
+                self._append_direct_user(self._direct_runtime.format_protocol_error(message))
+                continue
 
+            if command is not None:
                 LOGGER.info("MANAGER DIRECT TOOL COMMAND %s", command)
                 result = self._direct_runtime.execute(command)
                 formatted = self._direct_runtime.format_result(result)
