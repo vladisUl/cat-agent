@@ -15,7 +15,6 @@ class PromptStore:
     def validate(self) -> None:
         required = [
             self.prompt_dir / "sys_prompt_manager.txt",
-            self.prompt_dir / "sys_prompt_direct.txt",
             self.prompt_dir / "prompt_base.txt",
         ]
         required.extend(
