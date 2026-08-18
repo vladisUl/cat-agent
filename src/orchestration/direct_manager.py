@@ -4,7 +4,6 @@ import logging
 
 from .manager import ManagerRuntime, ManagerTurn
 from .model_client import ModelClientError, OpenAIChatClient
-from .protocol import ManagerAction, parse_manager_output
 
 LOGGER = logging.getLogger(__name__)
 
@@ -84,50 +83,51 @@ class DirectSessionManagerRuntime(ManagerRuntime):
             )
             LOGGER.info("manager direct step %d MODEL RESPONSE\n%s", step, response.content)
             self._direct_messages.append({"role": "assistant", "content": response.content})
-            directive = parse_manager_output(response.content, allow_command=True)
 
-            if directive.error:
-                LOGGER.warning("manager direct step %d protocol error: %s", step, directive.error)
-                self._append_direct_user(self._direct_runtime.format_protocol_error(directive.error))
-                continue
+            output = response.content.strip()
 
-            if directive.action is ManagerAction.REPLY:
-                text = directive.body
-                LOGGER.info("MANAGER DIRECT COMPLETE steps=%d result=%r", step, text)
-                self._direct_mode = False
-                self._direct_waiting = False
-                self._direct_repeated = {}
-                self._reset_direct_to_base()
-                return ManagerTurn("reply", text)
-
-            if directive.action is ManagerAction.ASK:
+            if output == "ASK" or output.startswith("ASK\n"):
+                body = output[3:].strip()
                 self._direct_waiting = True
-                LOGGER.info("MANAGER DIRECT NEED steps=%d text=%r", step, directive.body)
-                return ManagerTurn("ask", directive.body)
+                LOGGER.info("MANAGER DIRECT NEED steps=%d text=%r", step, body)
+                return ManagerTurn("ask", body)
 
-            if directive.action is not ManagerAction.COMMAND or directive.command is None:
-                message = "direct mode accepts only one command, REPLY, or ASK"
-                LOGGER.warning("manager direct step %d protocol error: %s", step, message)
-                self._append_direct_user(self._direct_runtime.format_protocol_error(message))
+            if output.startswith("/work#"):
+                command = output[len("/work#"):].strip()
+                if not command or "\n" in command or "\r" in command:
+                    message = "direct command must be one non-empty line after /work#"
+                    LOGGER.warning("manager direct step %d protocol error: %s", step, message)
+                    self._append_direct_user(self._direct_runtime.format_protocol_error(message))
+                    continue
+
+                LOGGER.info("MANAGER DIRECT TOOL COMMAND %s", command)
+                result = self._direct_runtime.execute(command)
+                formatted = self._direct_runtime.format_result(result)
+                LOGGER.info(
+                    "MANAGER DIRECT TOOL RESULT operation=%s exit=%d metadata=%r\n%s",
+                    result.operation,
+                    result.exit_code,
+                    result.metadata,
+                    formatted,
+                )
+                signature = (command, result.exit_code, result.stdout, result.stderr)
+                self._direct_repeated[signature] = self._direct_repeated.get(signature, 0) + 1
+                if self._direct_repeated[signature] > 2:
+                    LOGGER.error("MANAGER DIRECT FAILED same command/result repeated more than twice: %s", command)
+                    self._abort_direct()
+                    return ManagerTurn("error", "same command with the same result repeated more than twice")
+                self._append_direct_user(formatted)
                 continue
 
-            LOGGER.info("MANAGER DIRECT TOOL COMMAND %s", directive.command)
-            result = self._direct_runtime.execute(directive.command)
-            formatted = self._direct_runtime.format_result(result)
-            LOGGER.info(
-                "MANAGER DIRECT TOOL RESULT operation=%s exit=%d metadata=%r\n%s",
-                result.operation,
-                result.exit_code,
-                result.metadata,
-                formatted,
-            )
-            signature = (directive.command, result.exit_code, result.stdout, result.stderr)
-            self._direct_repeated[signature] = self._direct_repeated.get(signature, 0) + 1
-            if self._direct_repeated[signature] > 2:
-                LOGGER.error("MANAGER DIRECT FAILED same command/result repeated more than twice: %s", directive.command)
-                self._abort_direct()
-                return ManagerTurn("error", "same command with the same result repeated more than twice")
-            self._append_direct_user(formatted)
+            if output.startswith("REPLY\n"):
+                output = output[len("REPLY\n"):].strip()
+
+            LOGGER.info("MANAGER DIRECT COMPLETE steps=%d result=%r", step, output)
+            self._direct_mode = False
+            self._direct_waiting = False
+            self._direct_repeated = {}
+            self._reset_direct_to_base()
+            return ManagerTurn("reply", output)
 
         LOGGER.error("Manager direct execution exceeded maximum of %d steps", self.max_steps)
         self._abort_direct()
