@@ -18,10 +18,9 @@ class LivePriorityLiteRTTUI(PriorityLiteRTTUI):
         self._stream_buffer = ""
         self._stream_dialog_active = False
 
-        # Only model calls that can directly produce user-visible text need
-        # streamed decode. Agent tool traffic stays on the blocking Session path.
+        # Only the manager can directly produce user-visible text.
+        # Agent tool traffic stays on the blocking Session path.
         self.bundle.manager_client.set_event_handler(self._queue_model_event)
-        self.bundle.direct_client.set_event_handler(self._queue_model_event)
 
     def _queue_model_event(self, label: str, event: str, payload: str) -> None:
         self._model_events.put((label, event, payload))
@@ -55,6 +54,8 @@ class LivePriorityLiteRTTUI(PriorityLiteRTTUI):
     def _feed_stream_chunk(self, label: str, chunk: str) -> None:
         if not chunk:
             return
+        if label != "manager":
+            return
         if label != self._stream_label:
             self._stream_label = label
             self._stream_mode = "pending"
@@ -67,29 +68,11 @@ class LivePriorityLiteRTTUI(PriorityLiteRTTUI):
             return
 
         self._stream_buffer += chunk
-        if label == "manager":
-            self._classify_manager_stream()
-        elif label == "manager-direct":
-            self._classify_direct_stream()
-        else:
-            self._stream_mode = "hidden"
-            self._stream_buffer = ""
+        self._classify_manager_stream()
 
     def _classify_manager_stream(self) -> None:
-        if "\n" not in self._stream_buffer:
-            return
-        first, _sep, rest = self._stream_buffer.partition("\n")
-        control = first.strip()
-        self._stream_buffer = ""
-        if control in {"REPLY", "ASK"}:
-            self._stream_mode = "visible"
-            self._append_stream_text(rest)
-        else:
-            self._stream_mode = "hidden"
-
-    def _classify_direct_stream(self) -> None:
-        candidates = ("/work#", "ASK\n", "REPLY\n")
         text = self._stream_buffer
+        candidates = ("/work#", "ASK\n", "REPLY\n")
 
         if text.startswith("/work#"):
             self._stream_mode = "hidden"
@@ -107,10 +90,9 @@ class LivePriorityLiteRTTUI(PriorityLiteRTTUI):
             return
         if any(candidate.startswith(text) for candidate in candidates):
             return
-
-        self._stream_mode = "visible"
-        self._stream_buffer = ""
-        self._append_stream_text(text)
+        if "\n" in text:
+            self._stream_mode = "hidden"
+            self._stream_buffer = ""
 
     def _append_stream_text(self, text: str) -> None:
         if not text:
@@ -240,12 +222,6 @@ class LivePriorityLiteRTTUI(PriorityLiteRTTUI):
                 f"{self.bundle.manager_warm.token_count} tok "
                 f"{self.bundle.manager_warm.elapsed_seconds:.3f}s",
             )
-        if self.bundle.direct_warm is not None:
-            put(
-                "direct",
-                f"{self.bundle.direct_warm.token_count} tok "
-                f"{self.bundle.direct_warm.elapsed_seconds:.3f}s",
-            )
         if self.bundle.agent_warm is not None:
             put(
                 "agent",
@@ -256,10 +232,6 @@ class LivePriorityLiteRTTUI(PriorityLiteRTTUI):
         row += 1
         put("MANAGER", bold=True)
         row = self._draw_client_stats(win, row, self.bundle.manager_client, width, height)
-
-        row += 1
-        put("DIRECT", bold=True)
-        row = self._draw_client_stats(win, row, self.bundle.direct_client, width, height)
 
         row += 1
         put("AGENT", bold=True)
@@ -330,7 +302,6 @@ class LivePriorityLiteRTTUI(PriorityLiteRTTUI):
     def _current_inference_timing(self):
         clients = [
             self.bundle.manager_client,
-            self.bundle.direct_client,
             *self.bundle.agent_clients,
         ]
         for client in clients:
