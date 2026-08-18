@@ -30,7 +30,7 @@ class FakeClient:
 
 
 class DirectManagerTest(unittest.TestCase):
-    def test_sam_uses_separate_agent_style_session(self) -> None:
+    def test_sam_uses_separate_plain_text_session(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             prompt_dir = root / "prompts"
@@ -41,7 +41,7 @@ class DirectManagerTest(unittest.TestCase):
             manager_client = FakeClient([])
             direct_client = FakeClient([
                 "printf self-ok",
-                '{"result":"self-ok"}',
+                "REPLY\nself-ok",
             ])
             store = PromptStore(prompt_dir, 1)
             store.validate()
@@ -72,11 +72,12 @@ class DirectManagerTest(unittest.TestCase):
             self.assertEqual(len(direct_client.calls), 2)
             first = direct_client.calls[0]
             self.assertEqual(first[0]["role"], "system")
-            self.assertIn("Ты ИИ-агент-исполнитель.", first[0]["content"])
+            self.assertIn("прямого режима САМ", first[0]["content"])
             self.assertIn('"name": "mqtt"', first[0]["content"])
             self.assertEqual(first[-1]["role"], "user")
-            self.assertIn('"task": "выведи self-ok"', first[-1]["content"])
+            self.assertEqual(first[-1]["content"], "выведи self-ok")
             self.assertNotIn("СаМ", first[-1]["content"])
+            self.assertNotIn('"task"', first[-1]["content"])
             self.assertIn("self-ok", direct_client.calls[1][-1]["content"])
 
 
