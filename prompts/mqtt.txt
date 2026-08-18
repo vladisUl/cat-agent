@@ -2,7 +2,7 @@ broker_host: 192.168.0.21
 broker_port: 1883
 
 topics:
-zigbee2mqtt/temp_ulica: климатические данные на улице
-zigbee2mqtt/temp_tua: климатические данные дома
-zigbee2mqtt/temp_akva: температура в аквариуме
-zigbee2mqtt/temp_moroz: температура в морозильнике
+zigbee2mqtt/temp_ulica: климатические данные на улице; поля: temperature, humidity
+zigbee2mqtt/temp_tua: климатические данные дома; поля: temperature, humidity
+zigbee2mqtt/temp_akva: температура в аквариуме; поля: temperature
+zigbee2mqtt/temp_moroz: температура в морозильнике; поля: temperature
