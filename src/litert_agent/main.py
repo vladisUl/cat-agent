@@ -8,7 +8,7 @@ import litert_lm
 
 from orchestration.config import Settings
 
-from .priority_tui import PriorityLiteRTTUI
+from .live_tui import LivePriorityLiteRTTUI
 from .runtime import build_bundle, warm_bundle
 
 LOGGER = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ def main() -> int:
         LOGGER.info("SYSTEM persistent task timers armed after model warmup")
 
         _remove_console_handler(console_handler)
-        PriorityLiteRTTUI(bundle).run()
+        LivePriorityLiteRTTUI(bundle).run()
         return 0
     finally:
         bundle.close()
