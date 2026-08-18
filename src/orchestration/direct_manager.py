@@ -4,19 +4,19 @@ import logging
 
 from .manager import ManagerRuntime, ManagerTurn
 from .model_client import ModelClientError, OpenAIChatClient
-from .protocol import AgentAction, parse_agent_output
+from .protocol import ManagerAction, parse_manager_output
 
 LOGGER = logging.getLogger(__name__)
 
 
 class DirectSessionManagerRuntime(ManagerRuntime):
-    """Manager with a separate resident agent-style session for the САМ prefix."""
+    """Manager with a separate resident direct session for the САМ prefix."""
 
     def __init__(self, client: OpenAIChatClient, direct_client: OpenAIChatClient, *args, **kwargs) -> None:
         super().__init__(client, *args, **kwargs)
         self.direct_client = direct_client
-        direct_system_context = self.prompt_store.build_agent_system_context(
-            "agent1", self._manager_skills, self._manager_workspace
+        direct_system_context = self.prompt_store.build_direct_system_context(
+            self._manager_skills, self._manager_workspace
         )
         self._direct_base_messages = [{"role": "system", "content": direct_system_context}]
         self._direct_messages = [dict(item) for item in self._direct_base_messages]
@@ -33,7 +33,7 @@ class DirectSessionManagerRuntime(ManagerRuntime):
             return super().user_message(text)
 
         if self._direct_waiting:
-            model_text = self.prompt_store.build_agent_context(user_text).strip()
+            model_text = user_text
             self._direct_waiting = False
             LOGGER.info("MANAGER DIRECT CONTINUE raw=%r model=%r", user_text, model_text)
             self._append_direct_user(model_text)
@@ -42,7 +42,7 @@ class DirectSessionManagerRuntime(ManagerRuntime):
         parts = user_text.split(maxsplit=1)
         if parts and parts[0].casefold() == "сам":
             task_text = parts[1].strip() if len(parts) == 2 else ""
-            model_text = self.prompt_store.build_agent_task(task_text).strip()
+            model_text = task_text
             self._direct_mode = True
             self._direct_waiting = False
             self._direct_repeated = {}
@@ -84,19 +84,14 @@ class DirectSessionManagerRuntime(ManagerRuntime):
             )
             LOGGER.info("manager direct step %d MODEL RESPONSE\n%s", step, response.content)
             self._direct_messages.append({"role": "assistant", "content": response.content})
-            directive = parse_agent_output(response.content)
+            directive = parse_manager_output(response.content, allow_command=True)
 
             if directive.error:
                 LOGGER.warning("manager direct step %d protocol error: %s", step, directive.error)
                 self._append_direct_user(self._direct_runtime.format_protocol_error(directive.error))
                 continue
 
-            if directive.action is AgentAction.DONE:
-                if not directive.body:
-                    message = 'ordinary task completion requires a non-empty string in {"result":"..."}'
-                    LOGGER.warning("manager direct step %d protocol error: %s", step, message)
-                    self._append_direct_user(self._direct_runtime.format_protocol_error(message))
-                    continue
+            if directive.action is ManagerAction.REPLY:
                 text = directive.body
                 LOGGER.info("MANAGER DIRECT COMPLETE steps=%d result=%r", step, text)
                 self._direct_mode = False
@@ -105,12 +100,17 @@ class DirectSessionManagerRuntime(ManagerRuntime):
                 self._reset_direct_to_base()
                 return ManagerTurn("reply", text)
 
-            if directive.action is AgentAction.NEED:
+            if directive.action is ManagerAction.ASK:
                 self._direct_waiting = True
                 LOGGER.info("MANAGER DIRECT NEED steps=%d text=%r", step, directive.body)
                 return ManagerTurn("ask", directive.body)
 
-            assert directive.command is not None
+            if directive.action is not ManagerAction.COMMAND or directive.command is None:
+                message = "direct mode accepts only one command, REPLY, or ASK"
+                LOGGER.warning("manager direct step %d protocol error: %s", step, message)
+                self._append_direct_user(self._direct_runtime.format_protocol_error(message))
+                continue
+
             LOGGER.info("MANAGER DIRECT TOOL COMMAND %s", directive.command)
             result = self._direct_runtime.execute(directive.command)
             formatted = self._direct_runtime.format_result(result)
