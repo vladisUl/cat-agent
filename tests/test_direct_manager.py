@@ -40,8 +40,8 @@ class DirectManagerTest(unittest.TestCase):
 
             manager_client = FakeClient([])
             direct_client = FakeClient([
-                "printf self-ok",
-                "REPLY\nself-ok",
+                "/work#printf self-ok",
+                "self-ok",
             ])
             store = PromptStore(prompt_dir, 1)
             store.validate()
@@ -73,6 +73,7 @@ class DirectManagerTest(unittest.TestCase):
             first = direct_client.calls[0]
             self.assertEqual(first[0]["role"], "system")
             self.assertIn("прямого режима САМ", first[0]["content"])
+            self.assertIn("/work#<команда>", first[0]["content"])
             self.assertIn('"name": "mqtt"', first[0]["content"])
             self.assertEqual(first[-1]["role"], "user")
             self.assertEqual(first[-1]["content"], "выведи self-ok")
