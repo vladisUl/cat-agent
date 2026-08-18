@@ -1,6 +1,3 @@
-broker_host: 192.168.0.21
-broker_port: 1883
-
 topics:
 zigbee2mqtt/temp_ulica: климатические данные на улице; поля: temperature, humidity
 zigbee2mqtt/temp_tua: климатические данные дома; поля: temperature, humidity
