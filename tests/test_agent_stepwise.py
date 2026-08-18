@@ -34,7 +34,7 @@ class AgentStepwiseTest(unittest.TestCase):
             workspace = root / "workspace"
             workspace.mkdir()
 
-            client = FakeClient(["echo ok", '{"done":true}'])
+            client = FakeClient(["/work#echo ok", '{"done":true}'])
             prompts = PromptStore(prompt_dir, 1)
             prompts.validate()
             skills = SkillBase(prompt_dir / "prompt_base.txt").require(("shell",))
