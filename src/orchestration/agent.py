@@ -5,10 +5,10 @@ from enum import Enum
 import logging
 from pathlib import Path
 
-from .workspace_command_runtime import CommandRuntime
+from .workspace_command_runtime import CommandRuntime, unwrap_work_command
 from .model_client import ModelClientError, OpenAIChatClient
 from .prompt_store import PromptStore
-from .protocol import AgentAction, parse_agent_output
+from .protocol import AgentAction, AgentDirective, parse_agent_output
 from .skills import Skill
 
 LOGGER = logging.getLogger(__name__)
@@ -164,7 +164,23 @@ class AgentWorker:
         )
         LOGGER.info("%s step %d MODEL RESPONSE\n%s", self.agent_id, step, response.content)
         self._messages.append({"role": "assistant", "content": response.content})
-        directive = parse_agent_output(response.content)
+
+        output = response.content.strip()
+        try:
+            command = unwrap_work_command(output)
+        except ValueError as exc:
+            directive = AgentDirective(None, "", error=str(exc))
+        else:
+            if command is not None:
+                directive = AgentDirective(AgentAction.COMMAND, "", command=command)
+            else:
+                directive = parse_agent_output(response.content)
+                if directive.action is AgentAction.COMMAND:
+                    directive = AgentDirective(
+                        None,
+                        "",
+                        error="tool command must start with /work#",
+                    )
 
         if directive.error:
             LOGGER.warning(
