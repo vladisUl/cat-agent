@@ -70,7 +70,9 @@ class ManagerSelfChatTest(unittest.TestCase):
             self.assertIn("[MANAGER_TOOLS]", base)
             self.assertIn('"name": "shell"', base)
             self.assertIn('"name": "mqtt"', base)
-            self.assertIn("broker_host: 192.168.0.21", base)
+            self.assertIn("zigbee2mqtt/temp_ulica", base)
+            self.assertNotIn("broker_host:", base)
+            self.assertNotIn("broker_port:", base)
             self.assertIn("[AGENT_EXECUTION_PROTOCOL]", base)
             self.assertIn("Ты ИИ-агент-исполнитель.", base)
 
