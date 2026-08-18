@@ -22,6 +22,19 @@ class WarmResult:
     token_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class InferenceTiming:
+    phase: str
+    phase_started: float | None
+    prefill_seconds: float | None
+    generation_seconds: float | None
+    total_seconds: float | None
+    finished_at: float | None
+
+
+ModelEventHandler = Callable[[str, str, str], None]
+
+
 class LiteRTChatClient:
     """LiteRT-LM adapter backed by the low-level Session API."""
 
@@ -58,6 +71,8 @@ class LiteRTChatClient:
         self._resident_tokens = 0
         self._last_response: ChatResponse | None = None
         self._warm_result: WarmResult | None = None
+        self._event_handler: ModelEventHandler | None = None
+        self._inference_timing = InferenceTiming("idle", None, None, None, None, None)
 
     @property
     def resident_tokens(self) -> int:
@@ -70,6 +85,13 @@ class LiteRTChatClient:
     @property
     def warm_result(self) -> WarmResult | None:
         return self._warm_result
+
+    @property
+    def inference_timing(self) -> InferenceTiming:
+        return self._inference_timing
+
+    def set_event_handler(self, handler: ModelEventHandler | None) -> None:
+        self._event_handler = handler
 
     def wait_until_ready(
         self, stop_requested: Callable[[], bool], interval: float = 2.0
@@ -93,6 +115,7 @@ class LiteRTChatClient:
         self._resident_tokens = 0
         self._last_response = None
         self._warm_result = None
+        self._inference_timing = InferenceTiming("idle", None, None, None, None, None)
 
     def prepare_prefix(self, messages: list[dict[str, str]]) -> WarmResult:
         if (
@@ -223,25 +246,61 @@ class LiteRTChatClient:
                     f"LiteRT Session {self.label} history no longer extends resident KV"
                 )
 
+        total_started = time.monotonic()
+        prompt_seconds: float | None = None
+        generation_seconds: float | None = None
         try:
             user_turn = self._render_user_turn(messages[-1])
             resident_before = self._resident_tokens
-            total_started = time.monotonic()
 
             prefill_started = time.monotonic()
+            self._inference_timing = InferenceTiming(
+                "prefill", prefill_started, None, None, None, None
+            )
+            self._emit_event("prefill_start")
             self._session.run_prefill([user_turn])
             prompt_seconds = time.monotonic() - prefill_started
             prefill_benchmark = self._session.get_benchmark_info()
             prefill_n = prefill_benchmark.last_prefill_token_count
 
             decode_started = time.monotonic()
-            response = self._session.run_decode()
+            self._inference_timing = InferenceTiming(
+                "generate", decode_started, prompt_seconds, None, None, None
+            )
+            self._emit_event("decode_start")
+
+            chunks: list[str] = []
+            run_decode_async = getattr(self._session, "run_decode_async", None)
+            if self._event_handler is not None and callable(run_decode_async):
+                for chunk_response in run_decode_async():
+                    chunk = _session_response_text(chunk_response)
+                    if not chunk:
+                        continue
+                    chunks.append(chunk)
+                    self._emit_event("chunk", chunk)
+                content = "".join(chunks)
+                if not content:
+                    raise ModelClientError("LiteRT Session streamed decode returned no text")
+            else:
+                response = self._session.run_decode()
+                content = _session_response_text(response)
+                self._emit_event("chunk", content)
+
             generation_seconds = time.monotonic() - decode_started
             decode_benchmark = self._session.get_benchmark_info()
             decode_n = decode_benchmark.last_decode_token_count
 
             elapsed = time.monotonic() - total_started
-            content = _session_response_text(response)
+            finished_at = time.monotonic()
+            self._inference_timing = InferenceTiming(
+                "idle",
+                None,
+                prompt_seconds,
+                generation_seconds,
+                elapsed,
+                finished_at,
+            )
+            self._emit_event("decode_done")
 
             self._resident_tokens += prefill_n + decode_n
             self._synced_messages = deepcopy(messages)
@@ -275,9 +334,42 @@ class LiteRTChatClient:
             self._last_response = result
             return result
         except ModelClientError:
+            self._finish_failed_timing(total_started, prompt_seconds, generation_seconds)
             raise
         except Exception as exc:
+            self._finish_failed_timing(total_started, prompt_seconds, generation_seconds)
             raise ModelClientError(f"LiteRT-LM Session request failed: {exc}") from exc
+
+    def _finish_failed_timing(
+        self,
+        total_started: float,
+        prompt_seconds: float | None,
+        generation_seconds: float | None,
+    ) -> None:
+        now = time.monotonic()
+        current = self._inference_timing
+        if prompt_seconds is None and current.phase == "prefill" and current.phase_started is not None:
+            prompt_seconds = now - current.phase_started
+        if generation_seconds is None and current.phase == "generate" and current.phase_started is not None:
+            generation_seconds = now - current.phase_started
+        self._inference_timing = InferenceTiming(
+            "idle",
+            None,
+            prompt_seconds,
+            generation_seconds,
+            now - total_started,
+            now,
+        )
+        self._emit_event("decode_error")
+
+    def _emit_event(self, event: str, payload: str = "") -> None:
+        handler = self._event_handler
+        if handler is None:
+            return
+        try:
+            handler(self.label, event, payload)
+        except Exception:
+            LOGGER.debug("model event handler failed label=%s event=%s", self.label, event, exc_info=True)
 
     def _try_reset_prefix(self, messages: list[dict[str, str]]) -> bool:
         if not self.allow_prefix_reset or len(messages) != 2:
