@@ -13,7 +13,11 @@ class PromptStore:
         self.prompt_dir.mkdir(parents=True, exist_ok=True)
 
     def validate(self) -> None:
-        required = [self.prompt_dir / "sys_prompt_manager.txt", self.prompt_dir / "prompt_base.txt"]
+        required = [
+            self.prompt_dir / "sys_prompt_manager.txt",
+            self.prompt_dir / "sys_prompt_direct.txt",
+            self.prompt_dir / "prompt_base.txt",
+        ]
         required.extend(
             self.prompt_dir / f"sys_prompt_agent_{index}.txt"
             for index in range(1, self.agent_count + 1)
@@ -24,6 +28,9 @@ class PromptStore:
 
     def manager_system_prompt(self) -> str:
         return self._read("sys_prompt_manager.txt")
+
+    def direct_system_prompt(self) -> str:
+        return self._read("sys_prompt_direct.txt")
 
     def agent_system_prompt(self, agent_id: str) -> str:
         index = self._agent_index(agent_id)
@@ -63,6 +70,15 @@ class PromptStore:
         workspace: Path,
     ) -> str:
         system_prompt = self.agent_system_prompt(agent_id).strip()
+        bootstrap = self.build_agent_bootstrap(skills, workspace).strip()
+        return f"{system_prompt}\n\n{bootstrap}"
+
+    def build_direct_system_context(
+        self,
+        skills: tuple[Skill, ...],
+        workspace: Path,
+    ) -> str:
+        system_prompt = self.direct_system_prompt().strip()
         bootstrap = self.build_agent_bootstrap(skills, workspace).strip()
         return f"{system_prompt}\n\n{bootstrap}"
 
