@@ -36,7 +36,7 @@ field - это поля доступные в payload
 /work#mqtt_sub.sh zigbee2mqtt/temp_ulica humidity
 
 Публикация mqtt
-Команда mqtt_рub.sh <topic> <field>
+Команда mqtt_pub.sh <topic> <field>
 1)Выбрать топик по смыслу запроса и описанию топиков
 2)Выбрать нужное поле (поля) исходя из запроса
 
