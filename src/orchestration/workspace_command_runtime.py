@@ -7,6 +7,19 @@ import subprocess
 from .command_runtime import CommandResult, CommandRuntime as RestrictedCommandRuntime
 
 
+WORK_PREFIX = "/work#"
+
+
+def unwrap_work_command(text: str) -> str | None:
+    stripped = text.strip()
+    if not stripped.startswith(WORK_PREFIX):
+        return None
+    command = stripped[len(WORK_PREFIX):].strip()
+    if not command or "\n" in command or "\r" in command:
+        raise ValueError("command must be one non-empty line after /work#")
+    return command
+
+
 class CommandRuntime(RestrictedCommandRuntime):
     """Use a real bash process when the agent has the shell skill.
 
