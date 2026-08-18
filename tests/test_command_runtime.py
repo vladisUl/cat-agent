@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from orchestration.workspace_command_runtime import CommandRuntime
 
@@ -84,6 +86,38 @@ class CommandRuntimeTest(unittest.TestCase):
         blocked = runtime.execute("ls")
         self.assertEqual(blocked.exit_code, 126)
         self.assertEqual(blocked.metadata.get("error_code"), "command_not_permitted")
+
+    def test_mqtt_sub_value_command_returns_only_selected_value(self) -> None:
+        runtime = CommandRuntime(
+            self.root, ("shell", "mqtt"), max_file_bytes=1024, timeout_seconds=2
+        )
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="61.59\n", stderr=""
+        )
+
+        with patch(
+            "orchestration.workspace_command_runtime.subprocess.run",
+            return_value=completed,
+        ) as run:
+            result = runtime.execute(
+                "mqtt_sub.sh zigbee2mqtt/temp_ulica humidity"
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.operation, "mqtt_sub")
+        self.assertEqual(runtime.format_result(result), "61.59")
+        self.assertEqual(result.metadata["topic"], "zigbee2mqtt/temp_ulica")
+        self.assertEqual(result.metadata["field"], "humidity")
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "/bin/bash",
+                "-o",
+                "pipefail",
+                "-c",
+                "mosquitto_sub -h 192.168.0.21 -p 1883 -t zigbee2mqtt/temp_ulica -C 1 -W 5 | jq -r '.humidity'",
+            ],
+        )
 
 
 if __name__ == "__main__":
