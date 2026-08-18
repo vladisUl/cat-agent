@@ -127,6 +127,10 @@ class LivePriorityLiteRTTUI(PriorityLiteRTTUI):
         self._dialog_scroll_lines = 0
 
     def _poll_future(self) -> None:
+        # Drain the final decode chunks before the base TUI appends the
+        # authoritative ManagerTurn, otherwise a last queued chunk could appear
+        # after the completed message.
+        self._poll_model_events()
         previous_future = self._active_future
         super()._poll_future()
         if previous_future is not None and self._active_future is None:
