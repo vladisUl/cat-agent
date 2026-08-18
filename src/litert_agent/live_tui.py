@@ -181,6 +181,13 @@ class LivePriorityLiteRTTUI(PriorityLiteRTTUI):
             row += 1
 
         put("STATE", self._status, bold=True)
+        if self._active_started is not None:
+            put("request", f"{time.monotonic() - self._active_started:.1f}s")
+        elif self._last_request_seconds is not None:
+            put("request", f"{self._last_request_seconds:.3f}s")
+        else:
+            put("request", "--")
+
         timing = self._current_inference_timing()
         if timing is None:
             put("prefill", "--")
