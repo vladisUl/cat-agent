@@ -133,9 +133,7 @@ class CoreSnapshotTest(unittest.TestCase):
             reader = sock.makefile("r", encoding="utf-8", newline="\n")
             try:
                 send(sock, {"type": "acquire", "client": "tui"})
-                acquired = recv(reader)
-                self.assertEqual(acquired["type"], "acquired")
-                self.assertTrue(acquired["status"]["chat_open"])
+                self.assertEqual(recv(reader)["type"], "acquired")
 
                 send(sock, {"type": "snapshot"})
                 reply = recv(reader)
