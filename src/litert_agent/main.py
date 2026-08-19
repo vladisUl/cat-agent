@@ -8,29 +8,25 @@ import litert_lm
 
 from orchestration.config import Settings
 
-from .event_socket import ExternalEventSocket
-from .live_tui import LivePriorityLiteRTTUI
+from .core_server import CoreServer
 from .runtime import build_bundle, warm_bundle
 
 LOGGER = logging.getLogger(__name__)
 LOG_DIR = Path("/var/log/litertlm")
 LOG_PATH = LOG_DIR / "cat-agent.log"
-EXTERNAL_EVENT_PRIORITY = 10
 
 
 def main() -> int:
     settings = Settings.from_env(require_model=False)
     try:
-        console_handler = _configure_logging(settings)
+        _configure_logging(settings)
     except OSError as exc:
         print(f"Cannot initialize log {LOG_PATH}: {exc}", file=sys.stderr)
         return 2
 
-    # Keep LiteRT-LM's validated native startup/profiler warnings out of the
-    # human-facing console. Python-side diagnostics are retained in cat-agent.log.
     litert_lm.set_min_log_severity(litert_lm.LogSeverity.ERROR)
 
-    LOGGER.info("cat-agent LiteRT backend starting")
+    LOGGER.info("cat-agent CORE starting")
     LOGGER.info("Log file: %s", LOG_PATH)
     LOGGER.info("Workspace: %s", settings.workspace)
     LOGGER.info("Prompt dir: %s", settings.prompt_dir)
@@ -49,38 +45,19 @@ def main() -> int:
         bundle.system_runtime.arm_task_timers()
         LOGGER.info("SYSTEM persistent task timers armed after model warmup")
 
-        tui = LivePriorityLiteRTTUI(bundle)
-        event_socket = ExternalEventSocket(
-            lambda source, name: _enqueue_external_event(tui, source, name)
-        )
-        event_socket.start()
+        core = CoreServer(bundle)
+        core.start()
         try:
-            _remove_console_handler(console_handler)
-            tui.run()
+            core.serve_forever()
         finally:
-            event_socket.close()
+            core.close()
         return 0
     finally:
         bundle.close()
-        LOGGER.info("cat-agent LiteRT backend stopped")
+        LOGGER.info("cat-agent CORE stopped")
 
 
-def _enqueue_external_event(
-    tui: LivePriorityLiteRTTUI,
-    source: str,
-    name: str,
-) -> None:
-    event = tui.bundle.runtime.external_event(source, name)
-    if event is None:
-        return
-    tui.enqueue_external_event(
-        event,
-        priority=EXTERNAL_EVENT_PRIORITY,
-        coalesce=False,
-    )
-
-
-def _configure_logging(settings: Settings) -> logging.Handler:
+def _configure_logging(settings: Settings) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     formatter = logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s [%(threadName)s]: %(message)s"
@@ -102,14 +79,6 @@ def _configure_logging(settings: Settings) -> logging.Handler:
     console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
     root.addHandler(console_handler)
-
-    return console_handler
-
-
-def _remove_console_handler(handler: logging.Handler) -> None:
-    root = logging.getLogger()
-    root.removeHandler(handler)
-    handler.close()
 
 
 if __name__ == "__main__":
