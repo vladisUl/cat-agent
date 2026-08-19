@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import logging
+import math
 import shlex
+import time
 
 from .agent import AgentState
+from .event_store import EventStore, EventStoreError
 from .manager import ManagerRuntime, ManagerTurn
 from .model_client import ModelClientError
 from .protocol import ManagerAction, parse_manager_output
 from .skills import SkillBaseError
+from .system_events import SystemEvent
 from .tasks import TaskStoreError
 from .workspace_command_runtime import unwrap_work_command
 
@@ -16,6 +20,10 @@ LOGGER = logging.getLogger(__name__)
 
 class AssistantManagerRuntime(ManagerRuntime):
     """Single manager session: user dialogue, direct tools and task creation."""
+
+    def __init__(self, *args, event_store: EventStore | None = None, **kwargs) -> None:
+        self.event_store = event_store or EventStore()
+        super().__init__(*args, **kwargs)
 
     def _bootstrap_prompt(self) -> str:
         # sys_prompt_manager.txt is the complete manager BASE.
@@ -39,6 +47,54 @@ class AssistantManagerRuntime(ManagerRuntime):
         self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
         self._append_user(user_text)
         return self._drive_manager()
+
+    def external_event(self, source: str, name: str) -> SystemEvent | None:
+        """Resolve one real external event into the saved TASK/QUERY it activates."""
+        source = source.strip().lower()
+        name = name.strip()
+        binding = self.event_store.resolve(source, name)
+        if binding is None:
+            LOGGER.warning(
+                "SYSTEM external event ignored: no binding source=%s name=%s",
+                source,
+                name,
+            )
+            return None
+
+        store = self.system_runtime.task_store
+        if store is None:
+            LOGGER.error("SYSTEM external event ignored: task store is not configured")
+            return None
+        task = store.get(binding.task_id)
+        if task is None:
+            LOGGER.warning(
+                "SYSTEM external event ignored: binding=%s task=%d is missing",
+                binding.name,
+                binding.task_id,
+            )
+            return None
+        if not task.enabled:
+            LOGGER.info(
+                "SYSTEM external event ignored: binding=%s task=%d is disabled",
+                binding.name,
+                binding.task_id,
+            )
+            return None
+
+        LOGGER.info(
+            "SYSTEM external event accepted source=%s name=%s task=%d description=%r",
+            source,
+            name,
+            task.task_id,
+            binding.description,
+        )
+        return SystemEvent(
+            source=source,
+            name=name,
+            task="",
+            created_monotonic=time.monotonic(),
+            task_id=task.task_id,
+        )
 
     def _drive_manager(self) -> ManagerTurn:
         for step in range(1, self.max_steps + 1):
@@ -153,9 +209,9 @@ class AssistantManagerRuntime(ManagerRuntime):
         try:
             period = float(argv[1])
         except ValueError:
-            return "SYSTEM_ERROR\nperiod_seconds must be >= 0"
-        if period < 0:
-            return "SYSTEM_ERROR\nperiod_seconds must be >= 0"
+            return "SYSTEM_ERROR\nperiod_seconds must be -1, 0 or > 0"
+        if not math.isfinite(period) or period < -1 or (-1 < period < 0):
+            return "SYSTEM_ERROR\nperiod_seconds must be -1, 0 or > 0"
 
         skill_names = tuple(
             item.strip() for item in argv[2].split(",") if item.strip()
@@ -176,6 +232,13 @@ class AssistantManagerRuntime(ManagerRuntime):
         method = "task" if argv[0] == "task_timer.sh" else "query"
         if period == 0:
             return self._run_one_shot_agent(method, task_text, skills)
+        if period == -1:
+            return self._create_external_task(
+                method,
+                description,
+                task_text,
+                skill_names,
+            )
 
         try:
             task = self.system_runtime.create_periodic_task(
@@ -192,6 +255,50 @@ class AssistantManagerRuntime(ManagerRuntime):
             f"SYSTEM_OK\nTASK {task.task_id} created and started; "
             f"method={task.method} period={period:g}s "
             f"description={task.description}"
+        )
+
+    def _create_external_task(
+        self,
+        method: str,
+        description: str,
+        task_text: str,
+        skill_names: tuple[str, ...],
+    ) -> str:
+        store = self.system_runtime.task_store
+        if store is None:
+            return "SYSTEM_ERROR\ntask store is not configured"
+
+        try:
+            task = store.create(
+                description,
+                task_text,
+                method=method,
+                skills=skill_names,
+                timer_period_seconds=None,
+                enabled=True,
+            )
+            try:
+                binding = self.event_store.register(
+                    task.task_id,
+                    description,
+                    source="gpio",
+                )
+            except Exception:
+                store.delete(task.task_id)
+                raise
+        except (TaskStoreError, EventStoreError, OSError) as exc:
+            return f"SYSTEM_ERROR\n{exc}"
+
+        LOGGER.info(
+            "SYSTEM external task created id=%d method=%s event=%s description=%r",
+            task.task_id,
+            task.method,
+            binding.name,
+            task.description,
+        )
+        return (
+            f"SYSTEM_OK\nTASK {task.task_id} created for external event {binding.name}; "
+            f"method={task.method} description={task.description}"
         )
 
     def _run_one_shot_agent(self, method: str, task_text: str, skills) -> str:
@@ -239,6 +346,7 @@ class AssistantManagerRuntime(ManagerRuntime):
                     return f"SYSTEM_OK\nTASK {task_id} stopped"
                 if not self.system_runtime.delete_task(task_id):
                     return f"SYSTEM_ERROR\nunknown task: {task_id}"
+                self.event_store.unregister_task(task_id)
                 return f"SYSTEM_OK\nTASK {task_id} deleted"
 
             if op == "period" and len(argv) == 4:
@@ -248,7 +356,7 @@ class AssistantManagerRuntime(ManagerRuntime):
                     raise ValueError("period_seconds and task_number must be > 0")
                 self.system_runtime.set_task_period(task_id, period)
                 return f"SYSTEM_OK\nTASK {task_id} period changed to {period:g}s"
-        except (ValueError, TaskStoreError) as exc:
+        except (ValueError, TaskStoreError, EventStoreError, OSError) as exc:
             return f"SYSTEM_ERROR\n{exc}"
 
         return "SYSTEM_ERROR\ninvalid timer.sh syntax"
