@@ -14,10 +14,14 @@ import time
 
 from .core_server import DEFAULT_CORE_SOCKET
 
+LOG_PATH = Path("/var/log/litertlm/cat-agent.log")
 BRACKETED_PASTE_ON = "\x1b[?2004h"
 BRACKETED_PASTE_OFF = "\x1b[?2004l"
 BRACKETED_PASTE_START = "[200~"
 BRACKETED_PASTE_END = "\x1b[201~"
+COLOR_ACTIVE = 1
+COLOR_STOPPED = 2
+SNAPSHOT_INTERVAL = 0.2
 
 
 class CoreClient:
@@ -131,6 +135,8 @@ class TerminalTUI:
         self._input = ""
         self._quit = False
         self._started = time.monotonic()
+        self._last_snapshot_request = 0.0
+        self._colors_enabled = False
 
         self._stream_mode = "idle"
         self._stream_buffer = ""
@@ -148,10 +154,12 @@ class TerminalTUI:
             curses.curs_set(0)
         except curses.error:
             pass
+        self._init_colors()
         stdscr.keypad(True)
         stdscr.timeout(100)
 
         while not self._quit:
+            self._request_snapshot()
             self._poll_core()
             self._draw(stdscr)
             try:
@@ -162,6 +170,16 @@ class TerminalTUI:
                 continue
             self._handle_key(key)
 
+    def _request_snapshot(self) -> None:
+        now = time.monotonic()
+        if now - self._last_snapshot_request < SNAPSHOT_INTERVAL:
+            return
+        self._last_snapshot_request = now
+        try:
+            self.client.send({"type": "snapshot"})
+        except OSError:
+            pass
+
     def _poll_core(self) -> None:
         while True:
             try:
@@ -170,8 +188,13 @@ class TerminalTUI:
                 return
 
             kind = str(item.get("type", ""))
+            if kind == "snapshot":
+                snapshot = item.get("status")
+                if isinstance(snapshot, dict):
+                    self.status = snapshot
+                continue
             if kind == "status":
-                self.status = item
+                self.status = {**self.status, **item}
                 continue
             if kind == "model_event":
                 self._handle_model_event(item)
@@ -339,7 +362,7 @@ class TerminalTUI:
         self._draw_box(right)
         self._draw_box(input_win)
         self._title(left, " DIALOG ")
-        self._title(right, " CAT CORE ")
+        self._title(right, " LiteRT-LM ")
         self._title(input_win, " INPUT ")
 
         self._draw_dialog(left)
@@ -358,15 +381,16 @@ class TerminalTUI:
 
     def _draw_dialog(self, win) -> None:
         height, width = win.getmaxyx()
-        usable = max(10, width - 4)
+        usable_width = max(1, width - 4)
         lines: list[tuple[str, str, bool]] = []
+
         for speaker, text, elapsed in self._dialog:
             normalized = " ".join(text.strip().split())
-            timed = f"{normalized} ({elapsed // 60:02d}:{elapsed % 60:02d})"
+            timed_text = f"{normalized} ({self._format_elapsed(elapsed)})"
             prefix = f"{speaker}> "
             wrapped = textwrap.wrap(
-                timed,
-                width=max(10, usable - len(prefix)),
+                timed_text,
+                width=max(10, usable_width - len(prefix)),
                 replace_whitespace=True,
                 drop_whitespace=True,
             ) or [""]
@@ -383,8 +407,8 @@ class TerminalTUI:
         start = max(0, end - page)
         visible = lines[start:end]
 
-        for row, (lead, text, first) in enumerate(visible, start=1):
-            if first:
+        for row, (lead, text, first_line) in enumerate(visible, start=1):
+            if first_line:
                 self._safe_addstr(win, row, 2, lead, curses.A_BOLD, width - 4)
                 self._safe_addstr(
                     win,
@@ -411,7 +435,7 @@ class TerminalTUI:
         height, width = win.getmaxyx()
         row = 1
 
-        def put(label: str, value: object = "", bold: bool = False) -> None:
+        def put(label: str, value: object = "", *, bold: bool = False) -> None:
             nonlocal row
             if row >= height - 1:
                 return
@@ -426,9 +450,28 @@ class TerminalTUI:
             )
             row += 1
 
+        def put_indicator(label: str, value: str, attr: int) -> None:
+            nonlocal row
+            if row >= height - 1:
+                return
+            lead = f"{label:<12} "
+            self._safe_addstr(win, row, 2, lead, 0, width - 4)
+            x = 2 + len(lead)
+            if x < width - 2:
+                self._safe_addstr(win, row, x, "●", attr | curses.A_BOLD, 1)
+                self._safe_addstr(
+                    win,
+                    row,
+                    x + 2,
+                    value,
+                    0,
+                    width - x - 4,
+                )
+            row += 1
+
         state = str(self.status.get("state", "IDLE"))
         label = str(self.status.get("label", ""))
-        put("STATE", f"{state} {label}".strip(), True)
+        put("STATE", f"{state} {label}".strip(), bold=True)
 
         started = self.status.get("request_started_monotonic")
         last = self.status.get("last_request_seconds")
@@ -449,14 +492,17 @@ class TerminalTUI:
         total = timing.get("total_seconds")
         if phase == "prefill" and isinstance(phase_started, (int, float)):
             prefill = time.monotonic() - float(phase_started)
+            generation = None
+            total = None
         elif phase == "generate" and isinstance(phase_started, (int, float)):
             generation = time.monotonic() - float(phase_started)
+            total = None
         put("prefill", self._seconds(prefill))
         put("generate", self._seconds(generation))
         put("total", self._seconds(total))
 
         row += 1
-        put("MODEL", self.core_info.get("model", "?"), True)
+        put("MODEL", self.core_info.get("model", "?"), bold=True)
         put("backend", self.core_info.get("backend", "?"))
         put("speculative", "ON" if self.core_info.get("speculative") else "OFF")
         put(
@@ -479,11 +525,130 @@ class TerminalTUI:
         )
 
         row += 1
-        put("SESSION", "TUI", True)
-        put("pending", self.status.get("pending", 0))
-        put("background", "YES" if self.status.get("background") else "NO")
-        put("manager tok", self.status.get("manager_resident_tokens", "?"))
-        put("agent tok", self.status.get("agent_resident_tokens", "?"))
+        put("MANAGER", bold=True)
+        row = self._draw_client_stats(
+            win,
+            row,
+            self.status.get("manager"),
+            width,
+            height,
+        )
+
+        row += 1
+        put("AGENT", bold=True)
+        row = self._draw_client_stats(
+            win,
+            row,
+            self.status.get("agent"),
+            width,
+            height,
+        )
+
+        row += 1
+        put("EVENTS", bold=True)
+        source_lead = f"{'sources':<12} "
+        self._safe_addstr(win, row, 2, source_lead, 0, width - 4)
+        source_x = 2 + len(source_lead)
+        for dot, text, attr in (
+            ("●", " timer", self._indicator_attr(True)),
+            (" ●", " gpio", self._indicator_attr(True)),
+            (" ·", " mqtt", curses.A_DIM),
+        ):
+            if source_x >= width - 2:
+                break
+            self._safe_addstr(win, row, source_x, dot, attr, width - source_x - 2)
+            source_x += len(dot)
+            self._safe_addstr(win, row, source_x, text, attr, width - source_x - 2)
+            source_x += len(text)
+        row += 1
+
+        tasks = self.status.get("tasks")
+        if not isinstance(tasks, list) or not tasks:
+            put("tasks", "none")
+        else:
+            now = time.monotonic()
+            for raw_task in tasks:
+                if row >= height - 1:
+                    break
+                if not isinstance(raw_task, dict):
+                    continue
+                task_id = raw_task.get("task_id", "?")
+                description = str(raw_task.get("description", ""))
+                timer = raw_task.get("timer")
+                if not isinstance(timer, dict):
+                    put_indicator(f"TASK {task_id}", "NO TIMER", curses.A_DIM)
+                else:
+                    period = timer.get("period_seconds")
+                    enabled = bool(timer.get("enabled"))
+                    next_fire = timer.get("next_fire_monotonic")
+                    period_text = self._number(period)
+                    if enabled and isinstance(next_fire, (int, float)):
+                        next_in = max(0.0, float(next_fire) - now)
+                        put_indicator(
+                            f"TASK {task_id}",
+                            f"RUN {period_text}s  next {next_in:.0f}s",
+                            self._indicator_attr(True),
+                        )
+                    else:
+                        put_indicator(
+                            f"TASK {task_id}",
+                            f"STOP {period_text}s",
+                            self._indicator_attr(False),
+                        )
+                if row < height - 1:
+                    self._safe_addstr(
+                        win,
+                        row,
+                        15,
+                        description,
+                        curses.A_DIM,
+                        max(0, width - 17),
+                    )
+                    row += 1
+
+        pending = self.status.get("pending")
+        if isinstance(pending, int) and pending:
+            put("queue", str(pending))
+
+        row += 1
+        put("LOG", bold=True)
+        put("file", str(LOG_PATH))
+        try:
+            put("size", self._format_bytes(LOG_PATH.stat().st_size))
+        except OSError:
+            put("size", "--")
+
+    def _draw_client_stats(
+        self,
+        win,
+        row: int,
+        raw_client: object,
+        width: int,
+        height: int,
+    ) -> int:
+        def put(text: str) -> None:
+            nonlocal row
+            if row >= height - 1:
+                return
+            self._safe_addstr(win, row, 2, text, 0, width - 4)
+            row += 1
+
+        client = raw_client if isinstance(raw_client, dict) else {}
+        put(f"resident     {client.get('resident_tokens', '?')}")
+        response = client.get("last")
+        if not isinstance(response, dict):
+            put("last         --")
+            return row
+
+        cached = response.get("cached_tokens")
+        new = response.get("prompt_evaluated_tokens")
+        decode = response.get("completion_tokens")
+        put(f"cached/new   {cached or 0} / {new or 0}")
+        put(f"decode       {decode or 0}")
+        put(f"prefill      {self._seconds(response.get('prompt_seconds'))}")
+        put(f"generate     {self._seconds(response.get('generation_seconds'))}")
+        put(f"wall         {self._seconds(response.get('elapsed_seconds'))}")
+        return row
 
     def _layout_input(self, width: int) -> tuple[list[str], tuple[int, int]]:
         inner_width = max(8, width - 4)
@@ -551,6 +716,7 @@ class TerminalTUI:
                 prefix += item
             if prefix != BRACKETED_PASTE_START:
                 return False
+
             stdscr.timeout(1000)
             data = ""
             tail = ""
@@ -575,6 +741,24 @@ class TerminalTUI:
         finally:
             stdscr.timeout(100)
 
+    def _init_colors(self) -> None:
+        if not curses.has_colors():
+            return
+        try:
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(COLOR_ACTIVE, curses.COLOR_GREEN, -1)
+            curses.init_pair(COLOR_STOPPED, curses.COLOR_RED, -1)
+        except curses.error:
+            return
+        self._colors_enabled = True
+
+    def _indicator_attr(self, active: bool) -> int:
+        if not self._colors_enabled:
+            return curses.A_BOLD if active else curses.A_DIM
+        pair = COLOR_ACTIVE if active else COLOR_STOPPED
+        return curses.color_pair(pair)
+
     @staticmethod
     def _set_bracketed_paste(enabled: bool) -> None:
         sequence = BRACKETED_PASTE_ON if enabled else BRACKETED_PASTE_OFF
@@ -589,6 +773,31 @@ class TerminalTUI:
         if isinstance(value, (int, float)):
             return f"{float(value):.3f}s"
         return "--"
+
+    @staticmethod
+    def _number(value: object) -> str:
+        if isinstance(value, (int, float)):
+            return f"{float(value):g}"
+        return "?"
+
+    @staticmethod
+    def _format_elapsed(value: int) -> str:
+        total = max(0, int(value))
+        if total < 60:
+            return f"{total}сек"
+        minutes, seconds = divmod(total, 60)
+        if minutes < 60:
+            return f"{minutes}мин{seconds}сек"
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}ч{minutes}мин{seconds}сек"
+
+    @staticmethod
+    def _format_bytes(value: int) -> str:
+        if value < 1024:
+            return f"{value} B"
+        if value < 1024 * 1024:
+            return f"{value / 1024:.1f} KiB"
+        return f"{value / (1024 * 1024):.1f} MiB"
 
     @staticmethod
     def _draw_box(win) -> None:
