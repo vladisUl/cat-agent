@@ -10,12 +10,14 @@ case "${1:-}" in
         BACKEND="gpu"
         ACTIVATION_DATA_TYPE="fp32"
         SPECULATIVE="1"
+        YNNPACK="0"
         ;;
     e4b)
         MODEL_PATH="/storage/models/litertlm/gemma-4-E4B-it.litertlm"
         BACKEND="cpu"
         ACTIVATION_DATA_TYPE=""
         SPECULATIVE="0"
+        YNNPACK="1"
         ;;
     *)
         echo "Usage: $0 e2b|e4b" >&2
@@ -28,6 +30,7 @@ export LITERT_AGENT_MODEL_PATH="$MODEL_PATH"
 export LITERT_AGENT_BACKEND="$BACKEND"
 export LITERT_AGENT_ACTIVATION_DATA_TYPE="$ACTIVATION_DATA_TYPE"
 export LITERT_AGENT_SPECULATIVE="$SPECULATIVE"
+export LITERT_AGENT_YNNPACK="$YNNPACK"
 export LITERT_AGENT_BENCH_SKILLS=""
 
 exec /opt/litert-lm-venv/bin/python3 -m litert_agent.main
