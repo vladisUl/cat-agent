@@ -276,7 +276,7 @@ class CoreServer:
                     "type": "acquired",
                     "client": owner,
                     "core": self._core_info(),
-                    "status": self.scheduler.status_snapshot(),
+                    "status": self._telemetry_snapshot(),
                 },
             )
         else:
@@ -397,6 +397,7 @@ class CoreServer:
 
     def _telemetry_snapshot(self) -> dict[str, object]:
         status = dict(self.scheduler.status_snapshot())
+        status["chat_open"] = bool(getattr(self.bundle.runtime, "_chat_mode", False))
         status["inference"] = self._timing_dict(self._current_inference_timing())
         status["manager"] = self._client_snapshot(self.bundle.manager_client)
         status["agent"] = self._client_snapshot(self.bundle.agent_client)
