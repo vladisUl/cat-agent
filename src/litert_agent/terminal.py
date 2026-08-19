@@ -473,6 +473,13 @@ class TerminalTUI:
         label = str(self.status.get("label", ""))
         put("STATE", f"{state} {label}".strip(), bold=True)
 
+        chat_open = bool(self.status.get("chat_open"))
+        put_indicator(
+            "Чат",
+            "открыт" if chat_open else "закрыт",
+            self._indicator_attr(chat_open),
+        )
+
         started = self.status.get("request_started_monotonic")
         last = self.status.get("last_request_seconds")
         if isinstance(started, (int, float)):
