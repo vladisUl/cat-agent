@@ -7,6 +7,7 @@ import unittest
 
 from orchestration.agent import AgentWorker
 from orchestration.assistant_manager import AssistantManagerRuntime
+from orchestration.event_store import EventStore
 from orchestration.model_client import ChatResponse
 from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
@@ -59,6 +60,7 @@ class AssistantManagerTest(unittest.TestCase):
             AgentPool([worker]),
             SystemRuntime(TaskStore(root / "task.txt")),
             max_steps=8,
+            event_store=EventStore(root / "events.json"),
         )
         return runtime, client
 
@@ -102,6 +104,44 @@ class AssistantManagerTest(unittest.TestCase):
 
             self.assertEqual(turn.text, "обычный ответ")
             self.assertEqual(client.calls[0][-1]["content"], "сам посмотри файл")
+
+    def test_external_period_creates_event_bound_query(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, _client = self._runtime(Path(temp), ["REPLY\nunused"])
+
+            result = runtime._execute_task_command(
+                [
+                    "query_timer.sh",
+                    "-1",
+                    "shell",
+                    "датчик открытия двери",
+                    "Проверить состояние двери и вернуть результат.",
+                ]
+            )
+
+            self.assertIn("SYSTEM_OK", result)
+            self.assertIn("task_gpio1", result)
+            task = runtime.system_runtime.task_store.require(1)  # type: ignore[union-attr]
+            self.assertEqual(task.method, "query")
+            self.assertIsNone(task.timer_period_seconds)
+            binding = runtime.event_store.resolve("gpio", "task_gpio1")
+            self.assertIsNotNone(binding)
+            self.assertEqual(binding.task_id, 1)  # type: ignore[union-attr]
+
+            event = runtime.external_event("gpio", "task_gpio1")
+            self.assertIsNotNone(event)
+            self.assertEqual(event.task_id, 1)  # type: ignore[union-attr]
+
+    def test_invalid_negative_period_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, _client = self._runtime(Path(temp), ["REPLY\nunused"])
+            result = runtime._execute_task_command(
+                ["task_timer.sh", "-0.5", "shell", "bad", "do bad"]
+            )
+            self.assertEqual(
+                result,
+                "SYSTEM_ERROR\nperiod_seconds must be -1, 0 or > 0",
+            )
 
 
 if __name__ == "__main__":
