@@ -235,6 +235,13 @@ class CoreServer:
             )
             return
 
+        if message_type == "snapshot":
+            self._safe_send(
+                client,
+                {"type": "snapshot", "status": self._telemetry_snapshot()},
+            )
+            return
+
         if message_type == "who":
             self._safe_send(
                 client,
@@ -368,14 +375,7 @@ class CoreServer:
                 "label": label,
                 "event": event,
                 "payload": payload,
-                "timing": {
-                    "phase": timing.phase,
-                    "phase_started": timing.phase_started,
-                    "prefill_seconds": timing.prefill_seconds,
-                    "generation_seconds": timing.generation_seconds,
-                    "total_seconds": timing.total_seconds,
-                    "finished_at": timing.finished_at,
-                },
+                "timing": self._timing_dict(timing),
             },
         )
 
@@ -393,6 +393,84 @@ class CoreServer:
             "manager_warm_seconds": manager_warm.elapsed_seconds if manager_warm else None,
             "agent_warm_tokens": agent_warm.token_count if agent_warm else None,
             "agent_warm_seconds": agent_warm.elapsed_seconds if agent_warm else None,
+        }
+
+    def _telemetry_snapshot(self) -> dict[str, object]:
+        status = dict(self.scheduler.status_snapshot())
+        status["inference"] = self._timing_dict(self._current_inference_timing())
+        status["manager"] = self._client_snapshot(self.bundle.manager_client)
+        status["agent"] = self._client_snapshot(self.bundle.agent_client)
+
+        timers = {
+            timer.task_id: timer
+            for timer in self.bundle.system_runtime.task_timer_snapshot()
+        }
+        tasks: list[dict[str, object]] = []
+        for task in self.bundle.system_runtime.task_snapshot():
+            timer = timers.get(task.task_id)
+            tasks.append(
+                {
+                    "task_id": task.task_id,
+                    "description": task.description,
+                    "method": task.method,
+                    "timer": (
+                        None
+                        if timer is None
+                        else {
+                            "period_seconds": timer.period_seconds,
+                            "enabled": timer.enabled,
+                            "next_fire_monotonic": timer.next_fire_monotonic,
+                        }
+                    ),
+                }
+            )
+        status["tasks"] = tasks
+        return status
+
+    def _current_inference_timing(self) -> InferenceTiming:
+        clients = [self.bundle.manager_client, *self.bundle.agent_clients]
+        for client in clients:
+            timing = client.inference_timing
+            if timing.phase != "idle":
+                return timing
+
+        finished = [
+            client.inference_timing
+            for client in clients
+            if client.inference_timing.finished_at is not None
+        ]
+        if finished:
+            return max(finished, key=lambda item: item.finished_at or 0.0)
+        return self.bundle.manager_client.inference_timing
+
+    @staticmethod
+    def _client_snapshot(client) -> dict[str, object]:
+        response = client.last_response
+        return {
+            "resident_tokens": client.resident_tokens,
+            "last": (
+                None
+                if response is None
+                else {
+                    "cached_tokens": response.cached_tokens,
+                    "prompt_evaluated_tokens": response.prompt_evaluated_tokens,
+                    "completion_tokens": response.completion_tokens,
+                    "prompt_seconds": response.prompt_seconds,
+                    "generation_seconds": response.generation_seconds,
+                    "elapsed_seconds": response.elapsed_seconds,
+                }
+            ),
+        }
+
+    @staticmethod
+    def _timing_dict(timing: InferenceTiming) -> dict[str, object]:
+        return {
+            "phase": timing.phase,
+            "phase_started": timing.phase_started,
+            "prefill_seconds": timing.prefill_seconds,
+            "generation_seconds": timing.generation_seconds,
+            "total_seconds": timing.total_seconds,
+            "finished_at": timing.finished_at,
         }
 
     @staticmethod
