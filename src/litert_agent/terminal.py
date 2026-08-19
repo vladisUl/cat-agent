@@ -223,12 +223,12 @@ class TerminalTUI:
         if text.startswith("ASK\n"):
             self._stream_mode = "visible"
             self._stream_buffer = ""
-            self._append_stream_text(text[len("ASK\n"):])
+            self._append_stream_text(text[len("ASK\n") :])
             return
         if text.startswith("REPLY\n"):
             self._stream_mode = "visible"
             self._stream_buffer = ""
-            self._append_stream_text(text[len("REPLY\n"):])
+            self._append_stream_text(text[len("REPLY\n") :])
             return
         if any(candidate.startswith(text) for candidate in candidates):
             return
@@ -248,7 +248,11 @@ class TerminalTUI:
             self._dialog.append((speaker, current + text, elapsed))
 
     def _finalize_manager_text(self, text: str) -> None:
-        if self._stream_dialog_active and self._dialog and self._dialog[-1][0] == "MANAGER":
+        if (
+            self._stream_dialog_active
+            and self._dialog
+            and self._dialog[-1][0] == "MANAGER"
+        ):
             speaker, _preview, elapsed = self._dialog.pop()
             self._dialog.append((speaker, text, elapsed))
         else:
@@ -274,7 +278,9 @@ class TerminalTUI:
             self._dialog_scroll_lines += self._dialog_page_lines
             return
         if key == curses.KEY_NPAGE:
-            self._dialog_scroll_lines = max(0, self._dialog_scroll_lines - self._dialog_page_lines)
+            self._dialog_scroll_lines = max(
+                0, self._dialog_scroll_lines - self._dialog_page_lines
+            )
             return
         if key == curses.KEY_END:
             self._dialog_scroll_lines = 0
@@ -313,28 +319,37 @@ class TerminalTUI:
             stdscr.refresh()
             return
 
-        input_lines = textwrap.wrap(self._input or " ", width=max(10, width - 4)) or [""]
-        visible_input = input_lines[-max(2, min(8, height // 3)):]
-        input_height = len(visible_input) + 2
+        input_lines, input_cursor = self._layout_input(width)
+        max_input_lines = max(2, min(10, height // 3))
+        visible_input_lines = input_lines[-max_input_lines:]
+        hidden_input_lines = len(input_lines) - len(visible_input_lines)
+        input_height = len(visible_input_lines) + 2
         body_height = height - input_height + 1
+
         left_width = max(55, int(width * 0.64))
         right_x = left_width - 1
         right_width = width - right_x
 
         left = stdscr.derwin(body_height, left_width, 0, 0)
         right = stdscr.derwin(body_height, right_width, 0, right_x)
-        input_win = stdscr.derwin(input_height, width, body_height - 1, 0)
+        input_y = body_height - 1
+        input_win = stdscr.derwin(input_height, width, input_y, 0)
 
-        for win in (left, right, input_win):
-            win.box()
+        self._draw_box(left)
+        self._draw_box(right)
+        self._draw_box(input_win)
         self._title(left, " DIALOG ")
         self._title(right, " CAT CORE ")
         self._title(input_win, " INPUT ")
 
         self._draw_dialog(left)
         self._draw_info(right)
-        for row, line in enumerate(visible_input, start=1):
-            self._safe_addstr(input_win, row, 2, line, 0, width - 4)
+        self._draw_input(
+            input_win,
+            visible_input_lines,
+            input_cursor,
+            hidden_input_lines,
+        )
 
         left.noutrefresh()
         right.noutrefresh()
@@ -349,7 +364,12 @@ class TerminalTUI:
             normalized = " ".join(text.strip().split())
             timed = f"{normalized} ({elapsed // 60:02d}:{elapsed % 60:02d})"
             prefix = f"{speaker}> "
-            wrapped = textwrap.wrap(timed, width=max(10, usable - len(prefix))) or [""]
+            wrapped = textwrap.wrap(
+                timed,
+                width=max(10, usable - len(prefix)),
+                replace_whitespace=True,
+                drop_whitespace=True,
+            ) or [""]
             lines.append((prefix, wrapped[0], True))
             indent = " " * len(prefix)
             lines.extend((indent, part, False) for part in wrapped[1:])
@@ -361,9 +381,31 @@ class TerminalTUI:
         self._dialog_scroll_lines = min(self._dialog_scroll_lines, max_scroll)
         end = len(lines) - self._dialog_scroll_lines
         start = max(0, end - page)
-        for row, (lead, text, first) in enumerate(lines[start:end], start=1):
-            attr = curses.A_BOLD if first else 0
-            self._safe_addstr(win, row, 2, lead + text, attr, width - 4)
+        visible = lines[start:end]
+
+        for row, (lead, text, first) in enumerate(visible, start=1):
+            if first:
+                self._safe_addstr(win, row, 2, lead, curses.A_BOLD, width - 4)
+                self._safe_addstr(
+                    win,
+                    row,
+                    2 + len(lead),
+                    text,
+                    0,
+                    width - 4 - len(lead),
+                )
+            else:
+                self._safe_addstr(win, row, 2, lead + text, 0, width - 4)
+
+        if self._dialog_scroll_lines:
+            marker = f" ↑ {self._dialog_scroll_lines} lines "
+            self._safe_addstr(
+                win,
+                0,
+                max(2, width - len(marker) - 2),
+                marker,
+                curses.A_BOLD,
+            )
 
     def _draw_info(self, win) -> None:
         height, width = win.getmaxyx()
@@ -443,6 +485,58 @@ class TerminalTUI:
         put("manager tok", self.status.get("manager_resident_tokens", "?"))
         put("agent tok", self.status.get("agent_resident_tokens", "?"))
 
+    def _layout_input(self, width: int) -> tuple[list[str], tuple[int, int]]:
+        inner_width = max(8, width - 4)
+        prompt = "> "
+        first_capacity = max(1, inner_width - len(prompt))
+        text = self._input
+
+        first = text[:first_capacity]
+        lines = [prompt + first]
+        consumed = len(first)
+        while consumed < len(text):
+            chunk = text[consumed : consumed + inner_width]
+            lines.append(chunk)
+            consumed += len(chunk)
+
+        if text and len(text) == first_capacity:
+            lines.append("")
+        elif len(text) > first_capacity and (len(text) - first_capacity) % inner_width == 0:
+            lines.append("")
+
+        cursor_row = len(lines) - 1
+        cursor_col = len(lines[-1])
+        return lines, (cursor_row, cursor_col)
+
+    def _draw_input(
+        self,
+        win,
+        lines: list[str],
+        cursor: tuple[int, int],
+        hidden_lines: int,
+    ) -> None:
+        _height, width = win.getmaxyx()
+        for row, line in enumerate(lines, start=1):
+            display = line
+            if row == 1 and hidden_lines:
+                display = "… " + display
+            self._safe_addstr(win, row, 2, display, curses.A_BOLD, width - 4)
+
+        cursor_row, cursor_col = cursor
+        visible_cursor_row = cursor_row - hidden_lines + 1
+        if visible_cursor_row < 1:
+            visible_cursor_row = 1
+            cursor_col = 0
+        cursor_x = min(width - 2, 2 + cursor_col)
+        self._safe_addstr(
+            win,
+            visible_cursor_row,
+            cursor_x,
+            " ",
+            curses.A_REVERSE | curses.A_BOLD,
+            1,
+        )
+
     def _try_bracketed_paste(self, stdscr) -> bool:
         stdscr.timeout(30)
         prefix = ""
@@ -469,7 +563,7 @@ class TerminalTUI:
                     continue
                 tail += item
                 if tail.endswith(BRACKETED_PASTE_END):
-                    data += tail[:-len(BRACKETED_PASTE_END)]
+                    data += tail[: -len(BRACKETED_PASTE_END)]
                     break
                 if len(tail) > len(BRACKETED_PASTE_END):
                     data += tail[0]
@@ -491,6 +585,25 @@ class TerminalTUI:
             pass
 
     @staticmethod
+    def _seconds(value: object) -> str:
+        if isinstance(value, (int, float)):
+            return f"{float(value):.3f}s"
+        return "--"
+
+    @staticmethod
+    def _draw_box(win) -> None:
+        height, width = win.getmaxyx()
+        if height < 2 or width < 2:
+            return
+        top = "┌" + "─" * max(0, width - 2) + "┐"
+        bottom = "└" + "─" * max(0, width - 2) + "┘"
+        TerminalTUI._safe_addstr(win, 0, 0, top)
+        for row in range(1, height - 1):
+            TerminalTUI._safe_addstr(win, row, 0, "│")
+            TerminalTUI._safe_addstr(win, row, width - 1, "│")
+        TerminalTUI._safe_addstr(win, height - 1, 0, bottom)
+
+    @staticmethod
     def _title(win, text: str) -> None:
         try:
             win.addstr(0, 2, text, curses.A_BOLD)
@@ -498,19 +611,21 @@ class TerminalTUI:
             pass
 
     @staticmethod
-    def _safe_addstr(win, y: int, x: int, text: str, attr: int = 0, limit: int | None = None) -> None:
-        if limit is not None:
-            text = text[:max(0, limit)]
+    def _safe_addstr(
+        win,
+        y: int,
+        x: int,
+        text: str,
+        attr: int = 0,
+        limit: int | None = None,
+    ) -> None:
         try:
-            win.addstr(y, x, text, attr)
+            if limit is None:
+                win.addstr(y, x, text, attr)
+            else:
+                win.addnstr(y, x, text, max(0, limit), attr)
         except curses.error:
             pass
-
-    @staticmethod
-    def _seconds(value: object) -> str:
-        if isinstance(value, (int, float)):
-            return f"{float(value):.3f}s"
-        return "--"
 
 
 def main() -> int:
