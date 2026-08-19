@@ -8,12 +8,14 @@ import litert_lm
 
 from orchestration.config import Settings
 
+from .event_socket import ExternalEventSocket
 from .live_tui import LivePriorityLiteRTTUI
 from .runtime import build_bundle, warm_bundle
 
 LOGGER = logging.getLogger(__name__)
 LOG_DIR = Path("/var/log/litertlm")
 LOG_PATH = LOG_DIR / "cat-agent.log"
+EXTERNAL_EVENT_PRIORITY = 10
 
 
 def main() -> int:
@@ -47,12 +49,35 @@ def main() -> int:
         bundle.system_runtime.arm_task_timers()
         LOGGER.info("SYSTEM persistent task timers armed after model warmup")
 
-        _remove_console_handler(console_handler)
-        LivePriorityLiteRTTUI(bundle).run()
+        tui = LivePriorityLiteRTTUI(bundle)
+        event_socket = ExternalEventSocket(
+            lambda source, name: _enqueue_external_event(tui, source, name)
+        )
+        event_socket.start()
+        try:
+            _remove_console_handler(console_handler)
+            tui.run()
+        finally:
+            event_socket.close()
         return 0
     finally:
         bundle.close()
         LOGGER.info("cat-agent LiteRT backend stopped")
+
+
+def _enqueue_external_event(
+    tui: LivePriorityLiteRTTUI,
+    source: str,
+    name: str,
+) -> None:
+    event = tui.bundle.runtime.external_event(source, name)
+    if event is None:
+        return
+    tui.enqueue_external_event(
+        event,
+        priority=EXTERNAL_EVENT_PRIORITY,
+        coalesce=False,
+    )
 
 
 def _configure_logging(settings: Settings) -> logging.Handler:
