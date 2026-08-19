@@ -66,7 +66,7 @@ class FakeSystemRuntime:
 
 
 class FakeRuntime:
-    pass
+    _chat_mode = True
 
 
 class FakeScheduler:
@@ -116,7 +116,7 @@ def recv(reader) -> dict[str, object]:
 
 
 class CoreSnapshotTest(unittest.TestCase):
-    def test_snapshot_contains_model_stats_and_task_timer_state(self) -> None:
+    def test_snapshot_contains_model_stats_task_timer_and_chat_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "core.sock"
             server = CoreServer(
@@ -133,12 +133,15 @@ class CoreSnapshotTest(unittest.TestCase):
             reader = sock.makefile("r", encoding="utf-8", newline="\n")
             try:
                 send(sock, {"type": "acquire", "client": "tui"})
-                self.assertEqual(recv(reader)["type"], "acquired")
+                acquired = recv(reader)
+                self.assertEqual(acquired["type"], "acquired")
+                self.assertTrue(acquired["status"]["chat_open"])
 
                 send(sock, {"type": "snapshot"})
                 reply = recv(reader)
                 self.assertEqual(reply["type"], "snapshot")
                 status = reply["status"]
+                self.assertTrue(status["chat_open"])
                 self.assertEqual(status["manager"]["resident_tokens"], 1200)
                 self.assertEqual(status["agent"]["resident_tokens"], 700)
                 self.assertEqual(status["inference"]["total_seconds"], 0.6)
