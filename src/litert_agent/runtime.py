@@ -39,6 +39,7 @@ class LiteRTRuntimeBundle:
     model_path: Path
     backend_name: str
     speculative: bool
+    ynnpack: bool
     manager_warm: WarmResult | None = None
     agent_warm: WarmResult | None = None
 
@@ -63,6 +64,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
     cpu_threads = _env_optional_positive_int("LITERT_AGENT_CPU_THREADS")
     max_num_tokens = _env_optional_positive_int("LITERT_AGENT_MAX_NUM_TOKENS")
     speculative = _env_bool("LITERT_AGENT_SPECULATIVE", False)
+    ynnpack = _env_bool("LITERT_AGENT_YNNPACK", False)
     activation_data_type = _env_activation_data_type(
         "LITERT_AGENT_ACTIVATION_DATA_TYPE"
     )
@@ -71,6 +73,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
     LOGGER.info("LiteRT model: %s", model_path)
     LOGGER.info("LiteRT backend: %s", backend_name)
     LOGGER.info("LiteRT speculative decoding: %s", speculative)
+    LOGGER.info("LiteRT YNNPACK: %s", ynnpack)
     LOGGER.info(
         "LiteRT activation data type: %s",
         activation_data_type.name if activation_data_type is not None else "default",
@@ -86,6 +89,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         cpu_threads,
         max_num_tokens,
         speculative,
+        ynnpack,
         activation_data_type,
         label="manager",
     )
@@ -96,6 +100,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
             cpu_threads,
             max_num_tokens,
             speculative,
+            ynnpack,
             activation_data_type,
             label="agent",
         )
@@ -166,6 +171,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         model_path=model_path,
         backend_name=backend_name,
         speculative=speculative,
+        ynnpack=ynnpack,
     )
 
 
@@ -205,6 +211,7 @@ def _create_engine(
     cpu_threads: int | None,
     max_num_tokens: int | None,
     speculative: bool,
+    ynnpack: bool,
     activation_data_type: litert_lm.ActivationDataType | None,
     *,
     label: str,
@@ -213,6 +220,7 @@ def _create_engine(
         "backend": _backend(backend_name, cpu_threads),
         "max_num_tokens": max_num_tokens,
         "enable_speculative_decoding": speculative,
+        "enable_ynnpack": ynnpack,
         "enable_benchmark": True,
     }
     if activation_data_type is not None:
