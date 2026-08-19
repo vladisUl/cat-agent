@@ -276,7 +276,7 @@ class CoreServer:
                     "type": "acquired",
                     "client": owner,
                     "core": self._core_info(),
-                    "status": self._telemetry_snapshot(),
+                    "status": self.scheduler.status_snapshot(),
                 },
             )
         else:
