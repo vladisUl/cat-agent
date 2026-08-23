@@ -10,7 +10,7 @@ import unittest
 
 from orchestration.manager import ManagerTurn
 from orchestration.system_events import SystemEvent
-from litert_agent.core_server import CoreServer
+from litert_agent.core_server import CoreServer, read_firebase_tokens
 from litert_agent.model_client import InferenceTiming
 
 
@@ -224,33 +224,52 @@ class CoreServerTest(unittest.TestCase):
                 server.close()
                 thread.join(timeout=1.0)
 
-    def test_notification_prefers_human_then_fallback(self) -> None:
+    def test_notification_uses_firebase_only_without_human(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             server, _scheduler, thread = self._start(root)
-            fallback_sock, fallback_reader = self._connect(server.path)
             human_sock, human_reader = self._connect(server.path)
+            pushed: list[str] = []
+            push_seen = threading.Event()
+
+            def fake_push(text: str) -> None:
+                pushed.append(text)
+                push_seen.set()
+
+            server._send_firebase_push = fake_push  # type: ignore[method-assign]
             try:
-                send(
-                    fallback_sock,
-                    {"type": "register_fallback", "client": "telegram"},
-                )
-                self.assertEqual(recv(fallback_reader)["type"], "fallback_registered")
-
                 server._deliver_notification(ManagerTurn("reply", "one"))
-                self.assertEqual(recv(fallback_reader)["text"], "one")
+                self.assertTrue(push_seen.wait(timeout=1.0))
+                self.assertEqual(pushed, ["one"])
 
+                push_seen.clear()
                 send(human_sock, {"type": "acquire", "client": "tui"})
                 self.assertEqual(recv(human_reader)["type"], "acquired")
                 server._deliver_notification(ManagerTurn("reply", "two"))
                 self.assertEqual(recv(human_reader)["text"], "two")
+                self.assertFalse(push_seen.wait(timeout=0.05))
+                self.assertEqual(pushed, ["one"])
             finally:
-                fallback_sock.close()
                 human_sock.close()
-                fallback_reader.close()
                 human_reader.close()
                 server.close()
                 thread.join(timeout=1.0)
+
+    def test_firebase_token_file_keeps_last_token_per_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "tokens.txt"
+            path.write_text(
+                "\n".join(
+                    (
+                        json.dumps({"id": "phone", "token": "old"}),
+                        json.dumps({"id": "tablet", "token": "tab"}),
+                        json.dumps({"id": "phone", "token": "new"}),
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(read_firebase_tokens(path), ["new", "tab"])
 
 
 if __name__ == "__main__":
