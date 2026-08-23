@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 import json
 import logging
 import os
@@ -21,6 +22,46 @@ from .voice_scheduler import (
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_CORE_SOCKET = Path("/run/cat-agent/core.sock")
+DEFAULT_FIREBASE_DIR = Path("/opt/firebase")
+FIREBASE_CREDENTIALS_FILE = Path(
+    os.environ.get(
+        "CAT_AGENT_FIREBASE_CREDENTIALS",
+        str(DEFAULT_FIREBASE_DIR / "zigbee.json"),
+    )
+)
+FIREBASE_TOKENS_FILE = Path(
+    os.environ.get(
+        "CAT_AGENT_FIREBASE_TOKENS",
+        str(DEFAULT_FIREBASE_DIR / "tokens.txt"),
+    )
+)
+FIREBASE_TITLE = os.environ.get("CAT_AGENT_FIREBASE_TITLE", "Гена").strip() or "Гена"
+FIREBASE_CHANNEL_ID = os.environ.get("CAT_AGENT_FIREBASE_CHANNEL_ID", "").strip()
+FIREBASE_TTL_SECONDS = int(os.environ.get("CAT_AGENT_FIREBASE_TTL", "3600"))
+
+
+def read_firebase_tokens(path: Path) -> list[str]:
+    """Read JSONL {id, token} records, keeping the last token for each id."""
+    tokens_by_id: dict[str, str] = {}
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, raw in enumerate(handle, start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid JSON in {path}:{line_number}: {exc}") from exc
+            if not isinstance(item, dict):
+                raise ValueError(f"invalid token record in {path}:{line_number}")
+            token_id = str(item.get("id", "")).strip()
+            token = str(item.get("token", "")).strip()
+            if not token_id or not token:
+                raise ValueError(
+                    f"token record requires non-empty id and token in {path}:{line_number}"
+                )
+            tokens_by_id[token_id] = token
+    return list(tokens_by_id.values())
 
 
 @dataclass(slots=True)
@@ -72,6 +113,7 @@ class CoreServer:
         )
 
         self._lock = threading.RLock()
+        self._firebase_lock = threading.Lock()
         self._human: _ClientConnection | None = None
         self._voice_turn: _ClientConnection | None = None
         self._fallback: _ClientConnection | None = None
@@ -424,20 +466,101 @@ class CoreServer:
 
     def _deliver_notification(self, turn: ManagerTurn) -> None:
         with self._lock:
-            target = self._human if self._human is not None else self._fallback
-            route = (
-                "human"
-                if self._human is not None
-                else ("fallback" if self._fallback is not None else "none")
+            target = self._human
+
+        if target is not None:
+            LOGGER.info("CORE notification route=human target=%s", target.client_name)
+            self._safe_send(
+                target,
+                {"type": "notification", "kind": turn.kind, "text": turn.text},
             )
-        if target is None:
-            LOGGER.warning("CORE notification dropped: no human/fallback route text=%r", turn.text)
             return
-        LOGGER.info("CORE notification route=%s target=%s", route, target.client_name)
-        self._safe_send(
-            target,
-            {"type": "notification", "kind": turn.kind, "text": turn.text},
-        )
+
+        LOGGER.info("CORE notification route=firebase")
+        threading.Thread(
+            target=self._send_firebase_push,
+            args=(turn.text,),
+            name="cat-agent-firebase",
+            daemon=True,
+        ).start()
+
+    def _send_firebase_push(self, text: str) -> None:
+        try:
+            with self._firebase_lock:
+                if not FIREBASE_CREDENTIALS_FILE.is_file():
+                    raise FileNotFoundError(
+                        f"Firebase credentials not found: {FIREBASE_CREDENTIALS_FILE}"
+                    )
+                if not FIREBASE_TOKENS_FILE.is_file():
+                    raise FileNotFoundError(
+                        f"Firebase token file not found: {FIREBASE_TOKENS_FILE}"
+                    )
+
+                try:
+                    import firebase_admin
+                    from firebase_admin import credentials, messaging
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "firebase-admin is not installed in the cat-agent Python environment"
+                    ) from exc
+
+                try:
+                    firebase_admin.get_app()
+                except ValueError:
+                    firebase_admin.initialize_app(
+                        credentials.Certificate(str(FIREBASE_CREDENTIALS_FILE))
+                    )
+
+                tokens = read_firebase_tokens(FIREBASE_TOKENS_FILE)
+                if not tokens:
+                    raise RuntimeError(
+                        f"Firebase token file is empty: {FIREBASE_TOKENS_FILE}"
+                    )
+
+                android_notification = None
+                if FIREBASE_CHANNEL_ID:
+                    android_notification = messaging.AndroidNotification(
+                        channel_id=FIREBASE_CHANNEL_ID
+                    )
+
+                android = messaging.AndroidConfig(
+                    priority="high",
+                    ttl=timedelta(seconds=FIREBASE_TTL_SECONDS),
+                    notification=android_notification,
+                )
+                notification = messaging.Notification(
+                    title=FIREBASE_TITLE,
+                    body=text,
+                )
+
+                success = 0
+                failure = 0
+                for offset in range(0, len(tokens), 500):
+                    batch = tokens[offset : offset + 500]
+                    message = messaging.MulticastMessage(
+                        tokens=batch,
+                        notification=notification,
+                        android=android,
+                    )
+                    response = messaging.send_each_for_multicast(message)
+                    success += response.success_count
+                    failure += response.failure_count
+                    if response.failure_count:
+                        for index, result in enumerate(response.responses):
+                            if not result.success:
+                                LOGGER.warning(
+                                    "Firebase token delivery failed index=%d error=%s",
+                                    offset + index,
+                                    result.exception,
+                                )
+
+                LOGGER.info(
+                    "Firebase notification sent success=%d failure=%d",
+                    success,
+                    failure,
+                )
+        except Exception:
+            LOGGER.exception("Firebase notification failed")
 
     def _deliver_status(self, status: dict[str, object]) -> None:
         with self._lock:
