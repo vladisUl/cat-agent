@@ -3,7 +3,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
-from litert_agent.core_scheduler import MANAGER_PRIORITY
+from litert_agent.core_scheduler import (
+    DEFAULT_EVENT_PRIORITY,
+    HARDWARE_EVENT_PRIORITY,
+    MANAGER_PRIORITY,
+)
 from litert_agent.voice_scheduler import (
     VOICE_PRIORITY,
     VOICE_REQUEST_LABEL,
@@ -32,7 +36,11 @@ class VoiceSchedulerTest(unittest.TestCase):
         self.assertEqual(first.payload, "голосовой запрос")
         self.assertEqual(second.label, "user")
         self.assertEqual(second.priority, MANAGER_PRIORITY)
+
+    def test_voice_priority_is_highest_core_priority(self) -> None:
         self.assertLess(VOICE_PRIORITY, MANAGER_PRIORITY)
+        self.assertLess(VOICE_PRIORITY, HARDWARE_EVENT_PRIORITY)
+        self.assertLess(VOICE_PRIORITY, DEFAULT_EVENT_PRIORITY)
 
 
 if __name__ == "__main__":
