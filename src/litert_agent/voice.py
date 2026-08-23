@@ -104,7 +104,6 @@ def _transcribe_command(gigaam_model: Any, wav_path: Path) -> str:
     text = _gigaam_text(result)
     elapsed = time.monotonic() - started
     print(f"GIGAAM_TIME: {elapsed:.3f} с")
-    print(f"USER: {text or '[пусто]'}")
     return text
 
 
@@ -124,7 +123,6 @@ def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
     speaker = StreamingTTSPlayer(piper_voice, started)
     speaker_started = False
     streamed_visible = False
-    printed_stream = False
 
     def submit_speech(text: str) -> None:
         nonlocal speaker_started
@@ -147,7 +145,6 @@ def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
                 "text": user_text,
             },
         )
-        print(f"CORE_VOICE_SENT: {user_text}")
 
         for raw in reader:
             line = raw.strip()
@@ -164,11 +161,10 @@ def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
             kind = str(item.get("type", ""))
 
             if kind == "voice_accepted":
-                print(f"CORE_VOICE_ACCEPTED: priority={item.get('priority')}")
                 continue
 
             if kind == "busy":
-                print(f"CORE_BUSY: {item.get('text', 'Гена занят')}")
+                print(f"CORE_BUSY: {item.get('owner', '')}")
                 return ""
 
             if kind == "model_event" and item.get("label") == "manager":
@@ -185,19 +181,11 @@ def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
                     continue
 
                 streamed_visible = True
-                if not printed_stream:
-                    print("GENA: ", end="", flush=True)
-                    printed_stream = True
-                print(visible, end="", flush=True)
                 submit_speech(visible)
                 continue
 
             if kind == "reply":
                 final_text = str(item.get("text", "")).strip()
-                if printed_stream:
-                    print()
-                elif final_text:
-                    print(f"GENA: {final_text}")
 
                 if final_text and not streamed_visible:
                     submit_speech(final_text)
@@ -229,11 +217,6 @@ def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
             pass
 
 
-def _wait_message() -> None:
-    words = " или ".join(f"«{word}»" for word in sorted(WAKE_WORDS))
-    print(f"WAIT_WAKE: скажи {words}, сделай короткую паузу, затем команду")
-
-
 def _run_loop(
     alsaaudio_module: Any,
     vosk_module: Any,
@@ -252,8 +235,6 @@ def _run_loop(
     command_started_at = 0.0
     speech_started = False
     command_bytes = 0
-
-    _wait_message()
 
     try:
         while True:
@@ -283,11 +264,7 @@ def _run_loop(
 
                 wake_text = _json_text(wake_recognizer.Result(), "text")
                 if wake_text not in WAKE_WORDS:
-                    if wake_text:
-                        print(f"WAKE_REJECT: {wake_text}")
                     continue
-
-                print(f"WAKE_FINAL: {wake_text}")
 
                 # Do not let the acknowledgement tone leak into command capture.
                 # Capture is reopened after the synchronous beep, which also clears
@@ -306,7 +283,6 @@ def _run_loop(
                 speech_started = False
                 command_bytes = 0
                 state = "wait_command"
-                print("COMMAND_WAIT: говори")
                 continue
 
             assert command_recognizer is not None
@@ -324,7 +300,6 @@ def _run_loop(
                 if full_text:
                     speech_started = True
                     command_ready = True
-                    print(f"COMMAND_FINAL_VOSK: {full_text}")
                 else:
                     print("SILENCE_ENDPOINT")
             else:
@@ -371,7 +346,6 @@ def _run_loop(
             wake_recognizer = _make_wake_recognizer(vosk_module, vosk_model)
             command_recognizer = None
             state = "wait_wake"
-            _wait_message()
 
     finally:
         if command_wav is not None:
