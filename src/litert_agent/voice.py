@@ -12,7 +12,7 @@ import wave
 
 from .core_server import DEFAULT_CORE_SOCKET
 from .voice_stream import ManagerVoiceStream, TextFragmenter
-from .voice_tts import StreamingTTSPlayer
+from .voice_tts import StreamingTTSPlayer, play_wake_beep
 
 
 VOSK_MODEL_PATH = Path(
@@ -251,7 +251,6 @@ def _run_loop(
     command_wav: wave.Wave_write | None = None
     command_started_at = 0.0
     speech_started = False
-    last_partial = ""
     command_bytes = 0
 
     _wait_message()
@@ -289,11 +288,22 @@ def _run_loop(
                     continue
 
                 print(f"WAKE_FINAL: {wake_text}")
+
+                # Do not let the acknowledgement tone leak into command capture.
+                # Capture is reopened after the synchronous beep, which also clears
+                # any samples accumulated while the speaker was active.
+                pcm.close()
+                try:
+                    play_wake_beep()
+                except Exception as exc:
+                    print(f"WAKE_BEEP_ERROR: {type(exc).__name__}: {exc}")
+                finally:
+                    pcm = _open_microphone(alsaaudio_module)
+
                 command_recognizer = _make_command_recognizer(vosk_module, vosk_model)
                 command_wav = _open_command_wav(COMMAND_WAV_PATH)
                 command_started_at = time.monotonic()
                 speech_started = False
-                last_partial = ""
                 command_bytes = 0
                 state = "wait_command"
                 print("COMMAND_WAIT: говори")
@@ -321,9 +331,6 @@ def _run_loop(
                 partial = _json_text(command_recognizer.PartialResult(), "partial")
                 if partial:
                     speech_started = True
-                    if partial != last_partial:
-                        print(f"COMMAND_PARTIAL: {partial}")
-                        last_partial = partial
 
             elapsed = time.monotonic() - command_started_at
             if not speech_started and elapsed >= NO_COMMAND_TIMEOUT_SECONDS:
