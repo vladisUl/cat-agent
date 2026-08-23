@@ -7,7 +7,9 @@ name = "cat-agent"
 version = "0.1.0"
 description = "Experimental local LLM agent runtime"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "websockets>=12,<16",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
