@@ -11,6 +11,7 @@ import unittest
 from orchestration.manager import ManagerTurn
 from orchestration.system_events import SystemEvent
 from litert_agent.core_server import CoreServer
+from litert_agent.model_client import InferenceTiming
 
 
 class FakeRuntime:
@@ -29,8 +30,10 @@ class FakeRuntime:
 class FakeScheduler:
     def __init__(self) -> None:
         self.users: list[str] = []
+        self.voice_users: list[str] = []
         self.events: list[tuple[SystemEvent, int, bool]] = []
         self.started = False
+        self.active_label = ""
 
     def start(self) -> None:
         self.started = True
@@ -41,11 +44,17 @@ class FakeScheduler:
     def submit_user(self, text: str) -> None:
         self.users.append(text)
 
+    def submit_voice(self, text: str) -> None:
+        self.voice_users.append(text)
+
+    def active_request_label(self) -> str:
+        return self.active_label
+
     def enqueue_external_event(self, event, *, priority: int, coalesce: bool) -> None:
         self.events.append((event, priority, coalesce))
 
     def status_snapshot(self) -> dict[str, object]:
-        return {"state": "IDLE", "pending": 0}
+        return {"state": "IDLE", "pending": 0, "label": self.active_label}
 
 
 class FakeBundle:
@@ -131,6 +140,59 @@ class CoreServerTest(unittest.TestCase):
             finally:
                 sock.close()
                 reader.close()
+                server.close()
+                thread.join(timeout=1.0)
+
+    def test_voice_turn_routes_to_voice_without_replacing_human_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            server, scheduler, thread = self._start(root)
+            human_sock, human_reader = self._connect(server.path)
+            voice_sock, voice_reader = self._connect(server.path)
+            try:
+                send(human_sock, {"type": "acquire", "client": "tui"})
+                self.assertEqual(recv(human_reader)["type"], "acquired")
+                self.assertEqual(server.session_owner(), "tui")
+
+                send(
+                    voice_sock,
+                    {"type": "voice", "client": "voice", "text": "температура"},
+                )
+                accepted = recv(voice_reader)
+                self.assertEqual(accepted["type"], "voice_accepted")
+                self.assertEqual(accepted["priority"], -10)
+                self.assertEqual(scheduler.voice_users, ["температура"])
+                self.assertEqual(server.session_owner(), "tui")
+
+                scheduler.active_label = "voice"
+                timing = InferenceTiming(
+                    "decode",
+                    time.monotonic(),
+                    0.5,
+                    None,
+                    None,
+                    None,
+                )
+                server._deliver_model_event("manager", "chunk", "двадцать", timing)
+                model_event = recv(voice_reader)
+                self.assertEqual(model_event["type"], "model_event")
+                self.assertEqual(model_event["payload"], "двадцать")
+
+                server._deliver_human_turn(ManagerTurn("reply", "двадцать градусов"))
+                reply = recv(voice_reader)
+                self.assertEqual(reply["type"], "reply")
+                self.assertEqual(reply["text"], "двадцать градусов")
+                self.assertEqual(server.session_owner(), "tui")
+
+                scheduler.active_label = "user"
+                server._deliver_human_turn(ManagerTurn("reply", "обычный ответ"))
+                human_reply = recv(human_reader)
+                self.assertEqual(human_reply["text"], "обычный ответ")
+            finally:
+                human_sock.close()
+                voice_sock.close()
+                human_reader.close()
+                voice_reader.close()
                 server.close()
                 thread.join(timeout=1.0)
 
