@@ -13,6 +13,11 @@ from orchestration.manager import ManagerTurn
 
 from .core_scheduler import CoreScheduler, HARDWARE_EVENT_PRIORITY
 from .model_client import InferenceTiming
+from .voice_scheduler import (
+    VOICE_PRIORITY,
+    VOICE_REQUEST_LABEL,
+    VoiceCoreScheduler,
+)
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_CORE_SOCKET = Path("/run/cat-agent/core.sock")
@@ -58,7 +63,7 @@ class CoreServer:
         env_path = os.getenv("CAT_AGENT_CORE_SOCKET", "").strip()
         self.path = Path(env_path) if env_path else (path or DEFAULT_CORE_SOCKET)
         self.bundle = bundle
-        self.scheduler = scheduler or CoreScheduler(
+        self.scheduler = scheduler or VoiceCoreScheduler(
             bundle,
             on_human_turn=self._deliver_human_turn,
             on_notification=self._deliver_notification,
@@ -68,6 +73,7 @@ class CoreServer:
 
         self._lock = threading.RLock()
         self._human: _ClientConnection | None = None
+        self._voice_turn: _ClientConnection | None = None
         self._fallback: _ClientConnection | None = None
         self._clients: list[_ClientConnection] = []
         self._server_socket: socket.socket | None = None
@@ -135,6 +141,7 @@ class CoreServer:
         with self._lock:
             clients = list(self._clients)
             self._human = None
+            self._voice_turn = None
             self._fallback = None
         for client in clients:
             client.close()
@@ -190,6 +197,17 @@ class CoreServer:
 
         if message_type == "register_fallback":
             self._register_fallback(client, str(item.get("client", "telegram")))
+            return
+
+        if message_type == "voice":
+            text = str(item.get("text", "")).strip()
+            if not text:
+                raise ValueError("voice text must be non-empty")
+            self._submit_voice_turn(
+                client,
+                text,
+                str(item.get("client", "voice")),
+            )
             return
 
         if message_type == "user":
@@ -293,6 +311,57 @@ class CoreServer:
                 self._human = None
             client.human_owner = False
 
+    def _submit_voice_turn(
+        self,
+        client: _ClientConnection,
+        text: str,
+        name: str,
+    ) -> None:
+        client_name = name.strip() or "voice"
+        with self._lock:
+            if self._voice_turn is not None:
+                current = self._voice_turn.client_name
+                accepted = False
+            else:
+                self._voice_turn = client
+                client.client_name = client_name
+                current = client_name
+                accepted = True
+
+        if not accepted:
+            self._safe_send(
+                client,
+                {
+                    "type": "busy",
+                    "owner": current,
+                    "text": "Голосовой запрос уже выполняется",
+                },
+            )
+            return
+
+        try:
+            submit_voice = getattr(self.scheduler, "submit_voice")
+            submit_voice(text)
+        except Exception:
+            with self._lock:
+                if self._voice_turn is client:
+                    self._voice_turn = None
+            raise
+
+        LOGGER.info(
+            "CORE transient voice turn accepted client=%s priority=%d",
+            client_name,
+            VOICE_PRIORITY,
+        )
+        self._safe_send(
+            client,
+            {
+                "type": "voice_accepted",
+                "client": client_name,
+                "priority": VOICE_PRIORITY,
+            },
+        )
+
     def _register_fallback(self, client: _ClientConnection, name: str) -> None:
         client_name = name.strip() or "telegram"
         with self._lock:
@@ -313,6 +382,11 @@ class CoreServer:
             if self._human is client:
                 LOGGER.info("CORE human session auto-release client=%s", client.client_name)
                 self._human = None
+            if self._voice_turn is client:
+                LOGGER.info(
+                    "CORE voice client disconnected while turn is pending client=%s",
+                    client.client_name,
+                )
             if self._fallback is client:
                 LOGGER.info("CORE fallback channel disconnected client=%s", client.client_name)
                 self._fallback = None
@@ -324,6 +398,20 @@ class CoreServer:
             client.fallback = False
 
     def _deliver_human_turn(self, turn: ManagerTurn) -> None:
+        route = self._active_request_label()
+        if route == VOICE_REQUEST_LABEL:
+            with self._lock:
+                target = self._voice_turn
+                self._voice_turn = None
+            if target is None:
+                LOGGER.warning("CORE voice reply has no voice client: %r", turn.text)
+                return
+            self._safe_send(
+                target,
+                {"type": "reply", "kind": turn.kind, "text": turn.text},
+            )
+            return
+
         with self._lock:
             target = self._human
         if target is None:
@@ -364,8 +452,12 @@ class CoreServer:
         payload: str,
         timing: InferenceTiming,
     ) -> None:
+        route = self._active_request_label()
         with self._lock:
-            target = self._human
+            if route == VOICE_REQUEST_LABEL:
+                target = self._voice_turn
+            else:
+                target = self._human
         if target is None:
             return
         self._safe_send(
@@ -378,6 +470,12 @@ class CoreServer:
                 "timing": self._timing_dict(timing),
             },
         )
+
+    def _active_request_label(self) -> str:
+        active_request_label = getattr(self.scheduler, "active_request_label", None)
+        if callable(active_request_label):
+            return str(active_request_label())
+        return str(self.scheduler.status_snapshot().get("label", ""))
 
     def _core_info(self) -> dict[str, object]:
         manager_warm = self.bundle.manager_warm
