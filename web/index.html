@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Гена</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: Canvas;
+      color: CanvasText;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+    }
+    .app {
+      width: min(900px, 100%);
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+    header {
+      padding: 14px 18px;
+      border-bottom: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 650;
+    }
+    #status {
+      font-size: 13px;
+      opacity: .75;
+      white-space: nowrap;
+    }
+    #messages {
+      overflow-y: auto;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .message {
+      max-width: 82%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.4;
+    }
+    .user {
+      align-self: flex-end;
+      background: color-mix(in srgb, AccentColor 24%, Canvas);
+    }
+    .assistant {
+      align-self: flex-start;
+      background: color-mix(in srgb, CanvasText 10%, Canvas);
+    }
+    .system {
+      align-self: center;
+      max-width: 100%;
+      padding: 4px 8px;
+      font-size: 13px;
+      opacity: .7;
+    }
+    form {
+      border-top: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+    }
+    textarea {
+      resize: none;
+      min-height: 44px;
+      max-height: 160px;
+      padding: 10px 12px;
+      border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+      border-radius: 10px;
+      font: inherit;
+      background: Canvas;
+      color: CanvasText;
+    }
+    button {
+      min-width: 96px;
+      border: 0;
+      border-radius: 10px;
+      padding: 0 18px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled, textarea:disabled {
+      opacity: .5;
+      cursor: default;
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>Гена</h1>
+      <div id="status">подключение…</div>
+    </header>
+
+    <section id="messages" aria-live="polite"></section>
+
+    <form id="composer">
+      <textarea id="input" rows="1" placeholder="Сообщение" disabled></textarea>
+      <button id="send" type="submit" disabled>Отправить</button>
+    </form>
+  </main>
+
+  <script>
+    const messages = document.getElementById("messages");
+    const statusEl = document.getElementById("status");
+    const form = document.getElementById("composer");
+    const input = document.getElementById("input");
+    const send = document.getElementById("send");
+
+    let ws = null;
+    let acquired = false;
+    let reconnectTimer = null;
+
+    let streamMode = "idle";
+    let streamBuffer = "";
+    let streamNode = null;
+
+    function setReady(value, label) {
+      acquired = value;
+      input.disabled = !value;
+      send.disabled = !value;
+      statusEl.textContent = label;
+      if (value) input.focus();
+    }
+
+    function addMessage(role, text) {
+      const node = document.createElement("div");
+      node.className = `message ${role}`;
+      node.textContent = text;
+      messages.appendChild(node);
+      messages.scrollTop = messages.scrollHeight;
+      return node;
+    }
+
+    function resetStream() {
+      streamMode = "idle";
+      streamBuffer = "";
+      streamNode = null;
+    }
+
+    function appendStream(text) {
+      if (!text) return;
+      if (!streamNode) streamNode = addMessage("assistant", "");
+      streamNode.textContent += text;
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function handleModelEvent(msg) {
+      if (msg.label !== "manager") return;
+
+      if (msg.event === "decode_start") {
+        streamMode = "pending";
+        streamBuffer = "";
+        streamNode = null;
+        return;
+      }
+
+      if (msg.event !== "chunk" || streamMode === "hidden") return;
+      const chunk = String(msg.payload || "");
+
+      if (streamMode === "visible") {
+        appendStream(chunk);
+        return;
+      }
+
+      streamBuffer += chunk;
+      const text = streamBuffer;
+      const prefixes = ["/work#", "ASK\n", "REPLY\n"];
+
+      if (text.startsWith("/work#")) {
+        streamMode = "hidden";
+        streamBuffer = "";
+        return;
+      }
+
+      if (text.startsWith("ASK\n")) {
+        streamMode = "visible";
+        streamBuffer = "";
+        appendStream(text.slice(4));
+        return;
+      }
+
+      if (text.startsWith("REPLY\n")) {
+        streamMode = "visible";
+        streamBuffer = "";
+        appendStream(text.slice(6));
+        return;
+      }
+
+      if (prefixes.some(prefix => prefix.startsWith(text))) return;
+
+      if (text.includes("\n")) {
+        streamMode = "hidden";
+        streamBuffer = "";
+      }
+    }
+
+    function finalizeReply(text) {
+      const finalText = String(text || "");
+      if (streamNode) {
+        streamNode.textContent = finalText;
+      } else if (finalText) {
+        addMessage("assistant", finalText);
+      }
+      resetStream();
+    }
+
+    function handleMessage(msg) {
+      switch (msg.type) {
+        case "acquired":
+          setReady(true, "подключено");
+          break;
+        case "busy":
+          setReady(false, `занято: ${msg.owner || "другой клиент"}`);
+          break;
+        case "model_event":
+          handleModelEvent(msg);
+          break;
+        case "reply":
+          finalizeReply(msg.text);
+          break;
+        case "notification":
+          addMessage("assistant", String(msg.text || ""));
+          break;
+        case "error":
+          addMessage("system", `Ошибка: ${msg.error || "неизвестная ошибка"}`);
+          break;
+        case "disconnected":
+          setReady(false, "CORE отключён");
+          break;
+      }
+    }
+
+    function connect() {
+      clearTimeout(reconnectTimer);
+      setReady(false, "подключение…");
+
+      const url = `ws://${location.hostname}:8765`;
+      ws = new WebSocket(url);
+
+      ws.onmessage = event => {
+        try {
+          handleMessage(JSON.parse(event.data));
+        } catch (_) {
+          addMessage("system", "Получено некорректное сообщение сервера");
+        }
+      };
+
+      ws.onclose = () => {
+        setReady(false, "нет соединения");
+        reconnectTimer = setTimeout(connect, 2000);
+      };
+
+      ws.onerror = () => {
+        statusEl.textContent = "ошибка соединения";
+      };
+    }
+
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text || !acquired || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+      addMessage("user", text);
+      ws.send(JSON.stringify({type: "user", text}));
+      input.value = "";
+      input.style.height = "auto";
+    });
+
+    input.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
+
+    input.addEventListener("input", () => {
+      input.style.height = "auto";
+      input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+    });
+
+    connect();
+  </script>
+</body>
+</html>
