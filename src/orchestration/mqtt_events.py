@@ -229,12 +229,19 @@ class MqttEventMonitor:
                 continue
 
             if binding.value_type == "boolean":
-                if previous_payload is None or binding.field not in previous_payload:
-                    continue
-                previous = self._canonical_value(
-                    previous_payload[binding.field],
-                    binding.value_type,
-                )
+                previous: str | None
+                if previous_payload is not None and binding.field in previous_payload:
+                    previous = self._canonical_value(
+                        previous_payload[binding.field],
+                        binding.value_type,
+                    )
+                elif binding.values == ("true",):
+                    previous = "false"
+                elif binding.values == ("false",):
+                    previous = "true"
+                else:
+                    previous = None
+
                 if previous is None or previous == current:
                     continue
             if current not in binding.values:
