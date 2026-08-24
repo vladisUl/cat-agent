@@ -62,6 +62,7 @@ class AgentWorker:
         skills: tuple[Skill, ...],
         *,
         method: str | None = None,
+        _log_input: bool = True,
     ) -> None:
         """Start one logical activation without consuming its first model TT."""
         if self.state is not AgentState.FREE:
@@ -102,15 +103,16 @@ class AgentWorker:
         self._steps_used = 0
         self._repeated = {}
         self.state = AgentState.RUNNING
-        LOGGER.info(
-            "%s START method=%s skills=%s bootstrap_reused=%s workspace=%s task=%r",
-            self.agent_id,
-            method or "ordinary",
-            ",".join(skill.name for skill in skills),
-            reused,
-            self.workspace,
-            task,
-        )
+        if _log_input:
+            LOGGER.info(
+                "%s START method=%s skills=%s bootstrap_reused=%s workspace=%s task=%r",
+                self.agent_id,
+                method or "ordinary",
+                ",".join(skill.name for skill in skills),
+                reused,
+                self.workspace,
+                task,
+            )
 
     def start(
         self,
@@ -121,6 +123,84 @@ class AgentWorker:
     ) -> AgentOutcome:
         self.begin(task, skills, method=method)
         return self._drive()
+
+    def plan_first_command(
+        self,
+        task: str,
+        skills: tuple[Skill, ...],
+        *,
+        method: str | None = None,
+    ) -> str:
+        """Ask the ordinary agent for its first command without executing it."""
+        self.begin(task, skills, method=method)
+        assert self._messages is not None
+        self._steps_used = 1
+        step = 1
+        try:
+            response = self.client.chat(self._messages)
+        except ModelClientError as exc:
+            LOGGER.exception("%s step %d model request failed", self.agent_id, step)
+            self._release(preserve_session=False)
+            raise RuntimeError(f"model request failed: {exc}") from exc
+
+        LOGGER.info(
+            "%s step %d response in %.3f s: prompt=%s cached=%s new=%s "
+            "prefill=%s completion=%s generate=%s",
+            self.agent_id,
+            step,
+            response.elapsed_seconds,
+            response.prompt_tokens if response.prompt_tokens is not None else "?",
+            response.cached_tokens if response.cached_tokens is not None else "?",
+            response.prompt_evaluated_tokens
+            if response.prompt_evaluated_tokens is not None
+            else "?",
+            f"{response.prompt_seconds:.3f}s"
+            if response.prompt_seconds is not None
+            else "?",
+            response.completion_tokens if response.completion_tokens is not None else "?",
+            f"{response.generation_seconds:.3f}s"
+            if response.generation_seconds is not None
+            else "?",
+        )
+        LOGGER.info("%s step %d MODEL RESPONSE\n%s", self.agent_id, step, response.content)
+        self._messages.append({"role": "assistant", "content": response.content})
+
+        try:
+            command = unwrap_work_command(response.content.strip())
+        except ValueError as exc:
+            self._release(preserve_session=False)
+            raise RuntimeError(f"invalid external event command: {exc}") from exc
+        if command is None:
+            self._release(preserve_session=False)
+            raise RuntimeError("external event setup requires one /work# command")
+
+        self._release(preserve_session=True)
+        return command
+
+    def begin_with_tool_result(
+        self,
+        task: str,
+        skills: tuple[Skill, ...],
+        command: str,
+        result: str,
+        *,
+        method: str | None = None,
+    ) -> None:
+        """Resume a deferred tool call as task -> command -> real tool result."""
+        command_text = command.strip()
+        result_text = result.strip()
+        if not command_text:
+            raise ValueError("deferred command must be non-empty")
+        if not result_text:
+            raise ValueError("deferred result must be non-empty")
+
+        self.begin(task, skills, method=method, _log_input=False)
+        assert self._messages is not None
+        self._messages.append(
+            {"role": "assistant", "content": f"/work#{command_text}"}
+        )
+        self._messages.append({"role": "user", "content": result_text})
+        LOGGER.info("%s EVENT RESULT %r", self.agent_id, result_text)
 
     def step(self) -> AgentOutcome | None:
         """Execute exactly one model TICK->TOCK and stop at the next TT boundary."""
