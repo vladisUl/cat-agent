@@ -9,6 +9,7 @@ from .agent import AgentState
 from .event_store import EventStore, EventStoreError
 from .manager import ManagerRuntime, ManagerTurn
 from .model_client import ModelClientError
+from .mqtt_events import MqttTopicCatalog
 from .protocol import ManagerAction, parse_manager_output
 from .skills import SkillBaseError
 from .system_events import SystemEvent
@@ -24,6 +25,7 @@ class AssistantManagerRuntime(ManagerRuntime):
     def __init__(self, *args, event_store: EventStore | None = None, **kwargs) -> None:
         self.event_store = event_store or EventStore()
         super().__init__(*args, **kwargs)
+        self.mqtt_catalog = MqttTopicCatalog(self.prompt_store.prompt_dir / "mqtt.txt")
 
     def _bootstrap_prompt(self) -> str:
         # sys_prompt_manager.txt is the complete manager BASE.
@@ -48,7 +50,13 @@ class AssistantManagerRuntime(ManagerRuntime):
         self._append_user(user_text)
         return self._drive_manager()
 
-    def external_event(self, source: str, name: str) -> SystemEvent | None:
+    def external_event(
+        self,
+        source: str,
+        name: str,
+        *,
+        value: str | None = None,
+    ) -> SystemEvent | None:
         """Resolve one real external event into the saved TASK/QUERY it activates."""
         source = source.strip().lower()
         name = name.strip()
@@ -91,7 +99,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         return SystemEvent(
             source=source,
             name=name,
-            task="",
+            task="" if value is None else value.strip(),
             created_monotonic=time.monotonic(),
             task_id=task.task_id,
         )
@@ -236,6 +244,7 @@ class AssistantManagerRuntime(ManagerRuntime):
                 method,
                 task_text,
                 skill_names,
+                skills,
             )
 
         try:
@@ -256,10 +265,42 @@ class AssistantManagerRuntime(ManagerRuntime):
         method: str,
         task_text: str,
         skill_names: tuple[str, ...],
+        skills,
     ) -> str:
+        if "mqtt" not in skill_names:
+            return "SYSTEM_ERROR\nexternal event currently requires mqtt skill"
+
         store = self.system_runtime.task_store
         if store is None:
             return "SYSTEM_ERROR\ntask store is not configured"
+
+        worker = self.pool.acquire_event()
+        if worker is None:
+            return "SYSTEM_ERROR\nнет свободного событийного агента"
+
+        try:
+            command = worker.plan_first_command(task_text, skills, method=method)
+        except Exception as exc:
+            LOGGER.exception("external MQTT task planning failed")
+            if worker.state is not AgentState.FREE:
+                worker.sleep_to_base()
+            return f"SYSTEM_ERROR\n{exc}"
+
+        try:
+            command_argv = shlex.split(command, posix=True)
+        except ValueError as exc:
+            return f"SYSTEM_ERROR\ninvalid agent mqtt command: {exc}"
+        if len(command_argv) != 3 or command_argv[0] != "mqtt_sub.sh":
+            return (
+                "SYSTEM_ERROR\nexternal MQTT event requires agent command "
+                "mqtt_sub.sh TOPIC FIELD"
+            )
+        topic, field = command_argv[1], command_argv[2]
+
+        try:
+            rule = self.mqtt_catalog.require(topic, field)
+        except (FileNotFoundError, ValueError) as exc:
+            return f"SYSTEM_ERROR\n{exc}"
 
         try:
             task = store.create(
@@ -274,7 +315,12 @@ class AssistantManagerRuntime(ManagerRuntime):
                 binding = self.event_store.register(
                     task.task_id,
                     task_text,
-                    source="gpio",
+                    source="mqtt",
+                    topic=topic,
+                    field=field,
+                    value_type=rule.value_type,
+                    values=rule.values,
+                    command=command,
                 )
             except Exception:
                 store.delete(task.task_id)
@@ -283,13 +329,15 @@ class AssistantManagerRuntime(ManagerRuntime):
             return f"SYSTEM_ERROR\n{exc}"
 
         LOGGER.info(
-            "SYSTEM external task created id=%d method=%s event=%s description=%r",
+            "SYSTEM external MQTT task created id=%d method=%s event=%s topic=%s field=%s values=%s",
             task.task_id,
             task.method,
             binding.name,
-            task.description,
+            binding.topic,
+            binding.field,
+            ",".join(binding.values),
         )
-        return f"SYSTEM_OK\nTASK {task.task_id} created for external event"
+        return f"SYSTEM_OK\nTASK {task.task_id} created and started"
 
     def _run_one_shot_agent(self, method: str, task_text: str, skills) -> str:
         worker = self.pool.acquire()
