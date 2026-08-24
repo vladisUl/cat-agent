@@ -46,6 +46,8 @@ class _ProtocolLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if record.levelno >= logging.WARNING:
             return True
+        if record.levelno <= logging.DEBUG:
+            return True
         if record.name not in self._ORCHESTRATION_LOGGERS:
             return True
 
