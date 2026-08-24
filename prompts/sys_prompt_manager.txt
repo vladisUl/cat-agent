@@ -126,8 +126,3 @@ mqtt_pub.sh <topic> <payload>
 [/SKILL]
 
 Список топиков и полей mqtt:
-topics:
-zigbee2mqtt/temp_ulica: климатические данные на улице; поля: temperature, humidity
-zigbee2mqtt/temp_tua: климатические данные дома; поля: temperature, humidity
-zigbee2mqtt/temp_akva: температура в аквариуме; поля: temperature
-zigbee2mqtt/temp_moroz: температура в морозильнике; поля: temperature
