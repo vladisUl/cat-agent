@@ -149,11 +149,14 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         )
         for index in range(1, settings.agent_count + 1)
     ]
+    event_worker_id = (
+        f"agent{settings.agent_count}" if settings.agent_count > 1 else None
+    )
     runtime = AssistantManagerRuntime(
         manager_client,
         skill_base,
         prompt_store,
-        AgentPool(workers),
+        AgentPool(workers, event_worker_id=event_worker_id),
         system_runtime,
         max_steps=settings.max_manager_steps,
         forced_delegate_skills=bench_skills,
