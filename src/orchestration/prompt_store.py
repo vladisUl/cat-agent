@@ -26,7 +26,11 @@ class PromptStore:
             raise FileNotFoundError("Missing prompt files: " + ", ".join(missing))
 
     def manager_system_prompt(self) -> str:
-        return self._read("sys_prompt_manager.txt")
+        system_prompt = self._read("sys_prompt_manager.txt")
+        mqtt_context = self._skill_context("mqtt")
+        if not mqtt_context:
+            return system_prompt
+        return f"{system_prompt.rstrip()}\n{mqtt_context}"
 
     def agent_system_prompt(self, agent_id: str) -> str:
         index = self._agent_index(agent_id)
