@@ -8,6 +8,7 @@ import unittest
 from orchestration.agent import AgentWorker
 from orchestration.assistant_manager import AssistantManagerRuntime
 from orchestration.event_store import EventStore
+from orchestration.manager import AutonomousTaskExecution
 from orchestration.model_client import ChatResponse
 from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
@@ -64,16 +65,21 @@ class AssistantManagerTest(unittest.TestCase):
         )
         return runtime, client
 
-    def test_manager_base_is_exact_system_prompt(self) -> None:
+    def test_manager_base_appends_mqtt_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             runtime, _client = self._runtime(root, ["REPLY\nunused"])
-            expected = (root / "prompts" / "sys_prompt_manager.txt").read_text(
+            system_prompt = (root / "prompts" / "sys_prompt_manager.txt").read_text(
                 encoding="utf-8"
             ).strip()
+            mqtt_catalog = (root / "prompts" / "mqtt.txt").read_text(
+                encoding="utf-8"
+            ).strip()
+            expected = f"{system_prompt}\n{mqtt_catalog}"
             self.assertEqual(runtime.messages[0]["content"].strip(), expected)
             self.assertNotIn("[MANAGER_TOOLS]", runtime.messages[0]["content"])
             self.assertNotIn("[AGENT_EXECUTION_PROTOCOL]", runtime.messages[0]["content"])
+            self.assertIn("zigbee2mqtt/dvigen_verh", runtime.messages[0]["content"])
 
     def test_direct_work_uses_same_manager_session(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -122,33 +128,62 @@ class AssistantManagerTest(unittest.TestCase):
             self.assertEqual(task.skills, ("mqtt",))
             self.assertEqual(task.timer_period_seconds, 60.0)
 
-    def test_external_period_creates_event_bound_query(self) -> None:
+    def test_external_mqtt_query_defers_tool_result_until_event(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            runtime, _client = self._runtime(Path(temp), ["REPLY\nunused"])
-
-            text = "Проверить состояние двери и вернуть результат."
-            result = runtime._execute_task_command(
+            runtime, client = self._runtime(
+                Path(temp),
                 [
-                    "query_timer.sh",
-                    "-1",
-                    "shell",
-                    text,
-                ]
+                    "/work#mqtt_sub.sh zigbee2mqtt/dvigen_verh occupancy",
+                    '{"result":"В коридоре обнаружено движение"}',
+                ],
             )
 
-            self.assertEqual(result, "SYSTEM_OK\nTASK 1 created for external event")
+            text = "Сообщить мне, когда в коридоре появится движение"
+            result = runtime._execute_task_command(
+                ["query_timer.sh", "-1", "mqtt", text]
+            )
+
+            self.assertEqual(result, "SYSTEM_OK\nTASK 1 created and started")
             task = runtime.system_runtime.task_store.require(1)  # type: ignore[union-attr]
             self.assertEqual(task.method, "query")
             self.assertEqual(task.text, text)
-            self.assertEqual(task.description, text)
             self.assertIsNone(task.timer_period_seconds)
-            binding = runtime.event_store.resolve("gpio", "task_gpio1")
-            self.assertIsNotNone(binding)
-            self.assertEqual(binding.task_id, 1)  # type: ignore[union-attr]
 
-            event = runtime.external_event("gpio", "task_gpio1")
+            binding = runtime.event_store.resolve("mqtt", "task_mqtt1")
+            self.assertIsNotNone(binding)
+            assert binding is not None
+            self.assertEqual(binding.task_id, 1)
+            self.assertEqual(binding.topic, "zigbee2mqtt/dvigen_verh")
+            self.assertEqual(binding.field, "occupancy")
+            self.assertEqual(binding.value_type, "boolean")
+            self.assertEqual(binding.values, ("true",))
+            self.assertEqual(
+                binding.command,
+                "mqtt_sub.sh zigbee2mqtt/dvigen_verh occupancy",
+            )
+
+            event = runtime.external_event("mqtt", "task_mqtt1", value="true")
             self.assertIsNotNone(event)
-            self.assertEqual(event.task_id, 1)  # type: ignore[union-attr]
+            assert event is not None
+            self.assertEqual(event.task_id, 1)
+            self.assertEqual(event.task, "true")
+
+            execution = runtime.begin_autonomous_task(event)
+            self.assertIsInstance(execution, AutonomousTaskExecution)
+            assert isinstance(execution, AutonomousTaskExecution)
+            completion = runtime.step_autonomous_task(execution)
+            self.assertIsNotNone(completion)
+            assert completion is not None
+            self.assertEqual(completion.query_task_id, 1)
+            self.assertEqual(completion.query_result, "В коридоре обнаружено движение")
+
+            resumed_messages = client.calls[-1]
+            self.assertEqual(resumed_messages[-3]["content"].strip(), text)
+            self.assertEqual(
+                resumed_messages[-2]["content"],
+                "/work#mqtt_sub.sh zigbee2mqtt/dvigen_verh occupancy",
+            )
+            self.assertEqual(resumed_messages[-1]["content"], "true")
 
     def test_invalid_negative_period_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
