@@ -55,6 +55,8 @@ class AgentWorker:
         self._method: str | None = None
         self._steps_used = 0
         self._repeated: dict[tuple[str, int, str, str], int] = {}
+        self._deferred_command: str | None = None
+        self._deferred_result: str | None = None
 
     def begin(
         self,
@@ -71,6 +73,8 @@ class AgentWorker:
             raise ValueError(f"invalid task method: {method!r}")
         self._skills = skills
         self._method = method
+        self._deferred_command = None
+        self._deferred_result = None
 
         system_context = self.prompt_store.build_agent_system_context(
             self.agent_id,
@@ -186,7 +190,7 @@ class AgentWorker:
         *,
         method: str | None = None,
     ) -> None:
-        """Resume a deferred tool call as task -> command -> real tool result."""
+        """Replay task and substitute a deferred tool result when command repeats."""
         command_text = command.strip()
         result_text = result.strip()
         if not command_text:
@@ -194,13 +198,9 @@ class AgentWorker:
         if not result_text:
             raise ValueError("deferred result must be non-empty")
 
-        self.begin(task, skills, method=method, _log_input=False)
-        assert self._messages is not None
-        self._messages.append(
-            {"role": "assistant", "content": f"/work#{command_text}"}
-        )
-        self._messages.append({"role": "user", "content": result_text})
-        LOGGER.info("%s EVENT RESULT %r", self.agent_id, result_text)
+        self.begin(task, skills, method=method)
+        self._deferred_command = command_text
+        self._deferred_result = result_text
 
     def step(self) -> AgentOutcome | None:
         """Execute exactly one model TICK->TOCK and stop at the next TT boundary."""
@@ -325,6 +325,31 @@ class AgentWorker:
 
         assert directive.command is not None
         LOGGER.info("%s step %d TOOL COMMAND %s", self.agent_id, step, directive.command)
+
+        if self._deferred_result is not None:
+            expected = self._deferred_command
+            if directive.command != expected:
+                text = (
+                    "deferred MQTT command changed: "
+                    f"expected {expected!r}, got {directive.command!r}"
+                )
+                LOGGER.error("%s FAILED %s", self.agent_id, text)
+                self._release(preserve_session=False)
+                return AgentOutcome(self.agent_id, "FAILED", text, step)
+
+            deferred = self._deferred_result
+            self._deferred_command = None
+            self._deferred_result = None
+            LOGGER.info(
+                "%s step %d DEFERRED TOOL RESULT command=%s\n%s",
+                self.agent_id,
+                step,
+                directive.command,
+                deferred,
+            )
+            self._messages.append({"role": "user", "content": deferred})
+            return self._continue_or_limit(step)
+
         result = self._runtime.execute(directive.command)
         LOGGER.info(
             "%s step %d TOOL RESULT operation=%s exit=%d metadata=%r\n%s",
@@ -408,3 +433,5 @@ class AgentWorker:
         self._method = None
         self._steps_used = 0
         self._repeated = {}
+        self._deferred_command = None
+        self._deferred_result = None
