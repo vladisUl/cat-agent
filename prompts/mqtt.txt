@@ -3,3 +3,4 @@ zigbee2mqtt/temp_ulica: климатические данные на улице;
 zigbee2mqtt/temp_tua: климатические данные дома; поля: temperature, humidity
 zigbee2mqtt/temp_akva: температура в аквариуме; поля: temperature
 zigbee2mqtt/temp_moroz: температура в морозильнике; поля: temperature
+zigbee2mqtt/dvigen_verh: движение в коридоре; occupancy: boolean; (true: движение обнаружено)
