@@ -7,12 +7,17 @@ import time
 
 from .agent import AgentState
 from .event_store import EventStore, EventStoreError
-from .manager import ManagerRuntime, ManagerTurn
+from .manager import (
+    AutonomousTaskCompletion,
+    AutonomousTaskExecution,
+    ManagerRuntime,
+    ManagerTurn,
+)
 from .model_client import ModelClientError
 from .mqtt_events import MqttTopicCatalog
 from .protocol import ManagerAction, parse_manager_output
 from .skills import SkillBaseError
-from .system_events import SystemEvent
+from .system_events import SystemEvent, TaskActivation
 from .tasks import TaskStoreError
 from .workspace_command_runtime import unwrap_work_command
 
@@ -103,6 +108,76 @@ class AssistantManagerRuntime(ManagerRuntime):
             created_monotonic=time.monotonic(),
             task_id=task.task_id,
         )
+
+    def begin_autonomous_task(
+        self,
+        event: SystemEvent,
+    ) -> AutonomousTaskExecution | AutonomousTaskCompletion:
+        """Resume MQTT events after their deferred mqtt_sub tool call."""
+        if (
+            event.source.strip().lower() != "mqtt"
+            or event.task_id is None
+            or not event.task.strip()
+        ):
+            return super().begin_autonomous_task(event)
+
+        store = self.system_runtime.task_store
+        if store is None:
+            return AutonomousTaskCompletion(
+                turn=ManagerTurn("error", "Task store is not configured")
+            )
+        try:
+            task = store.require(event.task_id)
+        except TaskStoreError as exc:
+            LOGGER.warning("SYSTEM TASK %d cannot start: %s", event.task_id, exc)
+            return AutonomousTaskCompletion(turn=ManagerTurn("silent", ""))
+
+        activation = TaskActivation(
+            source="mqtt",
+            name=event.name.strip(),
+            task=task,
+            created_monotonic=event.created_monotonic,
+        )
+        if not task.skills:
+            return self._autonomous_error_completion(task, "нет сохранённых skills")
+        try:
+            skills = self.skill_base.require(task.skills)
+        except SkillBaseError as exc:
+            return self._autonomous_error_completion(task, str(exc))
+
+        binding = self.event_store.resolve("mqtt", activation.name)
+        if binding is None:
+            return self._autonomous_error_completion(
+                task,
+                "MQTT binding не найден",
+            )
+
+        worker = self.pool.acquire_event()
+        if worker is None:
+            return self._autonomous_error_completion(
+                task,
+                "нет свободного событийного агента",
+            )
+
+        try:
+            worker.begin_with_tool_result(
+                task.text,
+                skills,
+                binding.command,
+                event.task,
+                method=task.method,
+            )
+        except Exception as exc:
+            LOGGER.exception(
+                "SYSTEM TASK %d MQTT resume failed agent=%s",
+                task.task_id,
+                worker.agent_id,
+            )
+            if worker.state is not AgentState.FREE:
+                worker.sleep_to_base()
+            return self._autonomous_error_completion(task, str(exc))
+
+        return AutonomousTaskExecution(activation=activation, worker=worker)
 
     def _drive_manager(self) -> ManagerTurn:
         for step in range(1, self.max_steps + 1):
