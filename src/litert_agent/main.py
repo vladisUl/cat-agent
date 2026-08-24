@@ -8,7 +8,9 @@ import sys
 import litert_lm
 
 from orchestration.config import Settings
+from orchestration.mqtt_events import MqttEventMonitor
 
+from .core_scheduler import HARDWARE_EVENT_PRIORITY
 from .core_server import CoreServer
 from .runtime import build_bundle, warm_bundle
 
@@ -105,6 +107,14 @@ class _ProtocolLogFilter(logging.Filter):
                         args[-1],
                     )
 
+            if message == "%s EVENT RESULT %r" and len(args) >= 2:
+                agent_id = str(args[0]).upper()
+                return self._replace(
+                    record,
+                    f"SYSTEM -> {agent_id} %r",
+                    args[1],
+                )
+
             if message == "%s CONTINUE context=%r" and len(args) >= 2:
                 agent_id = str(args[0]).upper()
                 actual_input = json.dumps(
@@ -128,6 +138,17 @@ class _ProtocolLogFilter(logging.Filter):
         # bookkeeping. Keep it available at DEBUG instead of mixing it with the
         # protocol transcript shown at normal INFO level.
         return False
+
+
+def _enqueue_mqtt_event(core: CoreServer, bundle, binding, value: str) -> None:
+    event = bundle.runtime.external_event("mqtt", binding.name, value=value)
+    if event is None:
+        return
+    core.scheduler.enqueue_external_event(
+        event,
+        priority=HARDWARE_EVENT_PRIORITY,
+        coalesce=False,
+    )
 
 
 def main() -> int:
@@ -160,10 +181,16 @@ def main() -> int:
         LOGGER.info("SYSTEM persistent task timers armed after model warmup")
 
         core = CoreServer(bundle)
+        mqtt_monitor = MqttEventMonitor(
+            bundle.runtime.event_store,
+            lambda binding, value: _enqueue_mqtt_event(core, bundle, binding, value),
+        )
         core.start()
+        mqtt_monitor.start()
         try:
             core.serve_forever()
         finally:
+            mqtt_monitor.close()
             core.close()
         return 0
     finally:
