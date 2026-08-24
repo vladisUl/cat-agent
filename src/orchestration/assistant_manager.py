@@ -200,10 +200,10 @@ class AssistantManagerRuntime(ManagerRuntime):
         return self._direct_runtime.format_result(result)
 
     def _execute_task_command(self, argv: list[str]) -> str:
-        if len(argv) != 5:
+        if len(argv) != 4:
             return (
                 "SYSTEM_ERROR\nusage: task_timer.sh|query_timer.sh "
-                "PERIOD SKILLS DESCRIPTION TEXT"
+                "PERIOD SKILLS TEXT"
             )
 
         try:
@@ -219,10 +219,9 @@ class AssistantManagerRuntime(ManagerRuntime):
         if not skill_names or len(set(skill_names)) != len(skill_names):
             return "SYSTEM_ERROR\ninvalid skill list"
 
-        description = argv[3].strip()
-        task_text = argv[4].strip()
-        if not description or not task_text:
-            return "SYSTEM_ERROR\ndescription and task text must be non-empty"
+        task_text = argv[3].strip()
+        if not task_text:
+            return "SYSTEM_ERROR\ntask text must be non-empty"
 
         try:
             skills = self.skill_base.require(skill_names)
@@ -235,14 +234,13 @@ class AssistantManagerRuntime(ManagerRuntime):
         if period == -1:
             return self._create_external_task(
                 method,
-                description,
                 task_text,
                 skill_names,
             )
 
         try:
             task = self.system_runtime.create_periodic_task(
-                description,
+                task_text,
                 task_text,
                 skill_names,
                 period,
@@ -251,16 +249,11 @@ class AssistantManagerRuntime(ManagerRuntime):
         except (TaskStoreError, ValueError) as exc:
             return f"SYSTEM_ERROR\n{exc}"
 
-        return (
-            f"SYSTEM_OK\nTASK {task.task_id} created and started; "
-            f"method={task.method} period={period:g}s "
-            f"description={task.description}"
-        )
+        return f"SYSTEM_OK\nTASK {task.task_id} created and started"
 
     def _create_external_task(
         self,
         method: str,
-        description: str,
         task_text: str,
         skill_names: tuple[str, ...],
     ) -> str:
@@ -270,7 +263,7 @@ class AssistantManagerRuntime(ManagerRuntime):
 
         try:
             task = store.create(
-                description,
+                task_text,
                 task_text,
                 method=method,
                 skills=skill_names,
@@ -280,7 +273,7 @@ class AssistantManagerRuntime(ManagerRuntime):
             try:
                 binding = self.event_store.register(
                     task.task_id,
-                    description,
+                    task_text,
                     source="gpio",
                 )
             except Exception:
@@ -296,10 +289,7 @@ class AssistantManagerRuntime(ManagerRuntime):
             binding.name,
             task.description,
         )
-        return (
-            f"SYSTEM_OK\nTASK {task.task_id} created for external event {binding.name}; "
-            f"method={task.method} description={task.description}"
-        )
+        return f"SYSTEM_OK\nTASK {task.task_id} created for external event"
 
     def _run_one_shot_agent(self, method: str, task_text: str, skills) -> str:
         worker = self.pool.acquire()
