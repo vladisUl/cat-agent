@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -134,6 +135,7 @@ class AssistantManagerTest(unittest.TestCase):
                 Path(temp),
                 [
                     "/work#mqtt_sub.sh zigbee2mqtt/dvigen_verh occupancy",
+                    "/work#mqtt_sub.sh zigbee2mqtt/dvigen_verh occupancy",
                     '{"result":"В коридоре обнаружено движение"}',
                 ],
             )
@@ -171,6 +173,8 @@ class AssistantManagerTest(unittest.TestCase):
             execution = runtime.begin_autonomous_task(event)
             self.assertIsInstance(execution, AutonomousTaskExecution)
             assert isinstance(execution, AutonomousTaskExecution)
+
+            self.assertIsNone(runtime.step_autonomous_task(execution))
             completion = runtime.step_autonomous_task(execution)
             self.assertIsNotNone(completion)
             assert completion is not None
@@ -178,7 +182,9 @@ class AssistantManagerTest(unittest.TestCase):
             self.assertEqual(completion.query_result, "В коридоре обнаружено движение")
 
             resumed_messages = client.calls[-1]
-            self.assertEqual(resumed_messages[-3]["content"].strip(), text)
+            task_input = json.loads(resumed_messages[-3]["content"])
+            self.assertEqual(task_input["method"], "query")
+            self.assertEqual(task_input["task"], text)
             self.assertEqual(
                 resumed_messages[-2]["content"],
                 "/work#mqtt_sub.sh zigbee2mqtt/dvigen_verh occupancy",
