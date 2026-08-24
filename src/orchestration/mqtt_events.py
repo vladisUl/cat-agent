@@ -240,6 +240,10 @@ class MqttEventMonitor:
             if current not in binding.values:
                 continue
 
+            LOGGER.info(
+                "MQTT -> SYSTEM %r",
+                f"{binding.topic} {binding.field}={current}",
+            )
             try:
                 self.callback(binding, current)
             except Exception:
