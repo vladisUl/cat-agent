@@ -107,13 +107,14 @@ class _ProtocolLogFilter(logging.Filter):
                         args[-1],
                     )
 
-            if message == "%s EVENT RESULT %r" and len(args) >= 2:
-                agent_id = str(args[0]).upper()
-                return self._replace(
-                    record,
-                    f"SYSTEM -> {agent_id} %r",
-                    args[1],
-                )
+            if message == "%s step %d DEFERRED TOOL RESULT command=%s\n%s":
+                if len(args) >= 4:
+                    agent_id = str(args[0]).upper()
+                    return self._replace(
+                        record,
+                        f"SYSTEM -> {agent_id} %r",
+                        args[-1],
+                    )
 
             if message == "%s CONTINUE context=%r" and len(args) >= 2:
                 agent_id = str(args[0]).upper()
