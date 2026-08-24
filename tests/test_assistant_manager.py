@@ -105,24 +105,42 @@ class AssistantManagerTest(unittest.TestCase):
             self.assertEqual(turn.text, "обычный ответ")
             self.assertEqual(client.calls[0][-1]["content"], "сам посмотри файл")
 
+    def test_periodic_query_uses_task_text_as_saved_description(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, _client = self._runtime(Path(temp), ["REPLY\nunused"])
+
+            text = "Проверять температуру на улице и сообщать мне"
+            result = runtime._execute_task_command(
+                ["query_timer.sh", "60", "mqtt", text]
+            )
+
+            self.assertEqual(result, "SYSTEM_OK\nTASK 1 created and started")
+            task = runtime.system_runtime.task_store.require(1)  # type: ignore[union-attr]
+            self.assertEqual(task.method, "query")
+            self.assertEqual(task.text, text)
+            self.assertEqual(task.description, text)
+            self.assertEqual(task.skills, ("mqtt",))
+            self.assertEqual(task.timer_period_seconds, 60.0)
+
     def test_external_period_creates_event_bound_query(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             runtime, _client = self._runtime(Path(temp), ["REPLY\nunused"])
 
+            text = "Проверить состояние двери и вернуть результат."
             result = runtime._execute_task_command(
                 [
                     "query_timer.sh",
                     "-1",
                     "shell",
-                    "датчик открытия двери",
-                    "Проверить состояние двери и вернуть результат.",
+                    text,
                 ]
             )
 
-            self.assertIn("SYSTEM_OK", result)
-            self.assertIn("task_gpio1", result)
+            self.assertEqual(result, "SYSTEM_OK\nTASK 1 created for external event")
             task = runtime.system_runtime.task_store.require(1)  # type: ignore[union-attr]
             self.assertEqual(task.method, "query")
+            self.assertEqual(task.text, text)
+            self.assertEqual(task.description, text)
             self.assertIsNone(task.timer_period_seconds)
             binding = runtime.event_store.resolve("gpio", "task_gpio1")
             self.assertIsNotNone(binding)
@@ -136,7 +154,7 @@ class AssistantManagerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             runtime, _client = self._runtime(Path(temp), ["REPLY\nunused"])
             result = runtime._execute_task_command(
-                ["task_timer.sh", "-0.5", "shell", "bad", "do bad"]
+                ["task_timer.sh", "-0.5", "shell", "do bad"]
             )
             self.assertEqual(
                 result,
