@@ -11,6 +11,7 @@ import threading
 
 DEFAULT_EVENT_FILE = Path("/var/lib/cat-agent/events.json")
 _EVENT_NAME_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class EventStoreError(RuntimeError):
@@ -23,6 +24,11 @@ class EventBinding:
     source: str
     task_id: int
     description: str
+    topic: str = ""
+    field: str = ""
+    value_type: str = ""
+    values: tuple[str, ...] = ()
+    command: str = ""
 
 
 class EventStore:
@@ -51,11 +57,19 @@ class EventStore:
                 for name, item in raw.items():
                     if not isinstance(item, dict):
                         raise TypeError(f"event {name!r} must be an object")
+                    raw_values = item.get("values", [])
+                    if not isinstance(raw_values, list):
+                        raise TypeError(f"event {name!r} values must be a list")
                     binding = self._validated_binding(
                         str(name),
                         str(item["source"]),
                         int(item["task_id"]),
                         str(item["description"]),
+                        topic=str(item.get("topic", "")),
+                        field=str(item.get("field", "")),
+                        value_type=str(item.get("value_type", "")),
+                        values=tuple(str(value) for value in raw_values),
+                        command=str(item.get("command", "")),
                     )
                     bindings[binding.name] = binding
             except (KeyError, TypeError, ValueError) as exc:
@@ -69,10 +83,25 @@ class EventStore:
         *,
         source: str = "gpio",
         name: str | None = None,
+        topic: str = "",
+        field: str = "",
+        value_type: str = "",
+        values: tuple[str, ...] = (),
+        command: str = "",
     ) -> EventBinding:
         source = source.strip().lower()
         event_name = (name or f"task_{source}{task_id}").strip()
-        binding = self._validated_binding(event_name, source, task_id, description)
+        binding = self._validated_binding(
+            event_name,
+            source,
+            task_id,
+            description,
+            topic=topic,
+            field=field,
+            value_type=value_type,
+            values=values,
+            command=command,
+        )
         with self._lock:
             current = self._bindings.get(binding.name)
             if current is not None and current.task_id != binding.task_id:
@@ -127,10 +156,22 @@ class EventStore:
         source: str,
         task_id: int,
         description: str,
+        *,
+        topic: str = "",
+        field: str = "",
+        value_type: str = "",
+        values: tuple[str, ...] = (),
+        command: str = "",
     ) -> EventBinding:
         name = name.strip()
         source = source.strip().lower()
         description = description.strip()
+        topic = topic.strip()
+        field = field.strip()
+        value_type = value_type.strip().lower()
+        values = tuple(value.strip() for value in values)
+        command = command.strip()
+
         if not name or _EVENT_NAME_RE.fullmatch(name) is None:
             raise EventStoreError(f"invalid event name: {name!r}")
         if not source or _EVENT_NAME_RE.fullmatch(source) is None:
@@ -139,18 +180,54 @@ class EventStore:
             raise EventStoreError("event task_id must be > 0")
         if not description:
             raise EventStoreError("event description must be non-empty")
-        return EventBinding(name, source, task_id, description)
+
+        if source == "mqtt":
+            if not topic:
+                raise EventStoreError("mqtt event topic must be non-empty")
+            if not field or _FIELD_RE.fullmatch(field) is None:
+                raise EventStoreError(f"invalid mqtt event field: {field!r}")
+            if not value_type:
+                raise EventStoreError("mqtt event value_type must be non-empty")
+            if not values or any(not value for value in values):
+                raise EventStoreError("mqtt event values must be non-empty")
+            if len(set(values)) != len(values):
+                raise EventStoreError("mqtt event values must be unique")
+            if not command:
+                raise EventStoreError("mqtt event command must be non-empty")
+
+        return EventBinding(
+            name,
+            source,
+            task_id,
+            description,
+            topic,
+            field,
+            value_type,
+            values,
+            command,
+        )
 
     def _save_locked(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            binding.name: {
+        payload: dict[str, dict[str, object]] = {}
+        for binding in self.snapshot():
+            item: dict[str, object] = {
                 "source": binding.source,
                 "task_id": binding.task_id,
                 "description": binding.description,
             }
-            for binding in self.snapshot()
-        }
+            if binding.topic:
+                item["topic"] = binding.topic
+            if binding.field:
+                item["field"] = binding.field
+            if binding.value_type:
+                item["value_type"] = binding.value_type
+            if binding.values:
+                item["values"] = list(binding.values)
+            if binding.command:
+                item["command"] = binding.command
+            payload[binding.name] = item
+
         text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
         fd, temp_name = tempfile.mkstemp(
