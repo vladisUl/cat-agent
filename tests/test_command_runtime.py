@@ -119,6 +119,57 @@ class CommandRuntimeTest(unittest.TestCase):
             ],
         )
 
+    def test_mqtt_pub_command_publishes_zigbee2mqtt_set_payload(self) -> None:
+        runtime = CommandRuntime(
+            self.root, ("mqtt",), max_file_bytes=1024, timeout_seconds=2
+        )
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+
+        with patch(
+            "orchestration.workspace_command_runtime.subprocess.run",
+            return_value=completed,
+        ) as run:
+            result = runtime.execute(
+                "mqtt_pub.sh zigbee2mqtt/rozetka state=ON"
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.operation, "mqtt_pub")
+        self.assertEqual(runtime.format_result(result), "OK")
+        self.assertEqual(result.metadata["topic"], "zigbee2mqtt/rozetka")
+        self.assertEqual(result.metadata["publish_topic"], "zigbee2mqtt/rozetka/set")
+        self.assertEqual(result.metadata["field"], "state")
+        self.assertEqual(result.metadata["value"], "ON")
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "mosquitto_pub",
+                "-h",
+                "192.168.0.21",
+                "-p",
+                "1883",
+                "-t",
+                "zigbee2mqtt/rozetka/set",
+                "-m",
+                '{"state":"ON"}',
+            ],
+        )
+
+    def test_mqtt_pub_requires_field_assignment(self) -> None:
+        runtime = CommandRuntime(
+            self.root, ("mqtt",), max_file_bytes=1024, timeout_seconds=2
+        )
+
+        with patch("orchestration.workspace_command_runtime.subprocess.run") as run:
+            result = runtime.execute("mqtt_pub.sh zigbee2mqtt/rozetka ON")
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.operation, "mqtt_pub")
+        self.assertEqual(result.metadata.get("error_code"), "invalid_assignment")
+        run.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
