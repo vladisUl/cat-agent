@@ -191,6 +191,35 @@ class AssistantManagerTest(unittest.TestCase):
             )
             self.assertEqual(resumed_messages[-1]["content"], "true")
 
+    def test_external_mqtt_query_uses_same_stop_start_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, _client = self._runtime(
+                Path(temp),
+                ["/work#mqtt_sub.sh zigbee2mqtt/dvigen_verh occupancy"],
+            )
+
+            text = "Сообщить мне, когда в коридоре появится движение"
+            created = runtime._execute_task_command(
+                ["query_timer.sh", "-1", "mqtt", text]
+            )
+            self.assertEqual(created, "SYSTEM_OK\nTASK 1 created and started")
+
+            stopped = runtime._execute_timer_command(["timer.sh", "stop", "1"])
+            self.assertEqual(stopped, "SYSTEM_OK\nTASK 1 stopped")
+            task = runtime.system_runtime.task_store.require(1)  # type: ignore[union-attr]
+            self.assertFalse(task.enabled)
+            self.assertIsNone(runtime.external_event("mqtt", "task_mqtt1", value="true"))
+            self.assertIsNotNone(runtime.event_store.resolve("mqtt", "task_mqtt1"))
+
+            started = runtime._execute_timer_command(["timer.sh", "start", "1"])
+            self.assertEqual(started, "SYSTEM_OK\nTASK 1 started")
+            task = runtime.system_runtime.task_store.require(1)  # type: ignore[union-attr]
+            self.assertTrue(task.enabled)
+            event = runtime.external_event("mqtt", "task_mqtt1", value="true")
+            self.assertIsNotNone(event)
+            assert event is not None
+            self.assertEqual(event.task_id, 1)
+
     def test_human_release_resets_unfinished_ask_outside_chat(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             runtime, client = self._runtime(
