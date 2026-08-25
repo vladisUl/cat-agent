@@ -643,6 +643,7 @@ class CoreServer:
                     "task_id": task.task_id,
                     "description": task.description,
                     "method": task.method,
+                    "enabled": task.enabled,
                     "timer": (
                         None
                         if timer is None
