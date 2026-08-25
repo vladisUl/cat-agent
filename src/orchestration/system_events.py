@@ -178,44 +178,53 @@ class SystemRuntime:
 
     def start_task(self, task_id: int) -> TaskRecord:
         store = self._require_task_store()
-        task = store.require(task_id)
-        if task.timer_period_seconds is None:
-            raise TaskStoreError(f"task {task_id} has no timer")
         task = store.set_enabled(task_id, True)
-        now = time.monotonic()
-        with self._lock:
-            timer = self._task_timers.get(task_id)
-            if timer is None:
-                timer = TaskTimerSpec(
-                    task_id=task_id,
-                    period_seconds=task.timer_period_seconds,
-                    enabled=True,
-                    next_fire_monotonic=now + task.timer_period_seconds,
-                )
-                self._task_timers[task_id] = timer
-            else:
-                timer.period_seconds = task.timer_period_seconds
-                timer.enabled = True
-                timer.next_fire_monotonic = now + task.timer_period_seconds
-        LOGGER.info("SYSTEM task timer started id=%d", task_id)
+        period = task.timer_period_seconds
+        if period is not None:
+            now = time.monotonic()
+            with self._lock:
+                timer = self._task_timers.get(task_id)
+                if timer is None:
+                    timer = TaskTimerSpec(
+                        task_id=task_id,
+                        period_seconds=period,
+                        enabled=True,
+                        next_fire_monotonic=now + period,
+                    )
+                    self._task_timers[task_id] = timer
+                else:
+                    timer.period_seconds = period
+                    timer.enabled = True
+                    timer.next_fire_monotonic = now + period
+        LOGGER.info(
+            "SYSTEM task started id=%d trigger=%s",
+            task_id,
+            "timer" if period is not None else "external",
+        )
         return task
 
     def stop_task(self, task_id: int) -> TaskRecord:
         store = self._require_task_store()
-        task = store.require(task_id)
-        if task.timer_period_seconds is None:
-            raise TaskStoreError(f"task {task_id} has no timer")
         task = store.set_enabled(task_id, False)
-        with self._lock:
-            timer = self._task_timers.get(task_id)
-            if timer is not None:
-                timer.enabled = False
-                timer.next_fire_monotonic = None
-        LOGGER.info("SYSTEM task timer stopped id=%d", task_id)
+        period = task.timer_period_seconds
+        if period is not None:
+            with self._lock:
+                timer = self._task_timers.get(task_id)
+                if timer is not None:
+                    timer.enabled = False
+                    timer.next_fire_monotonic = None
+        LOGGER.info(
+            "SYSTEM task stopped id=%d trigger=%s",
+            task_id,
+            "timer" if period is not None else "external",
+        )
         return task
 
     def set_task_period(self, task_id: int, period_seconds: float) -> TaskRecord:
         store = self._require_task_store()
+        current = store.require(task_id)
+        if current.timer_period_seconds is None:
+            raise TaskStoreError(f"task {task_id} is not timer-driven")
         task = store.set_timer_period(task_id, period_seconds)
         now = time.monotonic()
         with self._lock:
@@ -255,6 +264,13 @@ class SystemRuntime:
     ) -> str | None:
         """Resolve TASK from persistent storage, run it, and return QUERY value if any."""
         task = self._require_task_store().require(task_id)
+        if not task.enabled:
+            LOGGER.info(
+                "SYSTEM task activation ignored id=%d source=%s reason=disabled",
+                task.task_id,
+                source.strip() or "system",
+            )
+            return None
         activation = TaskActivation(
             source=source.strip() or "system",
             name=name.strip(),
