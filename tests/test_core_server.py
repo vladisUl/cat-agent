@@ -32,6 +32,7 @@ class FakeScheduler:
         self.users: list[str] = []
         self.voice_users: list[str] = []
         self.events: list[tuple[SystemEvent, int, bool]] = []
+        self.human_releases = 0
         self.started = False
         self.active_label = ""
 
@@ -46,6 +47,9 @@ class FakeScheduler:
 
     def submit_voice(self, text: str) -> None:
         self.voice_users.append(text)
+
+    def release_human_session(self) -> None:
+        self.human_releases += 1
 
     def active_request_label(self) -> str:
         return self.active_label
@@ -140,6 +144,47 @@ class CoreServerTest(unittest.TestCase):
             finally:
                 sock.close()
                 reader.close()
+                server.close()
+                thread.join(timeout=1.0)
+
+    def test_explicit_release_notifies_scheduler_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            server, scheduler, thread = self._start(root)
+            sock, reader = self._connect(server.path)
+            try:
+                send(sock, {"type": "acquire", "client": "tui"})
+                self.assertEqual(recv(reader)["type"], "acquired")
+                send(sock, {"type": "release"})
+                self.assertEqual(recv(reader)["type"], "released")
+                self.assertEqual(scheduler.human_releases, 1)
+                self.assertIsNone(server.session_owner())
+            finally:
+                sock.close()
+                reader.close()
+                server.close()
+                thread.join(timeout=1.0)
+
+    def test_disconnect_auto_release_notifies_scheduler_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            server, scheduler, thread = self._start(root)
+            sock, reader = self._connect(server.path)
+            send(sock, {"type": "acquire", "client": "tui"})
+            self.assertEqual(recv(reader)["type"], "acquired")
+
+            sock.shutdown(socket.SHUT_RDWR)
+            sock.close()
+            reader.close()
+            for _ in range(100):
+                if scheduler.human_releases:
+                    break
+                time.sleep(0.01)
+
+            try:
+                self.assertEqual(scheduler.human_releases, 1)
+                self.assertIsNone(server.session_owner())
+            finally:
                 server.close()
                 thread.join(timeout=1.0)
 
