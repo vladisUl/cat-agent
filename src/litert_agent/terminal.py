@@ -553,14 +553,32 @@ class TerminalTUI:
 
         row += 1
         put("EVENTS", bold=True)
+
+        tasks = self.status.get("tasks")
+        task_items = (
+            [item for item in tasks if isinstance(item, dict)]
+            if isinstance(tasks, list)
+            else []
+        )
+        timer_active = any(
+            self._task_enabled(item) and isinstance(item.get("timer"), dict)
+            for item in task_items
+        )
+        external_active = any(
+            self._task_enabled(item) and not isinstance(item.get("timer"), dict)
+            for item in task_items
+        )
+
         source_lead = f"{'sources':<12} "
         self._safe_addstr(win, row, 2, source_lead, 0, width - 4)
         source_x = 2 + len(source_lead)
-        for dot, text, attr in (
-            ("●", " timer", self._indicator_attr(True)),
-            (" ●", " gpio", self._indicator_attr(True)),
-            (" ·", " mqtt", curses.A_DIM),
+        for text, active in (
+            (" timer", timer_active),
+            (" gpio", False),
+            (" mqtt", external_active),
         ):
+            dot = "●" if source_x == 2 + len(source_lead) else " ●"
+            attr = self._event_indicator_attr(active)
             if source_x >= width - 2:
                 break
             self._safe_addstr(win, row, source_x, dot, attr, width - source_x - 2)
@@ -569,21 +587,23 @@ class TerminalTUI:
             source_x += len(text)
         row += 1
 
-        tasks = self.status.get("tasks")
-        if not isinstance(tasks, list) or not tasks:
+        if not task_items:
             put("tasks", "none")
         else:
             now = time.monotonic()
-            for raw_task in tasks:
+            for raw_task in task_items:
                 if row >= height - 1:
                     break
-                if not isinstance(raw_task, dict):
-                    continue
                 task_id = raw_task.get("task_id", "?")
                 description = str(raw_task.get("description", ""))
                 timer = raw_task.get("timer")
                 if not isinstance(timer, dict):
-                    put_indicator(f"TASK {task_id}", "NO TIMER", curses.A_DIM)
+                    enabled = self._task_enabled(raw_task)
+                    put_indicator(
+                        f"TASK {task_id}",
+                        "EXTERNAL",
+                        self._event_indicator_attr(enabled),
+                    )
                 else:
                     period = timer.get("period_seconds")
                     enabled = bool(timer.get("enabled"))
@@ -594,13 +614,13 @@ class TerminalTUI:
                         put_indicator(
                             f"TASK {task_id}",
                             f"RUN {period_text}s  next {next_in:.0f}s",
-                            self._indicator_attr(True),
+                            self._event_indicator_attr(True),
                         )
                     else:
                         put_indicator(
                             f"TASK {task_id}",
                             f"STOP {period_text}s",
-                            self._indicator_attr(False),
+                            self._event_indicator_attr(False),
                         )
                 if row < height - 1:
                     self._safe_addstr(
@@ -765,6 +785,18 @@ class TerminalTUI:
             return curses.A_BOLD if active else curses.A_DIM
         pair = COLOR_ACTIVE if active else COLOR_STOPPED
         return curses.color_pair(pair)
+
+    def _event_indicator_attr(self, active: bool) -> int:
+        return self._indicator_attr(True) if active else curses.A_DIM
+
+    @staticmethod
+    def _task_enabled(task: dict[str, object]) -> bool:
+        if "enabled" in task:
+            return bool(task.get("enabled"))
+        timer = task.get("timer")
+        if isinstance(timer, dict):
+            return bool(timer.get("enabled"))
+        return True
 
     @staticmethod
     def _set_bracketed_paste(enabled: bool) -> None:
