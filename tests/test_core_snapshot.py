@@ -42,6 +42,7 @@ class FakeTask:
     task_id: int
     description: str
     method: str
+    enabled: bool = True
 
 
 @dataclass
@@ -56,7 +57,7 @@ class FakeSystemRuntime:
     def task_snapshot(self):
         return (
             FakeTask(1, "temperature", "query"),
-            FakeTask(2, "door", "query"),
+            FakeTask(2, "door", "query", False),
         )
 
     def task_timer_snapshot(self):
@@ -143,6 +144,8 @@ class CoreSnapshotTest(unittest.TestCase):
                 self.assertEqual(status["manager"]["resident_tokens"], 1200)
                 self.assertEqual(status["agent"]["resident_tokens"], 700)
                 self.assertEqual(status["inference"]["total_seconds"], 0.6)
+                self.assertTrue(status["tasks"][0]["enabled"])
+                self.assertFalse(status["tasks"][1]["enabled"])
                 self.assertEqual(status["tasks"][0]["timer"]["period_seconds"], 60.0)
                 self.assertIsNone(status["tasks"][1]["timer"])
             finally:
