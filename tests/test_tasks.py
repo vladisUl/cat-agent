@@ -93,6 +93,25 @@ class TaskStoreTest(unittest.TestCase):
             self.assertEqual(activation.name, "periodic")
             self.assertEqual(activation.created_monotonic, 123.0)
 
+    def test_disabled_task_is_not_activated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = TaskStore(Path(temp_dir) / "task.txt")
+            task = store.create(
+                "событийный запрос",
+                "Сообщить о событии.",
+                method="query",
+                skills=("mqtt",),
+            )
+            system = SystemRuntime(store)
+            received: list[TaskActivation] = []
+            system.set_task_handler(lambda activation: received.append(activation))
+
+            system.stop_task(task.task_id)
+            result = system.activate_task(task.task_id, source="mqtt", name="event")
+
+            self.assertIsNone(result)
+            self.assertEqual(received, [])
+
     def test_system_returns_query_handler_value(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = TaskStore(Path(temp_dir) / "task.txt")
@@ -102,6 +121,49 @@ class TaskStoreTest(unittest.TestCase):
 
             result = system.activate_task(task.task_id, source="timer")
             self.assertEqual(result, "ОК")
+
+    def test_external_task_stop_and_start_preserve_same_record(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "task.txt"
+            store = TaskStore(path)
+            task = store.create(
+                "движение",
+                "Сообщить о движении.",
+                method="query",
+                skills=("mqtt",),
+                timer_period_seconds=None,
+                enabled=True,
+            )
+            system = SystemRuntime(store)
+
+            stopped = system.stop_task(task.task_id)
+            self.assertFalse(stopped.enabled)
+            self.assertIsNone(stopped.timer_period_seconds)
+            self.assertEqual(system.task_timer_snapshot(), ())
+            self.assertFalse(TaskStore(path).require(task.task_id).enabled)
+
+            started = system.start_task(task.task_id)
+            self.assertTrue(started.enabled)
+            self.assertIsNone(started.timer_period_seconds)
+            self.assertEqual(system.task_timer_snapshot(), ())
+            self.assertTrue(TaskStore(path).require(task.task_id).enabled)
+
+    def test_period_change_does_not_convert_external_task_to_timer(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = TaskStore(Path(temp_dir) / "task.txt")
+            task = store.create(
+                "движение",
+                "Сообщить о движении.",
+                method="query",
+                skills=("mqtt",),
+            )
+            system = SystemRuntime(store)
+
+            with self.assertRaisesRegex(TaskStoreError, "not timer-driven"):
+                system.set_task_period(task.task_id, 60.0)
+
+            self.assertIsNone(store.require(task.task_id).timer_period_seconds)
+            self.assertEqual(system.task_timer_snapshot(), ())
 
     def test_periodic_query_survives_restart_but_countdown_waits_for_arm(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
