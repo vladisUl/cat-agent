@@ -191,6 +191,44 @@ class AssistantManagerTest(unittest.TestCase):
             )
             self.assertEqual(resumed_messages[-1]["content"], "true")
 
+    def test_human_release_resets_unfinished_ask_outside_chat(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, client = self._runtime(
+                Path(temp),
+                ["ASK\nЧто сделать с числом 12?"],
+            )
+
+            turn = runtime.user_message("12")
+            self.assertEqual(turn.kind, "ask")
+            self.assertEqual(len(client.reset_calls), 0)
+            self.assertNotEqual(runtime.messages, runtime._base_messages)
+
+            runtime.human_session_released()
+
+            self.assertEqual(len(client.reset_calls), 1)
+            self.assertEqual(runtime.messages, runtime._base_messages)
+
+    def test_human_release_preserves_explicit_chat(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, client = self._runtime(
+                Path(temp),
+                [
+                    "REPLY\nЧат создан",
+                    "ASK\nЧто запомнить?",
+                ],
+            )
+
+            runtime.user_message("Чат")
+            turn = runtime.user_message("запомни")
+            self.assertEqual(turn.kind, "ask")
+            self.assertEqual(len(client.reset_calls), 0)
+            before = [dict(item) for item in runtime.messages]
+
+            runtime.human_session_released()
+
+            self.assertEqual(len(client.reset_calls), 0)
+            self.assertEqual(runtime.messages, before)
+
     def test_invalid_negative_period_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             runtime, _client = self._runtime(Path(temp), ["REPLY\nunused"])
