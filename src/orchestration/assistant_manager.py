@@ -55,6 +55,14 @@ class AssistantManagerRuntime(ManagerRuntime):
         self._append_user(user_text)
         return self._drive_manager()
 
+    def human_session_released(self) -> None:
+        """Drop transient dialogue state when its human client goes away."""
+        if self._chat_mode:
+            LOGGER.info("MANAGER human session released; CHAT context preserved")
+            return
+        self._abort_context()
+        LOGGER.info("MANAGER human session released; context reset to BASE")
+
     def external_event(
         self,
         source: str,
