@@ -233,7 +233,8 @@ class CoreServer:
             return
 
         if message_type == "release":
-            self._release_human(client)
+            if self._release_human(client):
+                self.scheduler.release_human_session()
             self._safe_send(client, {"type": "released"})
             return
 
@@ -346,12 +347,15 @@ class CoreServer:
                 {"type": "busy", "owner": owner, "text": "Гена занят"},
             )
 
-    def _release_human(self, client: _ClientConnection) -> None:
+    def _release_human(self, client: _ClientConnection) -> bool:
+        released = False
         with self._lock:
             if self._human is client:
                 LOGGER.info("CORE human session released by %s", client.client_name)
                 self._human = None
+                released = True
             client.human_owner = False
+        return released
 
     def _submit_voice_turn(
         self,
@@ -420,10 +424,12 @@ class CoreServer:
         )
 
     def _detach_client(self, client: _ClientConnection) -> None:
+        released_human = False
         with self._lock:
             if self._human is client:
                 LOGGER.info("CORE human session auto-release client=%s", client.client_name)
                 self._human = None
+                released_human = True
             if self._voice_turn is client:
                 LOGGER.info(
                     "CORE voice client disconnected while turn is pending client=%s",
@@ -438,6 +444,8 @@ class CoreServer:
                 pass
             client.human_owner = False
             client.fallback = False
+        if released_human:
+            self.scheduler.release_human_session()
 
     def _deliver_human_turn(self, turn: ManagerTurn) -> None:
         route = self._active_request_label()
