@@ -126,6 +126,19 @@ class CoreScheduler:
         LOGGER.info("CORE queued user request priority=%d text=%r", MANAGER_PRIORITY, user_text)
         self._emit_status()
 
+    def release_human_session(self) -> None:
+        """Discard queued user work and serialize context cleanup with model work."""
+        with self._queue_lock:
+            before = len(self._pending)
+            self._pending = [item for item in self._pending if item.kind != "user"]
+            dropped = before - len(self._pending)
+        self._executor.submit(self.bundle.runtime.human_session_released)
+        LOGGER.info(
+            "CORE human session cleanup queued dropped_user_requests=%d",
+            dropped,
+        )
+        self._emit_status()
+
     def enqueue_external_event(
         self,
         event: SystemEvent,
