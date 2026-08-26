@@ -1,0 +1,8 @@
+{
+  "zigbee2mqtt/dvigen_verh": {
+    "occupancy": true
+  },
+  "zigbee2mqtt/kuhnya_leak": {
+    "water_leak": true
+  }
+}
