@@ -4,4 +4,5 @@ zigbee2mqtt/temp_tua: климатические данные дома; поля
 zigbee2mqtt/temp_akva: температура в аквариуме; поля: temperature
 zigbee2mqtt/temp_moroz: температура в морозильнике; поля: temperature
 zigbee2mqtt/dvigen_verh: движение в коридоре; occupancy: boolean; (true: движение обнаружено, false: движение не обнаружено)
+zigbee2mqtt/kuhnya_leak: протечка на кухне; water_leak: boolean; (true: обнаружена протечка, false: сухо)
 zigbee2mqtt/rozetka_komnata: свет в комнате; state (ON: включить, OFF: выключить)
