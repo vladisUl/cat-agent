@@ -93,6 +93,73 @@ class MqttEventTest(unittest.TestCase):
                 ],
             )
 
+    def test_first_configured_active_state_is_emitted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "mqtt_event_active.json"
+            config.write_text(
+                '{"zigbee2mqtt/leak":{"water_leak":true}}',
+                encoding="utf-8",
+            )
+            store = EventStore(root / "events.json")
+            store.register(
+                1,
+                "протечка",
+                source="mqtt",
+                topic="zigbee2mqtt/leak",
+                field="water_leak",
+                value_type="boolean",
+                values=("true", "false"),
+                command="mqtt_sub.sh zigbee2mqtt/leak water_leak",
+            )
+            emitted: list[str] = []
+            monitor = MqttEventMonitor(
+                store,
+                lambda _binding, value: emitted.append(value),
+                active_state_path=config,
+            )
+
+            monitor._consume_line('zigbee2mqtt/leak {"water_leak":true}')
+            self.assertEqual(emitted, ["true"])
+
+            monitor._consume_line('zigbee2mqtt/leak {"water_leak":true}')
+            self.assertEqual(emitted, ["true"])
+
+            monitor._consume_line('zigbee2mqtt/leak {"water_leak":false}')
+            self.assertEqual(emitted, ["true", "false"])
+
+    def test_first_inactive_state_only_initializes_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "mqtt_event_active.json"
+            config.write_text(
+                '{"zigbee2mqtt/leak":{"water_leak":true}}',
+                encoding="utf-8",
+            )
+            store = EventStore(root / "events.json")
+            store.register(
+                1,
+                "протечка",
+                source="mqtt",
+                topic="zigbee2mqtt/leak",
+                field="water_leak",
+                value_type="boolean",
+                values=("true", "false"),
+                command="mqtt_sub.sh zigbee2mqtt/leak water_leak",
+            )
+            emitted: list[str] = []
+            monitor = MqttEventMonitor(
+                store,
+                lambda _binding, value: emitted.append(value),
+                active_state_path=config,
+            )
+
+            monitor._consume_line('zigbee2mqtt/leak {"water_leak":false}')
+            self.assertEqual(emitted, [])
+
+            monitor._consume_line('zigbee2mqtt/leak {"water_leak":true}')
+            self.assertEqual(emitted, ["true"])
+
     def test_non_boolean_discrete_field_uses_same_change_filter(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             store = EventStore(Path(temp) / "events.json")
