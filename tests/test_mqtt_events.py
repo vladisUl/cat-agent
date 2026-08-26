@@ -9,7 +9,7 @@ from orchestration.mqtt_events import MqttEventMonitor, MqttTopicCatalog
 
 
 class MqttEventTest(unittest.TestCase):
-    def test_catalog_parses_one_and_two_significant_boolean_values(self) -> None:
+    def test_catalog_parses_discrete_boolean_value_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "mqtt.txt"
             path.write_text(
@@ -31,7 +31,7 @@ class MqttEventTest(unittest.TestCase):
             self.assertEqual(door.value_type, "boolean")
             self.assertEqual(door.values, ("true", "false"))
 
-    def test_pir_false_rearms_but_only_true_emits(self) -> None:
+    def test_pir_emits_each_change_and_suppresses_repeated_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             store = EventStore(Path(temp) / "events.json")
             store.register(
@@ -51,45 +51,60 @@ class MqttEventTest(unittest.TestCase):
             )
 
             monitor._consume_line(
-                'zigbee2mqtt/dvigen_verh {"occupancy":false}'
+                'zigbee2mqtt/dvigen_verh {"occupancy":false,"linkquality":240}'
             )
             self.assertEqual(emitted, [])
 
             monitor._consume_line(
-                'zigbee2mqtt/dvigen_verh {"occupancy":true}'
+                'zigbee2mqtt/dvigen_verh {"occupancy":true,"linkquality":240}'
             )
             self.assertEqual(emitted, [("task_mqtt1", "true")])
 
             monitor._consume_line(
-                'zigbee2mqtt/dvigen_verh {"occupancy":true}'
+                'zigbee2mqtt/dvigen_verh {"occupancy":true,"linkquality":193}'
             )
             self.assertEqual(emitted, [("task_mqtt1", "true")])
 
             monitor._consume_line(
-                'zigbee2mqtt/dvigen_verh {"occupancy":false}'
-            )
-            self.assertEqual(emitted, [("task_mqtt1", "true")])
-
-            monitor._consume_line(
-                'zigbee2mqtt/dvigen_verh {"occupancy":true}'
+                'zigbee2mqtt/dvigen_verh {"occupancy":false,"linkquality":193}'
             )
             self.assertEqual(
                 emitted,
-                [("task_mqtt1", "true"), ("task_mqtt1", "true")],
+                [("task_mqtt1", "true"), ("task_mqtt1", "false")],
             )
 
-    def test_boolean_with_two_values_emits_both_transitions(self) -> None:
+            monitor._consume_line(
+                'zigbee2mqtt/dvigen_verh {"occupancy":false,"linkquality":120}'
+            )
+            self.assertEqual(
+                emitted,
+                [("task_mqtt1", "true"), ("task_mqtt1", "false")],
+            )
+
+            monitor._consume_line(
+                'zigbee2mqtt/dvigen_verh {"occupancy":true,"linkquality":120}'
+            )
+            self.assertEqual(
+                emitted,
+                [
+                    ("task_mqtt1", "true"),
+                    ("task_mqtt1", "false"),
+                    ("task_mqtt1", "true"),
+                ],
+            )
+
+    def test_non_boolean_discrete_field_uses_same_change_filter(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             store = EventStore(Path(temp) / "events.json")
             store.register(
                 1,
-                "дверь",
+                "свет",
                 source="mqtt",
-                topic="zigbee2mqtt/door",
-                field="contact",
-                value_type="boolean",
-                values=("true", "false"),
-                command="mqtt_sub.sh zigbee2mqtt/door contact",
+                topic="zigbee2mqtt/light",
+                field="state",
+                value_type="string",
+                values=("ON", "OFF"),
+                command="mqtt_sub.sh zigbee2mqtt/light state",
             )
             emitted: list[str] = []
             monitor = MqttEventMonitor(
@@ -97,12 +112,16 @@ class MqttEventTest(unittest.TestCase):
                 lambda _binding, value: emitted.append(value),
             )
 
-            monitor._consume_line('zigbee2mqtt/door {"contact":true}')
+            monitor._consume_line('zigbee2mqtt/light {"state":"OFF"}')
             self.assertEqual(emitted, [])
-            monitor._consume_line('zigbee2mqtt/door {"contact":false}')
-            self.assertEqual(emitted, ["false"])
-            monitor._consume_line('zigbee2mqtt/door {"contact":true}')
-            self.assertEqual(emitted, ["false", "true"])
+            monitor._consume_line('zigbee2mqtt/light {"state":"OFF"}')
+            self.assertEqual(emitted, [])
+            monitor._consume_line('zigbee2mqtt/light {"state":"ON"}')
+            self.assertEqual(emitted, ["ON"])
+            monitor._consume_line('zigbee2mqtt/light {"state":"ON"}')
+            self.assertEqual(emitted, ["ON"])
+            monitor._consume_line('zigbee2mqtt/light {"state":"OFF"}')
+            self.assertEqual(emitted, ["ON", "OFF"])
 
 
 if __name__ == "__main__":
