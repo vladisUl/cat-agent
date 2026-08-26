@@ -158,7 +158,7 @@ class AssistantManagerTest(unittest.TestCase):
             self.assertEqual(binding.topic, "zigbee2mqtt/dvigen_verh")
             self.assertEqual(binding.field, "occupancy")
             self.assertEqual(binding.value_type, "boolean")
-            self.assertEqual(binding.values, ("true",))
+            self.assertEqual(binding.values, ("true", "false"))
             self.assertEqual(
                 binding.command,
                 "mqtt_sub.sh zigbee2mqtt/dvigen_verh occupancy",
