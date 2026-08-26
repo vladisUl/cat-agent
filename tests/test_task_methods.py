@@ -111,20 +111,18 @@ class TaskMethodTest(unittest.TestCase):
                 f"SYSTEM_QUERY_RESULT TASK {task.task_id}\nОК",
             )
 
-    def test_query_rejects_done_without_result_until_value_then_ticks_manager(self) -> None:
+    def test_query_done_without_result_is_silent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             manager, system, client = self._runtime(
                 root,
                 [
                     '{"done":true}',
-                    '{"result":"Авария"}',
-                    "REPLY\nАвария",
                 ],
             )
             task = system.create_periodic_task(
                 "проверка",
-                "Проверить состояние и вернуть результат.",
+                "Проверить состояние и сообщить только если выполнено условие.",
                 ("shell",),
                 60.0,
                 method="query",
@@ -132,14 +130,11 @@ class TaskMethodTest(unittest.TestCase):
             turn = manager.system_event(
                 SystemEvent("timer", f"task:{task.task_id}", "", 1.0, task.task_id)
             )
-            self.assertEqual(turn.kind, "reply")
-            self.assertEqual(turn.text, "Авария")
-            self.assertEqual(len(client.calls), 3)
-            self.assertIn("query completion requires", client.calls[1][-1]["content"])
-            self.assertEqual(
-                client.calls[2][-1]["content"],
-                f"SYSTEM_QUERY_RESULT TASK {task.task_id}\nАвария",
-            )
+            self.assertEqual(turn.kind, "silent")
+            self.assertEqual(turn.text, "")
+            self.assertEqual(len(client.calls), 1)
+            tick = json.loads(client.calls[0][-1]["content"])
+            self.assertEqual(tick["method"], "query")
 
     def test_stepwise_query_yields_after_agent_tt_before_manager_tt(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
