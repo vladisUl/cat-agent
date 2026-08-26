@@ -38,8 +38,9 @@ class MqttTopicCatalog:
     A discrete line has the form:
       topic: description; field: type; (value: meaning, value: meaning)
 
-    The text after each value is for the models. SYSTEM only needs the listed
-    values to know which state transitions must wake the saved TASK/QUERY.
+    The field and type define the technical signal. Listed values and meanings
+    are model-facing semantics; SYSTEM forwards every real change of the field
+    and does not decide which state is important.
     """
 
     def __init__(self, path: Path) -> None:
@@ -228,16 +229,13 @@ class MqttEventMonitor:
             if current is None:
                 continue
 
-            if binding.value_type == "boolean":
-                if previous_payload is None or binding.field not in previous_payload:
-                    continue
-                previous = self._canonical_value(
-                    previous_payload[binding.field],
-                    binding.value_type,
-                )
-                if previous is None or previous == current:
-                    continue
-            if current not in binding.values:
+            if previous_payload is None or binding.field not in previous_payload:
+                continue
+            previous = self._canonical_value(
+                previous_payload[binding.field],
+                binding.value_type,
+            )
+            if previous is None or previous == current:
                 continue
 
             LOGGER.info(
