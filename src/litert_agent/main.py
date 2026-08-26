@@ -17,6 +17,9 @@ from .runtime import build_bundle, warm_bundle
 LOGGER = logging.getLogger(__name__)
 LOG_DIR = Path("/var/log/litertlm")
 LOG_PATH = LOG_DIR / "cat-agent.log"
+MQTT_ACTIVE_STATE_PATH = (
+    Path(__file__).resolve().parents[2] / "config" / "mqtt_event_active.json"
+)
 
 
 class _ProtocolLogFilter(logging.Filter):
@@ -185,6 +188,7 @@ def main() -> int:
         mqtt_monitor = MqttEventMonitor(
             bundle.runtime.event_store,
             lambda binding, value: _enqueue_mqtt_event(core, bundle, binding, value),
+            active_state_path=MQTT_ACTIVE_STATE_PATH,
         )
         core.start()
         mqtt_monitor.start()
