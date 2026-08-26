@@ -278,13 +278,6 @@ class AgentWorker:
             return self._continue_or_limit(step)
 
         if directive.action is AgentAction.DONE:
-            if self._method == "query" and not directive.body:
-                message = 'query completion requires a non-empty string in {"result":"..."}'
-                LOGGER.warning("%s step %d protocol error: %s", self.agent_id, step, message)
-                self._messages.append(
-                    {"role": "user", "content": self._runtime.format_protocol_error(message)}
-                )
-                return self._continue_or_limit(step)
             if self._method == "task" and directive.body:
                 message = 'task completion must be {"done":true}'
                 LOGGER.warning("%s step %d protocol error: %s", self.agent_id, step, message)
@@ -312,13 +305,6 @@ class AgentWorker:
             return AgentOutcome(self.agent_id, "OK", text, step)
 
         if directive.action is AgentAction.NEED:
-            if self._method == "query":
-                message = 'query must return {"result":"..."}; {"need":"..."} is not allowed'
-                LOGGER.warning("%s step %d protocol error: %s", self.agent_id, step, message)
-                self._messages.append(
-                    {"role": "user", "content": self._runtime.format_protocol_error(message)}
-                )
-                return self._continue_or_limit(step)
             self.state = AgentState.WAITING
             LOGGER.info("%s NEED steps=%d text=%r", self.agent_id, step, directive.body)
             return AgentOutcome(self.agent_id, "NEED", directive.body, step)
