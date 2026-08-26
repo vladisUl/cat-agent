@@ -120,15 +120,60 @@ class MqttEventMonitor:
         *,
         host: str = MQTT_HOST,
         port: int = MQTT_PORT,
+        active_state_path: Path | None = None,
     ) -> None:
         self.event_store = event_store
         self.callback = callback
         self.host = host
         self.port = port
+        self._active_states = self._load_active_states(active_state_path)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen[str] | None = None
         self._last_payloads: dict[str, dict[str, object]] = {}
+
+    @classmethod
+    def _load_active_states(cls, path: Path | None) -> dict[tuple[str, str], str]:
+        if path is None:
+            return {}
+        if not path.is_file():
+            raise FileNotFoundError(f"MQTT active-state config not found: {path}")
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("MQTT active-state config must be a JSON object")
+
+        states: dict[tuple[str, str], str] = {}
+        for topic, fields in data.items():
+            if not isinstance(topic, str) or not topic.strip():
+                raise ValueError("MQTT active-state topic must be a non-empty string")
+            if not isinstance(fields, dict) or not fields:
+                raise ValueError(
+                    f"MQTT active-state fields for {topic!r} must be a non-empty object"
+                )
+            for field, active in fields.items():
+                if not isinstance(field, str) or not field.strip():
+                    raise ValueError(
+                        f"MQTT active-state field for {topic!r} must be a non-empty string"
+                    )
+                states[(topic.strip(), field.strip())] = cls._config_value(active)
+
+        LOGGER.info("MQTT active-state config loaded: %d signals", len(states))
+        return states
+
+    @staticmethod
+    def _config_value(value: object) -> str:
+        if value is True:
+            return "true"
+        if value is False:
+            return "false"
+        if isinstance(value, str):
+            return value
+        if value is None:
+            return "null"
+        if isinstance(value, (int, float)):
+            return json.dumps(value, ensure_ascii=False)
+        raise ValueError("MQTT active-state value must be a JSON scalar")
 
     def start(self) -> None:
         if self._thread is not None:
@@ -230,7 +275,12 @@ class MqttEventMonitor:
                 continue
 
             if previous_payload is None or binding.field not in previous_payload:
+                active = self._active_states.get((binding.topic, binding.field))
+                if active != current:
+                    continue
+                self._emit(binding, current)
                 continue
+
             previous = self._canonical_value(
                 previous_payload[binding.field],
                 binding.value_type,
@@ -238,20 +288,23 @@ class MqttEventMonitor:
             if previous is None or previous == current:
                 continue
 
-            LOGGER.info(
-                "MQTT -> SYSTEM %r",
-                f"{binding.topic} {binding.field}={current}",
+            self._emit(binding, current)
+
+    def _emit(self, binding: EventBinding, current: str) -> None:
+        LOGGER.info(
+            "MQTT -> SYSTEM %r",
+            f"{binding.topic} {binding.field}={current}",
+        )
+        try:
+            self.callback(binding, current)
+        except Exception:
+            LOGGER.exception(
+                "MQTT event callback failed task=%d topic=%s field=%s value=%s",
+                binding.task_id,
+                binding.topic,
+                binding.field,
+                current,
             )
-            try:
-                self.callback(binding, current)
-            except Exception:
-                LOGGER.exception(
-                    "MQTT event callback failed task=%d topic=%s field=%s value=%s",
-                    binding.task_id,
-                    binding.topic,
-                    binding.field,
-                    current,
-                )
 
     @staticmethod
     def _canonical_value(value: object, value_type: str) -> str | None:
