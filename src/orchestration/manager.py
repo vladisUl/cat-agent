@@ -207,7 +207,9 @@ class ManagerRuntime:
             raise ValueError("autonomous task event requires task_id")
         store = self.system_runtime.task_store
         if store is None:
-            return AutonomousTaskCompletion(turn=ManagerTurn("error", "Task store is not configured"))
+            return AutonomousTaskCompletion(
+                turn=ManagerTurn("error", "Task store is not configured")
+            )
         try:
             task = store.require(event.task_id)
         except TaskStoreError as exc:
@@ -319,7 +321,7 @@ class ManagerRuntime:
         if outcome.status != "OK":
             return self._autonomous_error_completion(task, outcome.text or outcome.status)
         if not outcome.text.strip():
-            return self._autonomous_error_completion(task, "агент не вернул значение")
+            return AutonomousTaskCompletion(turn=ManagerTurn("silent", ""))
         return AutonomousTaskCompletion(
             query_task_id=task.task_id,
             query_result=outcome.text,
@@ -406,7 +408,7 @@ class ManagerRuntime:
         if outcome.status != "OK":
             return query_error(outcome.text or outcome.status)
         if not outcome.text.strip():
-            return query_error("агент не вернул значение")
+            return None
         return outcome.text
 
     def _drive_direct(self) -> ManagerTurn:
@@ -556,10 +558,16 @@ class ManagerRuntime:
                 response.elapsed_seconds,
                 response.prompt_tokens if response.prompt_tokens is not None else "?",
                 response.cached_tokens if response.cached_tokens is not None else "?",
-                response.prompt_evaluated_tokens if response.prompt_evaluated_tokens is not None else "?",
-                f"{response.prompt_seconds:.3f}s" if response.prompt_seconds is not None else "?",
+                response.prompt_evaluated_tokens
+                if response.prompt_evaluated_tokens is not None
+                else "?",
+                f"{response.prompt_seconds:.3f}s"
+                if response.prompt_seconds is not None
+                else "?",
                 response.completion_tokens if response.completion_tokens is not None else "?",
-                f"{response.generation_seconds:.3f}s" if response.generation_seconds is not None else "?",
+                f"{response.generation_seconds:.3f}s"
+                if response.generation_seconds is not None
+                else "?",
             )
             LOGGER.info("manager step %d MODEL RESPONSE\n%s", step, response.content)
             self.messages.append({"role": "assistant", "content": response.content})
@@ -750,7 +758,8 @@ class ManagerRuntime:
             return
         if worker.state is not AgentState.WAITING:
             self._event(
-                f"EVENT CONTINUE_FAILED {agent_id}\nAgent is {worker.state.value}, not WAITING."
+                f"EVENT CONTINUE_FAILED {agent_id}\n"
+                f"Agent is {worker.state.value}, not WAITING."
             )
             return
         outcome = worker.continue_with(context)
