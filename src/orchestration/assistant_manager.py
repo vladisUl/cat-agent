@@ -290,7 +290,18 @@ class AssistantManagerRuntime(ManagerRuntime):
             return "SYSTEM_ERROR\nempty command"
 
         if argv[0] in {"task_timer.sh", "query_timer.sh"}:
-            return self._execute_task_command(argv)
+            usage = (
+                "SYSTEM_ERROR\nusage: task_timer.sh|query_timer.sh "
+                "PERIOD SKILLS -- TEXT"
+            )
+            try:
+                separator = argv.index("--", 2)
+            except ValueError:
+                return usage
+            if separator < 3 or separator != len(argv) - 2:
+                return usage
+            normalized = [argv[0], argv[1], *argv[2:separator], argv[separator + 1]]
+            return self._execute_task_command(normalized)
         if argv[0] == "timer.sh":
             return self._execute_timer_command(argv)
 
