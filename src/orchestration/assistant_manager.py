@@ -441,9 +441,10 @@ class AssistantManagerRuntime(ManagerRuntime):
         if outcome.status != "OK":
             return f"SYSTEM_ERROR\n{outcome.text or outcome.status}"
         if method == "query":
-            if not outcome.text.strip():
-                return "SYSTEM_ERROR\nагент не вернул результат"
-            return outcome.text.strip()
+            result = outcome.text.strip()
+            if not result:
+                return "SYSTEM_OK\nЗАПРОС выполнен без результата для сообщения пользователю"
+            return result
         return "SYSTEM_OK\nЗАДАНИЕ выполнено"
 
     def _execute_timer_command(self, argv: list[str]) -> str:
