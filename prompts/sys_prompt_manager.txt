@@ -110,7 +110,7 @@ stderr и exit_code из следующего сообщения runtime.
 [SKILL mqtt]
 name: mqtt
 description:
-Доступ к данным, датчикам и устройствами через MQTT.
+Доступ к данным, датчикам и устройствам через MQTT.
 
 Для чтения данных используется команда:
 mqtt_sub.sh <topic> <field>
