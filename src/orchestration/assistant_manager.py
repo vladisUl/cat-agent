@@ -233,6 +233,13 @@ class AssistantManagerRuntime(ManagerRuntime):
 
             if command is not None:
                 result = self._execute_work_command(command)
+                if result is None:
+                    LOGGER.info("MANAGER WORK RESULT silent")
+                    if not self._chat_mode:
+                        self._reset_to_base()
+                    else:
+                        LOGGER.info("MANAGER CHAT context preserved after silent work result")
+                    return ManagerTurn("silent", "")
                 LOGGER.info("MANAGER WORK RESULT\n%s", result)
                 self._append_user(result)
                 continue
@@ -274,7 +281,7 @@ class AssistantManagerRuntime(ManagerRuntime):
             f"Manager exceeded maximum of {self.max_steps} steps",
         )
 
-    def _execute_work_command(self, command: str) -> str:
+    def _execute_work_command(self, command: str) -> str | None:
         try:
             argv = shlex.split(command, posix=True)
         except ValueError as exc:
@@ -290,7 +297,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         result = self._direct_runtime.execute(command)
         return self._direct_runtime.format_result(result)
 
-    def _execute_task_command(self, argv: list[str]) -> str:
+    def _execute_task_command(self, argv: list[str]) -> str | None:
         if len(argv) != 4:
             return (
                 "SYSTEM_ERROR\nusage: task_timer.sh|query_timer.sh "
@@ -422,7 +429,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         )
         return f"SYSTEM_OK\nTASK {task.task_id} created and started"
 
-    def _run_one_shot_agent(self, method: str, task_text: str, skills) -> str:
+    def _run_one_shot_agent(self, method: str, task_text: str, skills) -> str | None:
         worker = self.pool.acquire()
         if worker is None:
             return "SYSTEM_ERROR\nнет свободного агента"
@@ -442,9 +449,7 @@ class AssistantManagerRuntime(ManagerRuntime):
             return f"SYSTEM_ERROR\n{outcome.text or outcome.status}"
         if method == "query":
             result = outcome.text.strip()
-            if not result:
-                return "SYSTEM_OK\nЗАПРОС выполнен без результата для сообщения пользователю"
-            return result
+            return result or None
         return "SYSTEM_OK\nЗАДАНИЕ выполнено"
 
     def _execute_timer_command(self, argv: list[str]) -> str:
