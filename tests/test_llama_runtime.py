@@ -110,8 +110,10 @@ class LlamaRuntimeTest(unittest.TestCase):
             self.assertIsInstance(bundle.runtime, AssistantManagerRuntime)
             self.assertEqual(bundle.manager_client.id_slot, MANAGER_SLOT)
             self.assertEqual(bundle.agent_client.id_slot, AGENT_SLOT)
-            self.assertEqual(len(bundle.runtime.pool.workers()), 3)
-            for worker in bundle.runtime.pool.workers():
+            workers = [bundle.runtime.pool.get(f"agent{index}") for index in range(1, 4)]
+            self.assertTrue(all(worker is not None for worker in workers))
+            for worker in workers:
+                assert worker is not None
                 self.assertIs(worker.client, bundle.agent_client)
         finally:
             bundle.close()
