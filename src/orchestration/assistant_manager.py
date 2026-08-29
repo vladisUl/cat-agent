@@ -298,7 +298,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         return self._direct_runtime.format_result(result)
 
     def _execute_task_command(self, argv: list[str]) -> str | None:
-        if len(argv) != 4:
+        if len(argv) < 4:
             return (
                 "SYSTEM_ERROR\nusage: task_timer.sh|query_timer.sh "
                 "PERIOD SKILLS TEXT"
@@ -311,13 +311,11 @@ class AssistantManagerRuntime(ManagerRuntime):
         if not math.isfinite(period) or period < -1 or (-1 < period < 0):
             return "SYSTEM_ERROR\nperiod_seconds must be -1, 0 or > 0"
 
-        skill_names = tuple(
-            item.strip() for item in argv[2].split(",") if item.strip()
-        )
+        skill_names = tuple(item.strip() for item in argv[2:-1] if item.strip())
         if not skill_names or len(set(skill_names)) != len(skill_names):
             return "SYSTEM_ERROR\ninvalid skill list"
 
-        task_text = argv[3].strip()
+        task_text = argv[-1].strip()
         if not task_text:
             return "SYSTEM_ERROR\ntask text must be non-empty"
 
