@@ -4,39 +4,48 @@
 
 The project separates agent orchestration from model backends and human interfaces. Python owns runtime mechanics, scheduling, IPC, tools and state. The manager and agents operate inside prepared prompts/skills and decide how delegated work is carried out.
 
-The current primary runtime is LiteRT-LM on Linux ARM64. A llama.cpp/OpenAI-compatible backend is also kept in the repository as an alternate runtime.
+The current runtime supports two model backends behind the same CORE contract: LiteRT-LM and llama.cpp.
 
 ## Current architecture
 
 ```text
-              human interface
-                   TUI
-                    |
-              Unix socket IPC
-                    |
-              +-----v-----+
-              |   CORE    |
-              | scheduler |
-              +-----+-----+
-                    |
-              manager model
-                    |
-                 agents
-                    |
-        tools / tasks / system events
+                    interfaces
+             TUI / Web / Voice
+                       |
+                 Unix socket IPC
+                       |
+                 +-----v-----+
+                 |   CORE    |
+                 | scheduler |
+                 +-----+-----+
+                       |
+              AssistantManagerRuntime
+                       |
+              +--------+--------+
+              |                 |
+         LiteRT-LM          llama.cpp
+              |                 |
+        manager/agents     manager/agents
+              +--------+--------+
+                       |
+          tools / tasks / MQTT events
+                       |
+              autonomous results
+              human / Firebase
 ```
 
-The LiteRT-LM CORE is headless and long-lived. It owns the resident manager and agent model engines, scheduler, persistent task timers, system/hardware events, telemetry and the active human session.
+The CORE is headless and long-lived. It owns the scheduler, persistent task timers, system/hardware events, telemetry and active human session. Interfaces connect through `/run/cat-agent/core.sock` and do not depend on the selected model backend.
 
-The current human interface is a standalone curses TUI connected to the CORE through `/run/cat-agent/core.sock`. The CORE is intentionally independent of the TUI so interfaces can connect and disconnect without reloading the models. Additional interfaces can be added on the same boundary; Telegram integration is not implemented yet.
+LiteRT-LM keeps resident manager/agent sessions directly in-process. The llama.cpp backend uses a local `llama-server` with fixed slots (`manager=0`, `agent=1`) and the same orchestration, scheduler and IPC boundary.
 
 ## Source layout
 
 - `src/orchestration/` — shared manager/agent orchestration, prompts, skills, tools, tasks and system events.
-- `src/litert_agent/` — LiteRT-LM runtime, resident model clients, CORE scheduler/server, IPC client and standalone TUI.
-- `src/llama_agent/` — alternate llama.cpp/OpenAI-compatible interactive runtime.
+- `src/litert_agent/` — LiteRT-LM model runtime plus shared CORE scheduler/server, IPC client and TUI.
+- `src/llama_agent/` — llama.cpp model adapter and CORE launcher.
 - `prompts/` — manager, agent and skill prompts.
-- `tests/` — unit and integration tests for orchestration, CORE scheduling/IPC and LiteRT runtime wiring.
+- `config/` — runtime configuration such as MQTT first-active states.
+- `tests/` — unit and integration tests for orchestration, CORE scheduling/IPC and model backend wiring.
 
 ## LiteRT-LM launch
 
@@ -56,20 +65,44 @@ cd /opt/cat-agent
 ./start_litert_agent.sh e4b
 ```
 
-Then start the standalone TUI in another terminal:
+## llama.cpp launch
+
+The llama.cpp backend uses `CAT_AGENT_MODEL` and a local `llama-server` on port `9380`.
+
+Start the model server:
+
+```bash
+cd /opt/cat-agent
+export CAT_AGENT_MODEL=/storage/models/gemma-4-E4B-it-Q5_K_M.gguf
+./start_llama_server.sh
+```
+
+Then start the same headless CORE contract with the llama.cpp backend:
+
+```bash
+cd /opt/cat-agent
+export CAT_AGENT_MODEL=/storage/models/gemma-4-E4B-it-Q5_K_M.gguf
+./start_llama_agent.sh
+```
+
+The llama CORE waits for `llama-server`, warms the manager and agent BASE prefixes, arms persistent task timers, starts MQTT event monitoring and only then exposes the CORE socket.
+
+## Interfaces
+
+After either CORE backend is ready, the same interfaces can connect. For example, the standalone TUI:
 
 ```bash
 cd /opt/cat-agent
 ./start_tui.sh
 ```
 
+The Web and Voice interfaces use the same CORE socket boundary. Autonomous results are routed to an active human interface or to Firebase when no human interface owns the session.
+
 The CORE log is written to:
 
 ```text
 /var/log/litertlm/cat-agent.log
 ```
-
-The model/backend policy is kept in `start_litert_agent.sh`; `src/litert_agent/runtime.py` reads the exported LiteRT-specific environment variables and builds the resident engines.
 
 ## LiteRT-LM profiles
 
@@ -80,27 +113,9 @@ The model/backend policy is kept in `start_litert_agent.sh`; `src/litert_agent/r
 
 YNNPACK is enabled only for the E4B CPU profile. The E2B profile uses the dedicated GPU model build and is left on the GPU path.
 
-## llama.cpp backend
-
-The repository also contains a separate llama.cpp/OpenAI-compatible path. It uses `CAT_AGENT_MODEL` and a local OpenAI-compatible server on port `9380`:
-
-```bash
-export CAT_AGENT_MODEL=/path/to/model.gguf
-./start_llama_server.sh
-```
-
-In another terminal:
-
-```bash
-export CAT_AGENT_MODEL=/path/to/model.gguf
-./start_llama_agent.sh
-```
-
-This path is currently a direct interactive runtime and does not use the LiteRT-LM CORE/TUI IPC split.
-
 ## Tests
 
-Run the test suite with the same Python environment used by LiteRT-LM:
+Run the test suite with the same Python environment used by the CORE:
 
 ```bash
 cd /opt/cat-agent
