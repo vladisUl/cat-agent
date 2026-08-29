@@ -88,7 +88,7 @@ class OneShotQueryTest(unittest.TestCase):
             runtime, client = self._runtime(
                 Path(temp),
                 [
-                    f'/work#query_timer.sh 0 shell "{task}"',
+                    f'/work#query_timer.sh 0 shell -- "{task}"',
                     '{"done":true}',
                 ],
             )
@@ -100,6 +100,20 @@ class OneShotQueryTest(unittest.TestCase):
             self.assertEqual(len(client.calls), 2)
             self.assertEqual(client.replies, [])
             self.assertEqual(runtime.messages, runtime._base_messages)
+
+    def test_missing_unix_separator_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, _client = self._runtime(Path(temp), ["REPLY\nunused"])
+
+            result = runtime._execute_work_command(
+                'query_timer.sh 0 shell "Проверить условие"'
+            )
+
+            self.assertEqual(
+                result,
+                "SYSTEM_ERROR\nusage: task_timer.sh|query_timer.sh "
+                "PERIOD SKILLS -- TEXT",
+            )
 
     def test_result_text_is_returned_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
