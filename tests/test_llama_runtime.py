@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from unittest import mock
 import unittest
@@ -57,6 +58,20 @@ class FakeLlamaClient(LlamaChatClient):
         }
 
 
+class FakeStreamResponse:
+    def __init__(self, lines: list[bytes]) -> None:
+        self.lines = lines
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def __iter__(self):
+        return iter(self.lines)
+
+
 class LlamaClientTest(unittest.TestCase):
     def test_prepare_prefix_really_prefills_slot(self) -> None:
         client = FakeLlamaClient()
@@ -91,6 +106,61 @@ class LlamaClientTest(unittest.TestCase):
         self.assertEqual(response.prompt_evaluated_tokens, 4)
         self.assertEqual(response.completion_tokens, 5)
         self.assertEqual(client.resident_tokens, 26)
+
+    def test_native_stream_forwards_chunks_and_pins_slot(self) -> None:
+        client = FakeLlamaClient()
+        events: list[tuple[str, str, str]] = []
+        client.set_event_handler(lambda label, event, payload: events.append((label, event, payload)))
+
+        final = {
+            "content": "",
+            "stop": True,
+            "tokens_evaluated": 20,
+            "tokens_predicted": 5,
+            "tokens_cached": 17,
+            "timings": {
+                "prompt_n": 3,
+                "prompt_ms": 30.0,
+                "predicted_n": 5,
+                "predicted_ms": 50.0,
+            },
+        }
+        lines = [
+            b'data: {"content":"RE"}\n',
+            b'data: {"content":"PLY\\nOK"}\n',
+            ("data: " + json.dumps(final, separators=(",", ":")) + "\n").encode("utf-8"),
+        ]
+        requests = []
+
+        def fake_urlopen(http_request, timeout):
+            requests.append((http_request, timeout))
+            return FakeStreamResponse(lines)
+
+        with mock.patch("llama_agent.model_client.request.urlopen", side_effect=fake_urlopen):
+            response, content, first_chunk_at = client._completion_stream(
+                "PROMPT",
+                n_predict=64,
+            )
+
+        self.assertEqual(content, "REPLY\nOK")
+        self.assertEqual(response["tokens_cached"], 17)
+        self.assertIsNotNone(first_chunk_at)
+        self.assertEqual(
+            events,
+            [
+                ("test", "decode_start", ""),
+                ("test", "chunk", "RE"),
+                ("test", "chunk", "PLY\nOK"),
+            ],
+        )
+        self.assertEqual(len(requests), 1)
+        http_request, timeout = requests[0]
+        payload = json.loads(http_request.data.decode("utf-8"))
+        self.assertEqual(timeout, 30)
+        self.assertTrue(payload["stream"])
+        self.assertTrue(payload["cache_prompt"])
+        self.assertEqual(payload["id_slot"], 1)
+        self.assertEqual(payload["n_predict"], 64)
 
 
 class LlamaRuntimeTest(unittest.TestCase):
