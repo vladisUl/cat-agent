@@ -19,16 +19,23 @@ from orchestration.tasks import TaskStore
 class FakeClient:
     def __init__(self, replies: list[str]) -> None:
         self.replies = list(replies)
+        self.calls: list[list[dict[str, str]]] = []
+        self.reset_calls: list[list[dict[str, str]]] = []
 
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
+        self.calls.append([dict(item) for item in messages])
         return ChatResponse(self.replies.pop(0), None, None, 0.001)
 
     def reset_to_base(self, messages: list[dict[str, str]]) -> None:
-        del messages
+        self.reset_calls.append([dict(item) for item in messages])
 
 
 class OneShotQueryTest(unittest.TestCase):
-    def _runtime(self, root: Path, replies: list[str]) -> AssistantManagerRuntime:
+    def _runtime(
+        self,
+        root: Path,
+        replies: list[str],
+    ) -> tuple[AssistantManagerRuntime, FakeClient]:
         prompt_dir = root / "prompts"
         shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
         workspace = root / "workspace"
@@ -46,7 +53,7 @@ class OneShotQueryTest(unittest.TestCase):
             max_file_bytes=4096,
             command_timeout_seconds=2,
         )
-        return AssistantManagerRuntime(
+        runtime = AssistantManagerRuntime(
             client,  # type: ignore[arg-type]
             SkillBase(prompt_dir / "prompt_base.txt"),
             store,
@@ -55,10 +62,11 @@ class OneShotQueryTest(unittest.TestCase):
             max_steps=8,
             event_store=EventStore(root / "events.json"),
         )
+        return runtime, client
 
-    def test_done_true_is_success_without_publishable_result(self) -> None:
+    def test_done_true_has_no_manager_result(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            runtime = self._runtime(Path(temp), ['{"done":true}'])
+            runtime, _client = self._runtime(Path(temp), ['{"done":true}'])
 
             result = runtime._execute_task_command(
                 [
@@ -69,14 +77,36 @@ class OneShotQueryTest(unittest.TestCase):
                 ]
             )
 
-            self.assertEqual(
-                result,
-                "SYSTEM_OK\nЗАПРОС выполнен без результата для сообщения пользователю",
+            self.assertIsNone(result)
+
+    def test_done_true_ends_human_turn_silently_without_second_manager_tt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            task = (
+                "Посчитать количество файлов в рабочем каталоге и сообщить мне "
+                "только если их 999999"
             )
+            runtime, client = self._runtime(
+                Path(temp),
+                [
+                    f'/work#query_timer.sh 0 shell "{task}"',
+                    '{"done":true}',
+                ],
+            )
+
+            turn = runtime.user_message(f"создай запрос {task.lower()}")
+
+            self.assertEqual(turn.kind, "silent")
+            self.assertEqual(turn.text, "")
+            self.assertEqual(len(client.calls), 2)
+            self.assertEqual(client.replies, [])
+            self.assertEqual(runtime.messages, runtime._base_messages)
 
     def test_result_text_is_returned_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            runtime = self._runtime(Path(temp), ['{"result":"Количество файлов 4"}'])
+            runtime, _client = self._runtime(
+                Path(temp),
+                ['{"result":"Количество файлов 4"}'],
+            )
 
             result = runtime._execute_task_command(
                 [
