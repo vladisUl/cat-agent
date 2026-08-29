@@ -12,6 +12,13 @@ case "${1:-}" in
         SPECULATIVE="1"
         YNNPACK="0"
         ;;
+    e2b-cpu)
+        MODEL_PATH="/storage/models/litertlm/gemma-4-E2B-it.litertlm"
+        BACKEND="cpu"
+        ACTIVATION_DATA_TYPE=""
+        SPECULATIVE="0"
+        YNNPACK="1"
+        ;;
     e4b)
         MODEL_PATH="/storage/models/litertlm/gemma-4-E4B-it.litertlm"
         BACKEND="cpu"
@@ -20,7 +27,7 @@ case "${1:-}" in
         YNNPACK="1"
         ;;
     *)
-        echo "Usage: $0 e2b|e4b" >&2
+        echo "Usage: $0 e2b|e2b-cpu|e4b" >&2
         exit 2
         ;;
 esac
