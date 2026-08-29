@@ -8,5 +8,6 @@ cd /opt/cat-agent
 
 export PYTHONPATH=/opt/cat-agent/src
 export CAT_AGENT_API_BASE_URL=http://127.0.0.1:9380/v1
+export CAT_AGENT_LLAMA_SPECULATIVE="${CAT_AGENT_LLAMA_SPECULATIVE:-1}"
 
-exec python3 -m llama_agent.main
+exec /opt/litert-lm-venv/bin/python3 -m llama_agent.main
