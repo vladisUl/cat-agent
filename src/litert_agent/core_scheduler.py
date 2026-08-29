@@ -378,7 +378,8 @@ class CoreScheduler:
             turn = ManagerTurn("error", str(exc))
 
         if request is not None and request.kind == "user":
-            self._emit_human_turn(turn)
+            if turn.kind != "silent":
+                self._emit_human_turn(turn)
         elif turn.kind == "reply" and turn.text:
             self._emit_notification(turn)
         elif turn.kind == "error":
