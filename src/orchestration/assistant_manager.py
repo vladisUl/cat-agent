@@ -335,7 +335,10 @@ class AssistantManagerRuntime(ManagerRuntime):
         except SkillBaseError as exc:
             return f"SYSTEM_ERROR\n{exc}"
 
-        method = "task" if argv[0] == "task_timer.sh" else "query"
+        # Public manager protocol has one ЗАДАНИЕ type. Internally the existing
+        # query method already has the required semantics: return result when
+        # requested, otherwise finish silently with {"done":true}.
+        method = "query"
         if period == 0:
             return self._run_one_shot_agent(method, task_text, skills)
         if period == -1:
