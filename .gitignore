@@ -3,3 +3,4 @@ __pycache__/
 
 prompts/prompt_agent_*.txt
 prompts/prompt_manager.txt
+.env.openai
