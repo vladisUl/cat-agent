@@ -20,7 +20,7 @@ class WakeBeepTest(unittest.TestCase):
         self.assertEqual(len(pcm), expected_frames * 2)
         self.assertNotEqual(pcm, b"\x00" * len(pcm))
         self.assertEqual(WAKE_BEEP_FREQUENCY_HZ, 784.0)
-        self.assertEqual(WAKE_BEEP_SECONDS, 0.50)
+        self.assertEqual(WAKE_BEEP_SECONDS, 0.10)
 
     @patch("litert_agent.voice_tts.subprocess.run")
     def test_playback_uses_one_aplay_call(self, run_mock) -> None:
