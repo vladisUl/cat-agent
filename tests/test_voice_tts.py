@@ -4,8 +4,10 @@ import struct
 import unittest
 
 from litert_agent.voice_tts import (
+    WAKE_BEEP_PAUSE_SECONDS,
     WAKE_BEEP_SAMPLE_RATE,
     WAKE_BEEP_SECONDS,
+    WAKE_BEEP_TONE_SECONDS,
     _wake_beep_pcm,
 )
 
@@ -27,22 +29,31 @@ class WakeBeepTest(unittest.TestCase):
         self.assertEqual(len(pcm), expected_frames * 2)
         self.assertNotEqual(pcm, b"\x00" * len(pcm))
 
-    def test_tones_start_without_fade(self) -> None:
+    def test_tones_are_separated_by_silence(self) -> None:
         pcm = _wake_beep_pcm()
-        midpoint = len(pcm) // 2
+        tone_bytes = round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_TONE_SECONDS) * 2
+        pause_bytes = round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_PAUSE_SECONDS) * 2
+
+        pause = pcm[tone_bytes : tone_bytes + pause_bytes]
+        self.assertEqual(pause, b"\x00" * pause_bytes)
 
         first_second_sample = struct.unpack_from("<h", pcm, 2)[0]
-        second_second_sample = struct.unpack_from("<h", pcm, midpoint + 2)[0]
+        second_tone_offset = tone_bytes + pause_bytes
+        second_second_sample = struct.unpack_from("<h", pcm, second_tone_offset + 2)[0]
 
         self.assertGreater(abs(first_second_sample), 100)
         self.assertGreater(abs(second_second_sample), 100)
 
     def test_second_tone_is_clearly_lower_than_first(self) -> None:
         pcm = _wake_beep_pcm()
-        midpoint = len(pcm) // 2
+        tone_bytes = round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_TONE_SECONDS) * 2
+        pause_bytes = round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_PAUSE_SECONDS) * 2
 
-        high_crossings = _zero_crossings(pcm[:midpoint])
-        low_crossings = _zero_crossings(pcm[midpoint:])
+        high_pcm = pcm[:tone_bytes]
+        low_pcm = pcm[tone_bytes + pause_bytes :]
+
+        high_crossings = _zero_crossings(high_pcm)
+        low_crossings = _zero_crossings(low_pcm)
 
         self.assertGreater(high_crossings, low_crossings)
         self.assertGreater(high_crossings, low_crossings * 1.3)
