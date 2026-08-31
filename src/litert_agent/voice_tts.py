@@ -22,12 +22,10 @@ WAKE_BEEP_SECONDS = 1.0
 WAKE_BEEP_TONE_SECONDS = WAKE_BEEP_SECONDS / 2
 WAKE_BEEP_SAMPLE_RATE = 24_000
 WAKE_BEEP_AMPLITUDE = 0.12
-WAKE_BEEP_FADE_SECONDS = 0.02
 
 
 def _wake_beep_pcm() -> bytes:
     tone_frames = round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_TONE_SECONDS)
-    fade_frames = max(1, round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_FADE_SECONDS))
     peak = int(32767 * WAKE_BEEP_AMPLITUDE)
     samples = array("h")
 
@@ -36,14 +34,8 @@ def _wake_beep_pcm() -> bytes:
         WAKE_BEEP_LOW_FREQUENCY_HZ,
     ):
         for frame in range(tone_frames):
-            gain = 1.0
-            if frame < fade_frames:
-                gain = frame / fade_frames
-            elif frame >= tone_frames - fade_frames:
-                gain = max(0.0, (tone_frames - 1 - frame) / fade_frames)
-
             phase = 2.0 * math.pi * frequency_hz * frame / WAKE_BEEP_SAMPLE_RATE
-            samples.append(round(peak * gain * math.sin(phase)))
+            samples.append(round(peak * math.sin(phase)))
 
     if sys.byteorder != "little":
         samples.byteswap()
