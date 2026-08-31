@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 import unittest
+from unittest.mock import patch
 
 from litert_agent.voice_tts import (
     WAKE_BEEP_PAUSE_SECONDS,
@@ -9,6 +10,7 @@ from litert_agent.voice_tts import (
     WAKE_BEEP_SECONDS,
     WAKE_BEEP_TONE_SECONDS,
     _wake_beep_pcm,
+    play_wake_beep,
 )
 
 
@@ -57,6 +59,19 @@ class WakeBeepTest(unittest.TestCase):
 
         self.assertGreater(high_crossings, low_crossings)
         self.assertGreater(high_crossings, low_crossings * 1.3)
+
+    @patch("litert_agent.voice_tts.time.sleep")
+    @patch("litert_agent.voice_tts.subprocess.run")
+    def test_playback_uses_two_separate_aplay_calls(self, run_mock, sleep_mock) -> None:
+        play_wake_beep()
+
+        self.assertEqual(run_mock.call_count, 2)
+        sleep_mock.assert_called_once_with(WAKE_BEEP_PAUSE_SECONDS)
+
+        first_pcm = run_mock.call_args_list[0].kwargs["input"]
+        second_pcm = run_mock.call_args_list[1].kwargs["input"]
+
+        self.assertGreater(_zero_crossings(first_pcm), _zero_crossings(second_pcm))
 
 
 if __name__ == "__main__":
