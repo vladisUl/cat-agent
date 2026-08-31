@@ -70,7 +70,7 @@ class OneShotQueryTest(unittest.TestCase):
 
             result = runtime._execute_task_command(
                 [
-                    "query_timer.sh",
+                    "task_timer.sh",
                     "0",
                     "shell",
                     "Посчитать файлы и сообщить только если количество равно 4",
@@ -88,12 +88,12 @@ class OneShotQueryTest(unittest.TestCase):
             runtime, client = self._runtime(
                 Path(temp),
                 [
-                    f'/work#query_timer.sh 0 shell -- "{task}"',
+                    f'/work#task_timer.sh 0 shell -- "{task}"',
                     '{"done":true}',
                 ],
             )
 
-            turn = runtime.user_message(f"создай запрос {task.lower()}")
+            turn = runtime.user_message(f"создай задание {task.lower()}")
 
             self.assertEqual(turn.kind, "silent")
             self.assertEqual(turn.text, "")
@@ -106,7 +106,7 @@ class OneShotQueryTest(unittest.TestCase):
             runtime, _client = self._runtime(Path(temp), ["REPLY\nunused"])
 
             result = runtime._execute_work_command(
-                'query_timer.sh 0 shell "Проверить условие"'
+                'task_timer.sh 0 shell "Проверить условие"'
             )
 
             self.assertEqual(
@@ -124,7 +124,7 @@ class OneShotQueryTest(unittest.TestCase):
 
             result = runtime._execute_task_command(
                 [
-                    "query_timer.sh",
+                    "task_timer.sh",
                     "0",
                     "shell",
                     "Посчитать файлы и сообщить только если количество равно 4",
