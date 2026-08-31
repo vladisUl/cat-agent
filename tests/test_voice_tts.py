@@ -10,6 +10,15 @@ from litert_agent.voice_tts import (
 )
 
 
+def _zero_crossings(pcm: bytes) -> int:
+    sample_count = len(pcm) // 2
+    samples = struct.unpack(f"<{sample_count}h", pcm)
+    return sum(
+        (left < 0 <= right) or (left >= 0 > right)
+        for left, right in zip(samples, samples[1:])
+    )
+
+
 class WakeBeepTest(unittest.TestCase):
     def test_pcm_has_expected_duration_and_faded_edges(self) -> None:
         pcm = _wake_beep_pcm()
@@ -19,6 +28,16 @@ class WakeBeepTest(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<h", pcm, 0)[0], 0)
         self.assertEqual(struct.unpack_from("<h", pcm, len(pcm) - 2)[0], 0)
         self.assertNotEqual(pcm, b"\x00" * len(pcm))
+
+    def test_second_tone_is_clearly_lower_than_first(self) -> None:
+        pcm = _wake_beep_pcm()
+        midpoint = len(pcm) // 2
+
+        high_crossings = _zero_crossings(pcm[:midpoint])
+        low_crossings = _zero_crossings(pcm[midpoint:])
+
+        self.assertGreater(high_crossings, low_crossings)
+        self.assertGreater(high_crossings, low_crossings * 1.3)
 
 
 if __name__ == "__main__":
