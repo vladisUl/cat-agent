@@ -16,36 +16,24 @@ TTS_TAIL_SILENCE_SECONDS = 0.50
 POST_TTS_GUARD_SECONDS = 0.10
 APLAY_DEVICE = os.environ.get("VLAD_APLAY_DEVICE", "").strip()
 
-WAKE_BEEP_HIGH_FREQUENCY_HZ = 784.0
-WAKE_BEEP_LOW_FREQUENCY_HZ = 523.25
-WAKE_BEEP_TONE_SECONDS = 0.30
-WAKE_BEEP_PAUSE_SECONDS = 0.20
-WAKE_BEEP_SECONDS = 2 * WAKE_BEEP_TONE_SECONDS + WAKE_BEEP_PAUSE_SECONDS
+WAKE_BEEP_FREQUENCY_HZ = 784.0
+WAKE_BEEP_SECONDS = 0.50
 WAKE_BEEP_SAMPLE_RATE = 24_000
 WAKE_BEEP_AMPLITUDE = 0.12
 
 
-def _tone_pcm(frequency_hz: float, seconds: float) -> bytes:
-    frame_count = round(WAKE_BEEP_SAMPLE_RATE * seconds)
+def _wake_beep_pcm() -> bytes:
+    frame_count = round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_SECONDS)
     peak = int(32767 * WAKE_BEEP_AMPLITUDE)
     samples = array("h")
 
     for frame in range(frame_count):
-        phase = 2.0 * math.pi * frequency_hz * frame / WAKE_BEEP_SAMPLE_RATE
+        phase = 2.0 * math.pi * WAKE_BEEP_FREQUENCY_HZ * frame / WAKE_BEEP_SAMPLE_RATE
         samples.append(round(peak * math.sin(phase)))
 
     if sys.byteorder != "little":
         samples.byteswap()
     return samples.tobytes()
-
-
-def _wake_beep_pcm() -> bytes:
-    pause_frames = round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_PAUSE_SECONDS)
-    return (
-        _tone_pcm(WAKE_BEEP_HIGH_FREQUENCY_HZ, WAKE_BEEP_TONE_SECONDS)
-        + b"\x00\x00" * pause_frames
-        + _tone_pcm(WAKE_BEEP_LOW_FREQUENCY_HZ, WAKE_BEEP_TONE_SECONDS)
-    )
 
 
 def _wake_aplay_command() -> list[str]:
