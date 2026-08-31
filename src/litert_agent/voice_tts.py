@@ -16,28 +16,33 @@ TTS_TAIL_SILENCE_SECONDS = 0.50
 POST_TTS_GUARD_SECONDS = 0.10
 APLAY_DEVICE = os.environ.get("VLAD_APLAY_DEVICE", "").strip()
 
-WAKE_BEEP_FREQUENCY_HZ = 660.0
-WAKE_BEEP_SECONDS = 1.0
+WAKE_BEEP_HIGH_FREQUENCY_HZ = 784.0
+WAKE_BEEP_LOW_FREQUENCY_HZ = 660.0
+WAKE_BEEP_TONE_SECONDS = 0.5
 WAKE_BEEP_SAMPLE_RATE = 24_000
 WAKE_BEEP_AMPLITUDE = 0.12
 WAKE_BEEP_FADE_SECONDS = 0.02
 
 
 def _wake_beep_pcm() -> bytes:
-    frame_count = round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_SECONDS)
+    tone_frames = round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_TONE_SECONDS)
     fade_frames = max(1, round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_FADE_SECONDS))
     peak = int(32767 * WAKE_BEEP_AMPLITUDE)
     samples = array("h")
 
-    for frame in range(frame_count):
-        gain = 1.0
-        if frame < fade_frames:
-            gain = frame / fade_frames
-        elif frame >= frame_count - fade_frames:
-            gain = max(0.0, (frame_count - 1 - frame) / fade_frames)
+    for frequency_hz in (
+        WAKE_BEEP_HIGH_FREQUENCY_HZ,
+        WAKE_BEEP_LOW_FREQUENCY_HZ,
+    ):
+        for frame in range(tone_frames):
+            gain = 1.0
+            if frame < fade_frames:
+                gain = frame / fade_frames
+            elif frame >= tone_frames - fade_frames:
+                gain = max(0.0, (tone_frames - 1 - frame) / fade_frames)
 
-        phase = 2.0 * math.pi * WAKE_BEEP_FREQUENCY_HZ * frame / WAKE_BEEP_SAMPLE_RATE
-        samples.append(round(peak * gain * math.sin(phase)))
+            phase = 2.0 * math.pi * frequency_hz * frame / WAKE_BEEP_SAMPLE_RATE
+            samples.append(round(peak * gain * math.sin(phase)))
 
     if sys.byteorder != "little":
         samples.byteswap()
