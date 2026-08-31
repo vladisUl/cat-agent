@@ -18,8 +18,8 @@ APLAY_DEVICE = os.environ.get("VLAD_APLAY_DEVICE", "").strip()
 
 WAKE_BEEP_HIGH_FREQUENCY_HZ = 784.0
 WAKE_BEEP_LOW_FREQUENCY_HZ = 523.25
-WAKE_BEEP_TONE_SECONDS = 0.45
-WAKE_BEEP_PAUSE_SECONDS = 0.10
+WAKE_BEEP_TONE_SECONDS = 0.30
+WAKE_BEEP_PAUSE_SECONDS = 0.20
 WAKE_BEEP_SECONDS = 2 * WAKE_BEEP_TONE_SECONDS + WAKE_BEEP_PAUSE_SECONDS
 WAKE_BEEP_SAMPLE_RATE = 24_000
 WAKE_BEEP_AMPLITUDE = 0.12
@@ -68,17 +68,9 @@ def _wake_aplay_command() -> list[str]:
 
 
 def play_wake_beep() -> None:
-    command = _wake_aplay_command()
-
     subprocess.run(
-        command,
-        input=_tone_pcm(WAKE_BEEP_HIGH_FREQUENCY_HZ, WAKE_BEEP_TONE_SECONDS),
-        check=True,
-    )
-    time.sleep(WAKE_BEEP_PAUSE_SECONDS)
-    subprocess.run(
-        command,
-        input=_tone_pcm(WAKE_BEEP_LOW_FREQUENCY_HZ, WAKE_BEEP_TONE_SECONDS),
+        _wake_aplay_command(),
+        input=_wake_beep_pcm(),
         check=True,
     )
 
