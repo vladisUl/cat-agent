@@ -18,24 +18,40 @@ APLAY_DEVICE = os.environ.get("VLAD_APLAY_DEVICE", "").strip()
 
 WAKE_BEEP_HIGH_FREQUENCY_HZ = 784.0
 WAKE_BEEP_LOW_FREQUENCY_HZ = 523.25
-WAKE_BEEP_SECONDS = 4.0
-WAKE_BEEP_TONE_SECONDS = WAKE_BEEP_SECONDS / 2
+WAKE_BEEP_SECONDS = 1.0
+WAKE_BEEP_TONE_SECONDS = 0.45
+WAKE_BEEP_PAUSE_SECONDS = 0.10
 WAKE_BEEP_SAMPLE_RATE = 24_000
 WAKE_BEEP_AMPLITUDE = 0.12
 
 
 def _wake_beep_pcm() -> bytes:
     tone_frames = round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_TONE_SECONDS)
+    pause_frames = round(WAKE_BEEP_SAMPLE_RATE * WAKE_BEEP_PAUSE_SECONDS)
     peak = int(32767 * WAKE_BEEP_AMPLITUDE)
     samples = array("h")
 
-    for frequency_hz in (
-        WAKE_BEEP_HIGH_FREQUENCY_HZ,
-        WAKE_BEEP_LOW_FREQUENCY_HZ,
-    ):
-        for frame in range(tone_frames):
-            phase = 2.0 * math.pi * frequency_hz * frame / WAKE_BEEP_SAMPLE_RATE
-            samples.append(round(peak * math.sin(phase)))
+    for frame in range(tone_frames):
+        phase = (
+            2.0
+            * math.pi
+            * WAKE_BEEP_HIGH_FREQUENCY_HZ
+            * frame
+            / WAKE_BEEP_SAMPLE_RATE
+        )
+        samples.append(round(peak * math.sin(phase)))
+
+    samples.extend([0] * pause_frames)
+
+    for frame in range(tone_frames):
+        phase = (
+            2.0
+            * math.pi
+            * WAKE_BEEP_LOW_FREQUENCY_HZ
+            * frame
+            / WAKE_BEEP_SAMPLE_RATE
+        )
+        samples.append(round(peak * math.sin(phase)))
 
     if sys.byteorder != "little":
         samples.byteswap()
