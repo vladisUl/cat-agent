@@ -90,7 +90,7 @@ class CoreScheduler:
         self.bundle.manager_client.set_event_handler(self._model_event)
         for client in getattr(self.bundle, "agent_clients", ()):
             client.set_event_handler(self._model_event)
-        self._executor.submit(self._prepare_human_context).result()
+        self._executor.submit(self._prepare_contexts).result()
         self._thread = threading.Thread(target=self._run, name="cat-agent-scheduler", daemon=True)
         self._thread.start()
 
@@ -117,6 +117,9 @@ class CoreScheduler:
         if self._spare_human_context is not None:
             self._spare_human_context.client.close()
             self._spare_human_context = None
+
+    def _prepare_contexts(self):
+        self._prepare_human_context()
 
     def _prepare_human_context(self):
         runtime = self.bundle.runtime

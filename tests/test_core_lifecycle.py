@@ -157,6 +157,39 @@ class CoreLifecycleTest(unittest.TestCase):
         self.assertEqual(calls, [("human:human", "terminal", 1), ("voice", "spoken", 1), ("voice", "spoken", 2), ("human:human", "terminal", 2)])
 
 class RealManagerSchedulingTest(unittest.TestCase):
+    def test_voice_context_prepared_before_scheduler_loop_and_reused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
+            children = []
+            def fork(label):
+                child = fixtures.FakeClient([])
+                child.set_event_handler = Mock()
+                child.close = Mock()
+                children.append(child)
+                return child
+            client.fork = Mock(side_effect=fork)
+            client.set_event_handler = Mock()
+            s = VoiceCoreScheduler(SimpleNamespace(runtime=runtime, manager_client=client))
+            observed = []
+            s._run = lambda: observed.append(s._contexts.get("voice"))
+            try:
+                s.start()
+                s._thread.join(timeout=1)
+                self.assertFalse(s._thread.is_alive())
+                voice = s._contexts["voice"]
+                self.assertEqual(observed, [voice])
+                self.assertIsNot(voice, s._spare_human_context)
+                self.assertEqual(client.fork.call_count, 2)
+                for session in ("first", "second"):
+                    item = _PriorityRequest("user", "voice", "hello", 0, -10, session_id=session)
+                    self.assertIs(s._context(item), voice)
+                s._prepare_contexts()
+                self.assertEqual(client.fork.call_count, 2)
+            finally:
+                s.close()
+            for child in children:
+                child.close.assert_called_once()
+
     def test_warmed_human_context_reused_without_history_or_new_fork(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
