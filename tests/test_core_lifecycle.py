@@ -157,6 +157,62 @@ class CoreLifecycleTest(unittest.TestCase):
         self.assertEqual(calls, [("human:human", "terminal", 1), ("voice", "spoken", 1), ("voice", "spoken", 2), ("human:human", "terminal", 2)])
 
 class RealManagerSchedulingTest(unittest.TestCase):
+    def test_warmed_human_context_reused_without_history_or_new_fork(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
+            child = fixtures.FakeClient([])
+            child.set_event_handler = Mock()
+            child.close = Mock()
+            client.fork = Mock(return_value=child)
+            s = CoreScheduler(SimpleNamespace(runtime=runtime))
+            self.addCleanup(s._executor.shutdown, wait=True)
+            s._prepare_human_context()
+            first = _PriorityRequest("user", "user", "one", 0, 0, session_id="old")
+            context = s._context(first)
+            context.messages.append({"role": "user", "content": "private history"})
+            context._chat_mode = True
+            context._direct_repeated = {"private command": 1}
+            context._direct_runtime._uncertain_commands = {"private command"}
+            s._release_context("old")
+            second = _PriorityRequest("user", "user", "two", 0, 0, session_id="new")
+            self.assertIs(s._context(second), context)
+            self.assertEqual(client.fork.call_count, 1)
+            self.assertEqual(child.reset_calls, [runtime._base_messages])
+            self.assertEqual(context.messages, runtime._base_messages)
+            self.assertFalse(context._chat_mode)
+            self.assertEqual(context._direct_repeated, {})
+            self.assertEqual(context._direct_runtime._uncertain_commands, set())
+            child.close.assert_not_called()
+            s._stop.set()
+            s._close_all_contexts()
+            child.close.assert_called_once()
+
+    def test_failed_kv_reset_discards_context(self):
+        s = CoreScheduler(SimpleNamespace(runtime=SimpleNamespace()))
+        self.addCleanup(s._executor.shutdown, wait=True)
+        context = SimpleNamespace(
+            reset_for_new_session=Mock(side_effect=RuntimeError("KV reset failed")),
+            client=SimpleNamespace(close=Mock()))
+        s._contexts["human:old"] = context
+        with self.assertLogs("agent_core.core_scheduler", level="ERROR"):
+            s._close_context("human:old")
+        self.assertIsNone(s._spare_human_context)
+        context.client.close.assert_called_once()
+
+    def test_release_waits_for_old_requests_before_recycling(self):
+        s = CoreScheduler(SimpleNamespace(runtime=SimpleNamespace()))
+        self.addCleanup(s._executor.shutdown, wait=True)
+        context = SimpleNamespace(reset_for_new_session=Mock(), client=SimpleNamespace(close=Mock()))
+        s._contexts["human:old"] = context
+        s.submit_user("unfinished", session_id="old")
+        s._release_context("old")
+        context.reset_for_new_session.assert_not_called()
+        self.assertIsNone(s._spare_human_context)
+        s._pending.clear()
+        s._release_context("old")
+        context.reset_for_new_session.assert_called_once()
+        self.assertIs(s._spare_human_context, context)
+
     def test_real_manager_tool_flow_resumes_after_voice(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])

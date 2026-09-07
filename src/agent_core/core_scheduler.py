@@ -77,6 +77,7 @@ class CoreScheduler:
         self._last_request_seconds = None
         self._last_metrics = {}
         self._contexts = {}
+        self._spare_human_context = None
         self._released_sessions = set()
         self._stop = threading.Event()
         self._thread = None
@@ -89,6 +90,7 @@ class CoreScheduler:
         self.bundle.manager_client.set_event_handler(self._model_event)
         for client in getattr(self.bundle, "agent_clients", ()):
             client.set_event_handler(self._model_event)
+        self._executor.submit(self._prepare_human_context).result()
         self._thread = threading.Thread(target=self._run, name="cat-agent-scheduler", daemon=True)
         self._thread.start()
 
@@ -112,6 +114,19 @@ class CoreScheduler:
     def _close_all_contexts(self):
         for key in list(self._contexts):
             self._close_context(key)
+        if self._spare_human_context is not None:
+            self._spare_human_context.client.close()
+            self._spare_human_context = None
+
+    def _prepare_human_context(self):
+        runtime = self.bundle.runtime
+        if (self._spare_human_context is None
+                and callable(getattr(runtime, "fork_context", None))
+                and callable(getattr(runtime, "reset_for_new_session", None))):
+            context = runtime.fork_context("human:spare")
+            context.client.set_event_handler(self._model_event)
+            self._spare_human_context = context
+            LOGGER.info("CORE human session base ready")
 
     def submit_user(self, text, *, session_id="", request_id=None):
         return self._submit_input(text, "user", MANAGER_PRIORITY, session_id, request_id)
@@ -151,9 +166,6 @@ class CoreScheduler:
 
     def _release_context(self, session_id):
         key = "human:" + session_id
-        context = self._contexts.get(key)
-        if context is not None:
-            context.human_session_released()
         with self._queue_lock:
             live = any(item is not None and item.session_id == session_id
                        for item in [*self._pending, self._active_request])
@@ -259,7 +271,11 @@ class CoreScheduler:
         key = self._context_key(item)
         if key not in self._contexts:
             fork = getattr(self.bundle.runtime, "fork_context", None)
-            self._contexts[key] = fork(key) if fork is not None else self.bundle.runtime
+            if key.startswith("human:") and self._spare_human_context is not None:
+                self._contexts[key] = self._spare_human_context
+                self._spare_human_context = None
+            else:
+                self._contexts[key] = fork(key) if fork is not None else self.bundle.runtime
             if fork is not None:
                 self._contexts[key].client.set_event_handler(self._model_event)
         item.context = self._contexts[key]
@@ -357,13 +373,19 @@ class CoreScheduler:
                 self.on_notification(turn)
         except Exception:
             LOGGER.exception("CORE completion delivery failed id=%s", item.request_id)
-        if item.kind == "user" and item.label != "voice" and item.session_id in self._released_sessions:
-            self._executor.submit(self._close_context, self._context_key(item))
-
-
     def _close_context(self, key):
         context = self._contexts.pop(key, None)
         if context is not None and context is not self.bundle.runtime:
+            if (key.startswith("human:") and not self._stop.is_set()
+                    and self._spare_human_context is None
+                    and callable(getattr(context, "reset_for_new_session", None))):
+                try:
+                    context.reset_for_new_session()
+                except Exception:
+                    LOGGER.exception("CORE cannot reuse human session base")
+                else:
+                    self._spare_human_context = context
+                    return
             context.client.close()
 
     def active_request_label(self):

@@ -58,6 +58,24 @@ class AssistantManagerRuntime(ManagerRuntime):
             return True  # Admit stale work so begin can cancel it without a worker.
         return (self.pool.acquire_event() if event.source == "mqtt" else self.pool.acquire()) is not None
 
+    def reset_for_new_session(self):
+        """Clear private state, retaining only the model's warmed system base.
+
+        Unlike the best-effort turn reset, propagate KV reset failures: a failed
+        reset must never return this context to the scheduler's spare slot.
+        """
+        reset = getattr(self.client, "reset_to_base", None)
+        if callable(reset):
+            reset(self._base_messages)
+        self.messages = [dict(item) for item in self._base_messages]
+        self._chat_mode = False
+        self._close_chat_after_reply = False
+        self._direct_mode = False
+        self._direct_waiting = False
+        self._direct_repeated = {}
+        self._waiting_for_worker = False
+        self._direct_runtime._uncertain_commands = set()
+
     @staticmethod
     def _finish_steps(steps):
         while True:
@@ -582,4 +600,3 @@ class AssistantManagerRuntime(ManagerRuntime):
             return f"SYSTEM_ERROR\n{exc}"
 
         return "SYSTEM_ERROR\ninvalid timer.sh syntax"
-
