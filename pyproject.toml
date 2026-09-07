@@ -8,11 +8,16 @@ version = "0.1.0"
 description = "Experimental local LLM agent runtime"
 requires-python = ">=3.10"
 dependencies = [
-    "websockets>=12,<16",
+    "websockets>=12,<17",
 ]
+
+[project.optional-dependencies]
+litert = ["litert-lm>=0.16"]
+notifications = ["firebase-admin"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.ruff]
 line-length = 96
+

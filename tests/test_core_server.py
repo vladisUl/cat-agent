@@ -11,7 +11,7 @@ import unittest
 from orchestration.manager import ManagerTurn
 from orchestration.system_events import SystemEvent
 from litert_agent.core_server import CoreServer, read_firebase_tokens
-from litert_agent.model_client import InferenceTiming
+from agent_core.types import InferenceTiming
 
 
 class FakeRuntime:
@@ -42,13 +42,13 @@ class FakeScheduler:
     def close(self) -> None:
         self.started = False
 
-    def submit_user(self, text: str) -> None:
+    def submit_user(self, text: str, **kwargs) -> None:
         self.users.append(text)
 
-    def submit_voice(self, text: str) -> None:
+    def submit_voice(self, text: str, **kwargs) -> None:
         self.voice_users.append(text)
 
-    def release_human_session(self) -> None:
+    def release_human_session(self, session_id="") -> None:
         self.human_releases += 1
 
     def active_request_label(self) -> str:
@@ -93,6 +93,7 @@ class CoreServerTest(unittest.TestCase):
         server = CoreServer(
             FakeBundle(),
             path=root / "core.sock",
+            outbox_path=root / "outbox.sqlite3",
             scheduler=scheduler,  # type: ignore[arg-type]
         )
         server.start()
@@ -319,3 +320,4 @@ class CoreServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

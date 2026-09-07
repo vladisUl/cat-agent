@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
 import json
+import math
+import uuid
+import threading
+from functools import wraps
 import os
 from pathlib import Path
 import tempfile
@@ -9,6 +13,14 @@ import tempfile
 
 DEFAULT_TASK_FILE = Path("/var/lib/cat-agent/task.txt")
 TASK_METHODS = frozenset({"task", "query"})
+
+
+def synchronized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return call
 
 
 class TaskStoreError(RuntimeError):
@@ -24,6 +36,7 @@ class TaskRecord:
     skills: tuple[str, ...] = ()
     timer_period_seconds: float | None = None
     enabled: bool = True
+    generation: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 class TaskStore:
@@ -36,11 +49,13 @@ class TaskStore:
     def __init__(self, path: Path = DEFAULT_TASK_FILE, *, max_tasks: int = 5) -> None:
         if max_tasks < 1:
             raise ValueError("max_tasks must be >= 1")
+        self._lock = threading.RLock()
         self.path = path
         self.max_tasks = max_tasks
         self._tasks: dict[int, TaskRecord] = {}
         self.reload()
 
+    @synchronized
     def reload(self) -> None:
         if not self.path.exists():
             self._tasks = {}
@@ -98,10 +113,12 @@ class TaskStore:
                 skills=skills,
                 timer_period_seconds=timer_period_seconds,
                 enabled=enabled,
+                generation=str(item.get("generation") or uuid.uuid4().hex),
             )
 
         self._tasks = tasks
 
+    @synchronized
     def create(
         self,
         description: str,
@@ -147,32 +164,38 @@ class TaskStore:
             raise
         return record
 
+    @synchronized
     def get(self, task_id: int) -> TaskRecord | None:
         return self._tasks.get(task_id)
 
+    @synchronized
     def require(self, task_id: int) -> TaskRecord:
         task = self.get(task_id)
         if task is None:
             raise TaskStoreError(f"unknown task: {task_id}")
         return task
 
+    @synchronized
     def list(self) -> tuple[TaskRecord, ...]:
         return tuple(self._tasks[key] for key in sorted(self._tasks))
 
+    @synchronized
     def set_enabled(self, task_id: int, enabled: bool) -> TaskRecord:
         current = self.require(task_id)
-        updated = replace(current, enabled=bool(enabled))
+        updated = replace(current, enabled=bool(enabled), generation=uuid.uuid4().hex)
         self._replace(updated)
         return updated
 
+    @synchronized
     def set_timer_period(self, task_id: int, period_seconds: float) -> TaskRecord:
-        if period_seconds <= 0:
+        if not math.isfinite(period_seconds) or period_seconds <= 0:
             raise ValueError("period_seconds must be > 0")
         current = self.require(task_id)
-        updated = replace(current, timer_period_seconds=float(period_seconds))
+        updated = replace(current, timer_period_seconds=float(period_seconds), generation=uuid.uuid4().hex)
         self._replace(updated)
         return updated
 
+    @synchronized
     def delete(self, task_id: int) -> bool:
         record = self._tasks.pop(task_id, None)
         if record is None:
@@ -228,7 +251,7 @@ class TaskStore:
             raise TaskStoreError(f"empty task skill name{where}")
         if len(set(skills)) != len(skills):
             raise TaskStoreError(f"duplicate task skill name{where}")
-        if timer_period_seconds is not None and timer_period_seconds <= 0:
+        if timer_period_seconds is not None and (not math.isfinite(timer_period_seconds) or timer_period_seconds <= 0):
             raise TaskStoreError(f"timer_period_seconds must be > 0{where}")
 
     def _first_free_id(self) -> int | None:
@@ -249,6 +272,7 @@ class TaskStore:
                     "skills": list(task.skills),
                     "timer_period_seconds": task.timer_period_seconds,
                     "enabled": task.enabled,
+                    "generation": task.generation,
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
@@ -272,3 +296,4 @@ class TaskStore:
         except Exception:
             temp_path.unlink(missing_ok=True)
             raise
+

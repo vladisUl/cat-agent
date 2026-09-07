@@ -10,6 +10,7 @@ import stat
 import subprocess
 import tempfile
 from typing import Any
+from .process_runner import run_process
 
 
 @dataclass(frozen=True, slots=True)
@@ -418,13 +419,11 @@ class CommandRuntime:
     def _external(self, command: str, tokens: list[str]) -> CommandResult:
         name = tokens[0]
         try:
-            completed = subprocess.run(
+            completed = run_process(
                 tokens,
                 cwd=self.cwd,
-                capture_output=True,
-                text=True,
                 timeout=self.timeout_seconds,
-                check=False,
+                output_limit=self.max_file_bytes,
             )
         except FileNotFoundError:
             return self._error(command, name, 127, f"bash: {name}: command not found", "command_not_found")

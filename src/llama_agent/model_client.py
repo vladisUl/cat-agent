@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+from agent_core.metrics import measured
 import logging
 import time
 from typing import Any, Callable
@@ -20,14 +21,7 @@ class WarmResult:
     token_count: int
 
 
-@dataclass(frozen=True, slots=True)
-class InferenceTiming:
-    phase: str
-    phase_started: float | None
-    prefill_seconds: float | None
-    generation_seconds: float | None
-    total_seconds: float | None
-    finished_at: float | None
+from agent_core.types import InferenceTiming
 
 
 ModelEventHandler = Callable[[str, str, str], None]
@@ -72,6 +66,16 @@ class LlamaChatClient:
         self._last_response: ChatResponse | None = None
         self._event_handler: ModelEventHandler | None = None
         self._inference_timing = InferenceTiming("idle", None, None, None, None, None)
+
+    def fork(self, label):
+        return LlamaChatClient(
+            api_base_url=self.api_base_url, model=self.model,
+            timeout_seconds=self.timeout_seconds, retries=self.retries,
+            retry_delay_seconds=self.retry_delay_seconds,
+            max_output_tokens=self.max_output_tokens, temperature=self.temperature,
+            top_p=self.top_p, reasoning_effort=self.reasoning_effort,
+            label=label, id_slot=self.id_slot,
+        )
 
     @property
     def health_url(self) -> str:
@@ -200,6 +204,7 @@ class LlamaChatClient:
             self._resident_tokens,
         )
 
+    @measured("model_seconds")
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
         if not messages or messages[-1].get("role") != "user":
             raise ModelClientError("llama.cpp turn must end in a user message")
@@ -531,3 +536,4 @@ def _timing_seconds(response: dict[str, Any], field: str) -> float | None:
     if not isinstance(value, (int, float)):
         return None
     return float(value) / 1000.0
+

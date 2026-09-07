@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from copy import copy
+from .workspace_command_runtime import CommandRuntime
 import math
 import shlex
 import time
@@ -36,9 +38,45 @@ class AssistantManagerRuntime(ManagerRuntime):
         # sys_prompt_manager.txt is the complete manager BASE.
         return ""
 
-    def user_message(self, text: str) -> ManagerTurn:
+    def fork_context(self, label):
+        """Separate dialogue state and KV session; tools/stores/pool remain shared."""
+        context = copy(self)
+        context.client = self.client.fork("manager")
+        context.messages = [dict(item) for item in self._base_messages]
+        context._chat_mode = False
+        context._close_chat_after_reply = False
+        context._direct_runtime = CommandRuntime(
+            self._direct_runtime.root, tuple(self._direct_runtime.skill_names),
+            max_file_bytes=self._direct_runtime.max_file_bytes,
+            timeout_seconds=self._direct_runtime.timeout_seconds,
+        )
+        return context
+
+    def can_begin_autonomous_task(self, event):
+        task = self.system_runtime.task_store.get(event.task_id)
+        if task is None or not task.enabled or (event.task_generation and task.generation != event.task_generation):
+            return True  # Admit stale work so begin can cancel it without a worker.
+        return (self.pool.acquire_event() if event.source == "mqtt" else self.pool.acquire()) is not None
+
+    @staticmethod
+    def _finish_steps(steps):
+        while True:
+            try:
+                next(steps)
+            except StopIteration as done:
+                return done.value
+
+    def user_message(self, text):
+        return self._finish_steps(self.user_message_steps(text))
+
+    def query_result_steps(self, task_id, result):
+        self._event(f"SYSTEM_QUERY_RESULT TASK {task_id}\n{result.strip()}")
+        return (yield from self._drive_manager_steps())
+
+    def user_message_steps(self, text: str) -> ManagerTurn:
+        self._direct_runtime._uncertain_commands = set()
         user_text = text.strip()
-        folded = user_text.casefold()
+        folded = user_text.casefold().rstrip(".!?…")
 
         if folded == "чат":
             self._chat_mode = True
@@ -53,7 +91,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         )
         self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
         self._append_user(user_text)
-        return self._drive_manager()
+        return (yield from self._drive_manager_steps())
 
     def human_session_released(self) -> None:
         """Drop transient dialogue state when its human client goes away."""
@@ -115,6 +153,7 @@ class AssistantManagerRuntime(ManagerRuntime):
             task="" if value is None else value.strip(),
             created_monotonic=time.monotonic(),
             task_id=task.task_id,
+            task_generation=task.generation,
         )
 
     def begin_autonomous_task(
@@ -139,6 +178,9 @@ class AssistantManagerRuntime(ManagerRuntime):
         except TaskStoreError as exc:
             LOGGER.warning("SYSTEM TASK %d cannot start: %s", event.task_id, exc)
             return AutonomousTaskCompletion(turn=ManagerTurn("silent", ""))
+
+        if not task.enabled or (event.task_generation and event.task_generation != task.generation):
+            return AutonomousTaskCompletion(turn=ManagerTurn("cancelled", ""))
 
         activation = TaskActivation(
             source="mqtt",
@@ -187,7 +229,10 @@ class AssistantManagerRuntime(ManagerRuntime):
 
         return AutonomousTaskExecution(activation=activation, worker=worker)
 
-    def _drive_manager(self) -> ManagerTurn:
+    def _drive_manager(self):
+        return self._finish_steps(self._drive_manager_steps())
+
+    def _drive_manager_steps(self) -> ManagerTurn:
         for step in range(1, self.max_steps + 1):
             if not self.messages or self.messages[-1]["role"] != "user":
                 self._abort_context()
@@ -224,15 +269,17 @@ class AssistantManagerRuntime(ManagerRuntime):
             LOGGER.info("manager step %d MODEL RESPONSE\n%s", step, response.content)
             self.messages.append({"role": "assistant", "content": response.content})
 
+            yield
             output = response.content.strip()
             try:
                 command = unwrap_work_command(output)
             except ValueError as exc:
                 self._append_user(self._direct_runtime.format_protocol_error(str(exc)))
+                yield
                 continue
 
             if command is not None:
-                result = self._execute_work_command(command)
+                result = yield from self._execute_work_steps(command)
                 if result is None:
                     LOGGER.info("MANAGER WORK RESULT silent")
                     if not self._chat_mode:
@@ -242,6 +289,7 @@ class AssistantManagerRuntime(ManagerRuntime):
                     return ManagerTurn("silent", "")
                 LOGGER.info("MANAGER WORK RESULT\n%s", result)
                 self._append_user(result)
+                yield
                 continue
 
             directive = parse_manager_output(response.content)
@@ -249,6 +297,7 @@ class AssistantManagerRuntime(ManagerRuntime):
                 self._append_user(
                     self._direct_runtime.format_protocol_error(directive.error)
                 )
+                yield
                 continue
 
             if directive.action is ManagerAction.ASK:
@@ -280,6 +329,40 @@ class AssistantManagerRuntime(ManagerRuntime):
             "error",
             f"Manager exceeded maximum of {self.max_steps} steps",
         )
+
+    def _execute_work_steps(self, command):
+        try:
+            argv = shlex.split(command, posix=True)
+            if argv and argv[0] in {"task_timer.sh", "query_timer.sh"} and float(argv[1]) == 0:
+                separator = argv.index("--", 2)
+                if separator < 3 or separator != len(argv) - 2:
+                    raise ValueError("usage: task_timer.sh 0 SKILLS -- TEXT")
+                names = tuple(argv[2:separator])
+                if len(set(names)) != len(names) or not argv[-1].strip():
+                    raise ValueError("invalid task or skill list")
+                skills = self.skill_base.require(names)
+                # Yield while a suspended autonomous task owns all ordinary workers.
+                worker = self.pool.acquire()
+                while worker is None:
+                    self._waiting_for_worker = True
+                    yield
+                    worker = self.pool.acquire()
+                self._waiting_for_worker = False
+                worker.begin(argv[-1], skills, method="query")
+                try:
+                    while True:
+                        outcome = worker.step()
+                        if outcome is not None:
+                            if outcome.status != "OK":
+                                return f"SYSTEM_ERROR\n{outcome.text or outcome.status}"
+                            return outcome.text.strip() or None
+                        yield
+                finally:
+                    if worker.state is not AgentState.FREE:
+                        worker.sleep_to_base()
+        except (ValueError, IndexError, SkillBaseError) as exc:
+            return f"SYSTEM_ERROR\n{exc}"
+        return self._execute_work_command(command)
 
     def _execute_work_command(self, command: str) -> str | None:
         try:
@@ -499,3 +582,4 @@ class AssistantManagerRuntime(ManagerRuntime):
             return f"SYSTEM_ERROR\n{exc}"
 
         return "SYSTEM_ERROR\ninvalid timer.sh syntax"
+

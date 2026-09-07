@@ -110,6 +110,7 @@
     <header>
       <h1>Гена</h1>
       <div id="status">подключение…</div>
+      <button id="access" type="button">Ключ доступа</button>
     </header>
 
     <section id="messages" aria-live="polite"></section>
@@ -127,6 +128,7 @@
     const input = document.getElementById("input");
     const send = document.getElementById("send");
 
+    const notifications = new Set();
     let ws = null;
     let acquired = false;
     let reconnectTimer = null;
@@ -240,6 +242,12 @@
           finalizeReply(msg.text);
           break;
         case "notification":
+          if (msg.notification_id) {
+            ws.send(JSON.stringify({type: "notification_ack", notification_id: msg.notification_id}));
+            if (notifications.has(msg.notification_id)) break;
+            notifications.add(msg.notification_id);
+            if (notifications.size > 1000) notifications.delete(notifications.values().next().value);
+          }
           addMessage("assistant", String(msg.text || ""));
           break;
         case "error":
@@ -257,6 +265,7 @@
 
       const url = `ws://${location.hostname}:8765`;
       ws = new WebSocket(url);
+      ws.onopen = () => ws.send(JSON.stringify({type: "auth", token: sessionStorage.getItem("cat-agent-token") || ""}));
 
       ws.onmessage = event => {
         try {
@@ -275,6 +284,14 @@
         statusEl.textContent = "ошибка соединения";
       };
     }
+
+    document.getElementById("access").onclick = () => {
+      const token = prompt("Ключ доступа к Гене (пустой, если не задан):");
+      if (token === null) return;
+      sessionStorage.setItem("cat-agent-token", token);
+      if (ws) { ws.onclose = null; ws.close(); }
+      connect();
+    };
 
     form.addEventListener("submit", event => {
       event.preventDefault();
@@ -303,3 +320,4 @@
   </script>
 </body>
 </html>
+

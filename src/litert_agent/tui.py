@@ -13,7 +13,9 @@ import time
 from orchestration.manager import ManagerTurn
 from orchestration.system_events import SystemEvent
 
-from .runtime import LiteRTRuntimeBundle
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .runtime import LiteRTRuntimeBundle
 
 LOGGER = logging.getLogger(__name__)
 LOG_PATH = Path("/var/log/litertlm/cat-agent.log")
@@ -718,3 +720,4 @@ class LiteRTTUI:
                 win.addnstr(y, x, text, max(0, limit), attr)
         except curses.error:
             pass
+

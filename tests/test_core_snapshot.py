@@ -10,7 +10,7 @@ import time
 import unittest
 
 from litert_agent.core_server import CoreServer
-from litert_agent.model_client import InferenceTiming
+from agent_core.types import InferenceTiming
 
 
 @dataclass
@@ -122,7 +122,7 @@ class CoreSnapshotTest(unittest.TestCase):
             path = Path(temp) / "core.sock"
             server = CoreServer(
                 FakeBundle(),
-                path=path,
+                path=path, outbox_path=path.parent / "outbox.sqlite3",
                 scheduler=FakeScheduler(),  # type: ignore[arg-type]
             )
             server.start()
@@ -157,3 +157,4 @@ class CoreSnapshotTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

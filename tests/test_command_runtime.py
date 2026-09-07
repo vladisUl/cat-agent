@@ -96,7 +96,7 @@ class CommandRuntimeTest(unittest.TestCase):
         )
 
         with patch(
-            "orchestration.workspace_command_runtime.subprocess.run",
+            "orchestration.workspace_command_runtime.run_process",
             return_value=completed,
         ) as run:
             result = runtime.execute(
@@ -128,7 +128,7 @@ class CommandRuntimeTest(unittest.TestCase):
         )
 
         with patch(
-            "orchestration.workspace_command_runtime.subprocess.run",
+            "orchestration.workspace_command_runtime.run_process",
             return_value=completed,
         ) as run:
             result = runtime.execute(
@@ -162,7 +162,7 @@ class CommandRuntimeTest(unittest.TestCase):
             self.root, ("mqtt",), max_file_bytes=1024, timeout_seconds=2
         )
 
-        with patch("orchestration.workspace_command_runtime.subprocess.run") as run:
+        with patch("orchestration.workspace_command_runtime.run_process") as run:
             result = runtime.execute("mqtt_pub.sh zigbee2mqtt/rozetka ON")
 
         self.assertFalse(result.ok)
@@ -173,3 +173,4 @@ class CommandRuntimeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

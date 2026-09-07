@@ -4,7 +4,7 @@
 
 The project separates agent orchestration from model backends and human interfaces. Python owns runtime mechanics, scheduling, IPC, tools and state. The manager and agents operate inside prepared prompts/skills and decide how delegated work is carried out.
 
-The current runtime supports two model backends behind the same CORE contract: LiteRT-LM and llama.cpp.
+The current runtime supports three model backends behind the same CORE contract: LiteRT-LM, llama.cpp and OpenAI-compatible chat/completions endpoints.
 
 ## Current architecture
 
@@ -41,7 +41,9 @@ LiteRT-LM keeps resident manager/agent sessions directly in-process. The llama.c
 ## Source layout
 
 - `src/orchestration/` — shared manager/agent orchestration, prompts, skills, tools, tasks and system events.
-- `src/litert_agent/` — LiteRT-LM model runtime plus shared CORE scheduler/server, IPC client and TUI.
+- `src/agent_core/` — backend-independent scheduler, IPC, telemetry types and persistent notification delivery.
+- `src/litert_agent/` — LiteRT-LM model adapter, TUI/Web/Voice frontends and compatibility imports.
+- `src/openai_agent/` — OpenAI-compatible endpoint adapter and launcher.
 - `src/llama_agent/` — llama.cpp model adapter and CORE launcher.
 - `prompts/` — manager, agent and skill prompts.
 - `config/` — runtime configuration such as MQTT first-active states.
@@ -127,3 +129,28 @@ PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
 ## Status
 
 This is a working research project rather than a packaged general-purpose agent framework. Paths, model profiles and launchers currently reflect the target ARM64 deployment and are expected to evolve together with the agent architecture.
+
+
+## 6-sept runtime update
+
+See [the rollout and behavior notes](docs/6-sept.md) for the ten implementation
+areas, configuration and Radxa verification steps. Restart CORE and its interfaces
+together: the voice client now waits for explicit `completed` messages.
+
+Requests have identities and are bound to their originating session. Human,
+voice and notification manager contexts are isolated. Execution is cooperative:
+a model call or command finishes before a higher-priority request can run.
+LiteRT dialogue contexts use additional sessions on the existing manager engine;
+llama.cpp uses full histories with cache comparison in the existing manager slot.
+No additional model engine is loaded for these dialogues.
+
+The Web frontend now binds to `127.0.0.1` by default. To expose it on the trusted
+LAN, explicitly configure `CAT_AGENT_WEB_HOST` and either `CAT_AGENT_WEB_TOKEN`
+or `CAT_AGENT_WEB_TRUSTED_NETWORK=1`. With a token, enter it through the Web
+frontend's access-key button. Use TLS or an SSH tunnel outside a trusted LAN.
+
+Notifications are persisted in `/var/lib/cat-agent/outbox.sqlite3`. The updated
+TUI/Web acknowledge receipt; Firebase success means acceptance by the provider,
+not confirmation that a phone displayed the notification. Delivery is at least
+once, so a crash or partial Firebase failure can cause duplicate notifications.
+Pending input events are still in-memory; they are not replayed after a restart.

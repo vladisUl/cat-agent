@@ -4,8 +4,8 @@ import logging
 from pathlib import Path
 import sys
 
-from litert_agent.core_scheduler import HARDWARE_EVENT_PRIORITY
-from litert_agent.core_server import CoreServer
+from agent_core.core_scheduler import HARDWARE_EVENT_PRIORITY
+from agent_core.core_server import CoreServer
 from llama_agent.main import _ProtocolLogFilter
 from orchestration.config import Settings
 from orchestration.mqtt_events import MqttEventMonitor
@@ -99,3 +99,4 @@ if __name__ == "__main__":
         sys.exit(main())
     except KeyboardInterrupt:
         sys.exit(0)
+

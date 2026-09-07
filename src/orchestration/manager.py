@@ -216,6 +216,9 @@ class ManagerRuntime:
             LOGGER.warning("SYSTEM TASK %d cannot start: %s", event.task_id, exc)
             return AutonomousTaskCompletion(turn=ManagerTurn("silent", ""))
 
+        if not task.enabled or (event.task_generation and event.task_generation != task.generation):
+            return AutonomousTaskCompletion(turn=ManagerTurn("cancelled", ""))
+
         activation = TaskActivation(
             source=event.source.strip() or "system",
             name=event.name.strip(),
@@ -280,6 +283,10 @@ class ManagerRuntime:
         """Run exactly one agent TT. None means this activation resumes later."""
         task = execution.activation.task
         worker = execution.worker
+        current = self.system_runtime.task_store.get(task.task_id)
+        if current is None or not current.enabled or current.generation != task.generation:
+            worker.sleep_to_base()
+            return AutonomousTaskCompletion(turn=ManagerTurn("cancelled", ""))
         try:
             outcome = worker.step()
         except Exception as exc:
@@ -822,3 +829,4 @@ class ManagerRuntime:
             "[/SYSTEM]\n\n"
             "Система готова. Жди сообщения пользователя или SYSTEM_EVENT."
         )
+

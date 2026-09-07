@@ -37,3 +37,21 @@ class WebGatewayTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WebAccessTest(unittest.TestCase):
+    def test_cross_origin_is_rejected(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        from litert_agent.web_gateway import _check_origin
+        connection = Mock()
+        request = SimpleNamespace(headers={"Origin": "https://untrusted.example", "Host": "127.0.0.1:8765"})
+        _check_origin(connection, request)
+        self.assertEqual(connection.respond.call_args.args[0], 403)
+
+    def test_same_origin_is_accepted(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        from litert_agent.web_gateway import _check_origin, HTTP_PORT
+        request = SimpleNamespace(headers={"Origin": f"http://localhost:{HTTP_PORT}", "Host": "localhost:8765"})
+        self.assertIsNone(_check_origin(Mock(), request))

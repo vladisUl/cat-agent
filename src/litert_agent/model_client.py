@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import ctypes
+from agent_core.metrics import measured
 import json
 import logging
 import time
@@ -22,14 +23,7 @@ class WarmResult:
     token_count: int
 
 
-@dataclass(frozen=True, slots=True)
-class InferenceTiming:
-    phase: str
-    phase_started: float | None
-    prefill_seconds: float | None
-    generation_seconds: float | None
-    total_seconds: float | None
-    finished_at: float | None
+from agent_core.types import InferenceTiming
 
 
 ModelEventHandler = Callable[[str, str, str], None]
@@ -49,6 +43,8 @@ class LiteRTChatClient:
         label: str,
         allow_prefix_reset: bool = False,
     ) -> None:
+        self._temperature = temperature
+        self._top_p = top_p
         self.engine = engine
         self.max_output_tokens = max_output_tokens
         self.reasoning_effort = reasoning_effort
@@ -73,6 +69,16 @@ class LiteRTChatClient:
         self._warm_result: WarmResult | None = None
         self._event_handler: ModelEventHandler | None = None
         self._inference_timing = InferenceTiming("idle", None, None, None, None, None)
+
+    def fork(self, label):
+        client = LiteRTChatClient(
+            self.engine, max_output_tokens=self.max_output_tokens,
+            temperature=self._temperature, top_p=self._top_p,
+            reasoning_effort=self.reasoning_effort, label=label, allow_prefix_reset=True,
+        )
+        if self._base_messages:
+            client.prepare_prefix(self._base_messages)
+        return client
 
     @property
     def resident_tokens(self) -> int:
@@ -230,6 +236,7 @@ class LiteRTChatClient:
                 f"LiteRT-LM Session rewind failed: {exc}"
             ) from exc
 
+    @measured("model_seconds")
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
         if not messages or messages[-1].get("role") != "user":
             raise ModelClientError("LiteRT Session turn must end in a user message")
@@ -469,3 +476,4 @@ def _session_response_text(response) -> str:
             f"LiteRT Session decode returned invalid text: {text!r}"
         )
     return text
+

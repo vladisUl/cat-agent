@@ -7,8 +7,8 @@ import sys
 
 from orchestration.config import Settings
 from orchestration.mqtt_events import MqttEventMonitor
-from litert_agent.core_scheduler import HARDWARE_EVENT_PRIORITY
-from litert_agent.core_server import CoreServer
+from agent_core.core_scheduler import HARDWARE_EVENT_PRIORITY
+from agent_core.core_server import CoreServer
 
 from .runtime import AGENT_SLOT, MANAGER_SLOT, build_bundle, warm_bundle
 
@@ -212,3 +212,4 @@ if __name__ == "__main__":
         sys.exit(main())
     except KeyboardInterrupt:
         sys.exit(0)
+

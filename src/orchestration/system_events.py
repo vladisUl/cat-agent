@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
+import math
 import shlex
 import threading
 import time
@@ -19,6 +20,7 @@ class SystemEvent:
     task: str
     created_monotonic: float
     task_id: int | None = None
+    task_generation: str = ""
 
     def manager_text(self) -> str:
         if self.task_id is not None:
@@ -138,7 +140,7 @@ class SystemRuntime:
     ) -> TaskRecord:
         if not skills:
             raise TaskStoreError("periodic task requires at least one skill")
-        if period_seconds <= 0:
+        if not math.isfinite(period_seconds) or period_seconds <= 0:
             raise ValueError("period_seconds must be > 0")
 
         store = self._require_task_store()
@@ -170,9 +172,9 @@ class SystemRuntime:
 
     def delete_task(self, task_id: int) -> bool:
         store = self._require_task_store()
+        deleted = store.delete(task_id)
         with self._lock:
             self._task_timers.pop(task_id, None)
-        deleted = store.delete(task_id)
         LOGGER.info("SYSTEM task delete id=%d deleted=%s", task_id, deleted)
         return deleted
 
@@ -478,8 +480,7 @@ class SystemRuntime:
                     )
 
                 next_fire = timer.next_fire_monotonic
-                while next_fire <= current:
-                    next_fire += timer.period_seconds
+                next_fire += (math.floor((current - next_fire) / timer.period_seconds) + 1) * timer.period_seconds
                 timer.next_fire_monotonic = next_fire
 
             for timer in self._task_timers.values():
@@ -512,12 +513,12 @@ class SystemRuntime:
                             task="",
                             created_monotonic=current,
                             task_id=timer.task_id,
+                            task_generation=self._task_store.require(timer.task_id).generation,
                         )
                     )
 
                 next_fire = timer.next_fire_monotonic
-                while next_fire <= current:
-                    next_fire += timer.period_seconds
+                next_fire += (math.floor((current - next_fire) / timer.period_seconds) + 1) * timer.period_seconds
                 timer.next_fire_monotonic = next_fire
 
         return tuple(events)
@@ -615,6 +616,7 @@ class SystemRuntime:
             value = float(raw)
         except ValueError:
             return None
-        if value <= 0:
+        if not math.isfinite(value) or value <= 0:
             return None
         return value
+

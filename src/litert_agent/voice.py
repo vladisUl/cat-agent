@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -114,7 +115,13 @@ def _send_json(sock: socket.socket, payload: dict[str, object]) -> None:
     sock.sendall(data)
 
 
-def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
+@dataclass(frozen=True)
+class VoiceTurnResult:
+    text: str = ""
+    chat_open: bool = False
+
+
+def _run_core_voice_turn(user_text: str, piper_voice: Any) -> VoiceTurnResult:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     reader = None
     started = time.monotonic()
@@ -135,6 +142,7 @@ def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
             speaker.submit(fragment)
 
     try:
+        sock.settimeout(float(os.getenv("CAT_AGENT_VOICE_RESPONSE_TIMEOUT", "300")))
         sock.connect(str(CORE_SOCKET))
         reader = sock.makefile("r", encoding="utf-8", newline="\n")
         _send_json(
@@ -165,7 +173,7 @@ def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
 
             if kind == "busy":
                 print(f"CORE_BUSY: {item.get('owner', '')}")
-                return ""
+                return VoiceTurnResult()
 
             if kind == "model_event" and item.get("label") == "manager":
                 event = str(item.get("event", ""))
@@ -184,7 +192,7 @@ def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
                 submit_speech(visible)
                 continue
 
-            if kind == "reply":
+            if kind == "completed":
                 final_text = str(item.get("text", "")).strip()
 
                 if final_text and not streamed_visible:
@@ -196,7 +204,7 @@ def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
                         speaker_started = True
                     speaker.submit(fragment)
 
-                return final_text
+                return VoiceTurnResult(final_text, bool(item.get("chat_open", False)))
 
             if kind == "error":
                 raise RuntimeError(str(item.get("error", "CORE error")))
@@ -204,8 +212,12 @@ def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
         raise RuntimeError("CORE закрыл voice-соединение до ответа")
 
     finally:
+        playback_error = None
         if speaker_started:
-            speaker.finish()
+            try:
+                speaker.finish()
+            except Exception as exc:
+                playback_error = exc
         if reader is not None:
             try:
                 reader.close()
@@ -215,6 +227,8 @@ def _run_core_voice_turn(user_text: str, piper_voice: Any) -> str:
             sock.close()
         except OSError:
             pass
+        if playback_error is not None:
+            raise playback_error
 
 
 def _run_loop(
@@ -230,6 +244,7 @@ def _run_loop(
     pcm = _open_microphone(alsaaudio_module)
     print(f"ALSA_READY: {AUDIO_DEVICE}, {SAMPLE_RATE} Гц, mono S16_LE")
 
+    chat_open = False
     state = "wait_wake"
     command_wav: wave.Wave_write | None = None
     command_started_at = 0.0
@@ -334,18 +349,29 @@ def _run_loop(
                 try:
                     user_text = _transcribe_command(gigaam_model, COMMAND_WAV_PATH)
                     if user_text:
-                        _run_core_voice_turn(user_text, piper_voice)
+                        turn = _run_core_voice_turn(user_text, piper_voice)
+                        chat_open = turn.chat_open
                     else:
                         print("SKIP_CORE: GigaAM вернула пустой текст")
                 except Exception as exc:
+                    chat_open = False
                     print(f"PROCESSING_ERROR: {type(exc).__name__}: {exc}")
 
                 pcm = _open_microphone(alsaaudio_module)
                 print("ALSA_RESUMED")
 
             wake_recognizer = _make_wake_recognizer(vosk_module, vosk_model)
-            command_recognizer = None
-            state = "wait_wake"
+            if chat_open:
+                command_recognizer = _make_command_recognizer(vosk_module, vosk_model)
+                command_wav = _open_command_wav(COMMAND_WAV_PATH)
+                command_started_at = time.monotonic()
+                speech_started = False
+                command_bytes = 0
+                state = "wait_command"
+                print("CHAT_LISTENING")
+            else:
+                command_recognizer = None
+                state = "wait_wake"
 
     finally:
         if command_wav is not None:
@@ -399,3 +425,4 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"FATAL: {type(exc).__name__}: {exc}")
         raise
+

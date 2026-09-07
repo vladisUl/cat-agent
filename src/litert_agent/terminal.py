@@ -137,6 +137,7 @@ class TerminalTUI:
         self._started = time.monotonic()
         self._last_snapshot_request = 0.0
         self._colors_enabled = False
+        self._notifications_seen = deque(maxlen=1000)
 
         self._stream_mode = "idle"
         self._stream_buffer = ""
@@ -199,6 +200,12 @@ class TerminalTUI:
             if kind == "model_event":
                 self._handle_model_event(item)
                 continue
+            if kind == "notification" and item.get("notification_id"):
+                identifier = str(item["notification_id"])
+                self.client.send({"type": "notification_ack", "notification_id": identifier})
+                if identifier in self._notifications_seen:
+                    continue
+                self._notifications_seen.append(identifier)
             if kind in {"reply", "notification"}:
                 self._finalize_manager_text(str(item.get("text", "")))
                 continue

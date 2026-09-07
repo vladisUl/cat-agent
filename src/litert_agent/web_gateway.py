@@ -3,6 +3,9 @@ from __future__ import annotations
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import hmac
+from http import HTTPStatus
+from urllib.parse import urlsplit
 import os
 from pathlib import Path
 import socket
@@ -14,12 +17,12 @@ DEFAULT_CORE_SOCKET = Path("/run/cat-agent/core.sock")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEB_ROOT = PROJECT_ROOT / "web"
 
-WEB_HOST = os.environ.get("CAT_AGENT_WEB_HOST", "0.0.0.0")
+WEB_HOST = os.environ.get("CAT_AGENT_WEB_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("CAT_AGENT_HTTP_PORT", "8080"))
 WS_PORT = int(os.environ.get("CAT_AGENT_WS_PORT", "8765"))
 CORE_SOCKET = Path(os.environ.get("CAT_AGENT_CORE_SOCKET", str(DEFAULT_CORE_SOCKET)))
 
-_ALLOWED_BROWSER_TYPES = {"user", "snapshot", "who", "ping", "acquire", "release"}
+_ALLOWED_BROWSER_TYPES = {"user", "snapshot", "who", "ping", "acquire", "release", "notification_ack"}
 
 
 def _browser_to_core(raw: str | bytes) -> dict[str, object]:
@@ -43,6 +46,9 @@ def _browser_to_core(raw: str | bytes) -> dict[str, object]:
         if not text:
             raise ValueError("user text must be non-empty")
         return {"type": "user", "text": text}
+
+    if message_type == "notification_ack":
+        return {"type": message_type, "notification_id": str(item.get("notification_id", ""))}
 
     if message_type == "acquire":
         return {"type": "acquire", "client": "web"}
@@ -154,6 +160,11 @@ class _CoreBridge:
 def _handle_websocket(websocket: Any) -> None:
     bridge = _CoreBridge(websocket)
     try:
+        auth = json.loads(websocket.recv(timeout=10))
+        expected = os.getenv("CAT_AGENT_WEB_TOKEN", "")
+        if not isinstance(auth, dict) or auth.get("type") != "auth" or not hmac.compare_digest(str(auth.get("token", "")), expected):
+            bridge.send_web({"type": "error", "error": "Неверный ключ доступа"})
+            return
         bridge.connect()
         for raw in websocket:
             try:
@@ -162,7 +173,7 @@ def _handle_websocket(websocket: Any) -> None:
                 bridge.send_web({"type": "error", "error": str(exc)})
                 continue
             bridge.send_core(payload)
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
         try:
             bridge.send_web({"type": "error", "error": str(exc)})
         except Exception:
@@ -188,6 +199,22 @@ def _start_http_server() -> ThreadingHTTPServer:
     return server
 
 
+def _check_origin(connection, request):
+    origin = request.headers.get("Origin", "")
+    host = request.headers.get("Host", "")
+    try:
+        parsed = urlsplit(origin)
+        expected_host = urlsplit("http://" + host).hostname
+        permitted = parsed.scheme in {"http", "https"} and parsed.hostname == expected_host
+        configured = {v.strip() for v in os.getenv("CAT_AGENT_WEB_ORIGINS", "").split(",") if v.strip()}
+        permitted = origin in configured if configured else permitted and parsed.port == HTTP_PORT
+    except ValueError:
+        permitted = False
+    if not permitted:
+        return connection.respond(HTTPStatus.FORBIDDEN, "Origin rejected\n")
+    return None
+
+
 def main() -> None:
     if not (WEB_ROOT / "index.html").is_file():
         raise FileNotFoundError(f"Web UI not found: {WEB_ROOT / 'index.html'}")
@@ -201,13 +228,16 @@ def main() -> None:
             "Python package 'websockets' is required; install it into the LiteRT venv"
         ) from exc
 
+    if WEB_HOST not in {"127.0.0.1", "::1", "localhost"} and not os.getenv("CAT_AGENT_WEB_TOKEN"):
+        if os.getenv("CAT_AGENT_WEB_TRUSTED_NETWORK", "0") != "1":
+            raise ValueError("Network Web binding requires CAT_AGENT_WEB_TOKEN or explicit CAT_AGENT_WEB_TRUSTED_NETWORK=1")
     http_server = _start_http_server()
     print(f"WEB_HTTP_READY: http://{WEB_HOST}:{HTTP_PORT}")
     print(f"WEB_WS_READY: ws://{WEB_HOST}:{WS_PORT}")
     print(f"CORE_SOCKET: {CORE_SOCKET}")
 
     try:
-        with serve(_handle_websocket, WEB_HOST, WS_PORT, max_size=64 * 1024) as server:
+        with serve(_handle_websocket, WEB_HOST, WS_PORT, max_size=64 * 1024, process_request=_check_origin) as server:
             server.serve_forever()
     finally:
         http_server.shutdown()
@@ -219,3 +249,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+

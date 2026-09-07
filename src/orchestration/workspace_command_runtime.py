@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+from .process_runner import run_process
+from agent_core.metrics import measured
+from .mqtt_events import MQTT_HOST, MQTT_PORT
 import re
 import shlex
 import subprocess
@@ -29,12 +33,27 @@ class CommandRuntime(RestrictedCommandRuntime):
     continue to use the restricted command implementation from command_runtime.py.
     """
 
-    _MQTT_HOST = "192.168.0.21"
-    _MQTT_PORT = 1883
+    _MQTT_HOST = MQTT_HOST
+    _MQTT_PORT = MQTT_PORT
     _MQTT_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+    @measured("command_seconds")
     def execute(self, command: str) -> CommandResult:
+        uncertain = getattr(self, "_uncertain_commands", set())
+        if command in uncertain:
+            return self._error(command, "policy", 126, "previous attempt timed out with uncertain side effects; automatic retry refused", "uncertain_retry")
+        result = self._execute_once(command)
+        if result.exit_code == 124:
+            uncertain.add(command)
+            self._uncertain_commands = uncertain
+        return result
+
+    def _execute_once(self, command: str) -> CommandResult:
+        enabled = frozenset(name.strip() for name in os.getenv("CAT_AGENT_ENABLED_SKILLS", "shell,mqtt").split(","))
         stripped = command.strip()
+        mqtt_command = stripped.split(maxsplit=1)[0] if stripped else ""
+        if mqtt_command in {"mqtt_sub.sh", "mqtt_pub.sh", "mosquitto_sub", "mosquitto_pub"} and "mqtt" not in enabled:
+            return self._error(command, "policy", 126, "mqtt disabled by runtime policy", "skill_disabled")
         if "mqtt" in self.skill_names and (
             stripped == "mqtt_sub.sh" or stripped.startswith("mqtt_sub.sh ")
         ):
@@ -44,6 +63,8 @@ class CommandRuntime(RestrictedCommandRuntime):
         ):
             return self._mqtt_pub_value(command)
         if "shell" in self.skill_names:
+            if "shell" not in enabled or os.getenv("CAT_AGENT_ALLOW_SHELL", "1").lower() not in {"1", "true", "yes", "on"}:
+                return self._error(command, "policy", 126, "shell disabled by runtime policy", "shell_disabled")
             return self._bash(command)
         return super().execute(command)
 
@@ -84,13 +105,11 @@ class CommandRuntime(RestrictedCommandRuntime):
             f"-t {shlex.quote(topic)} -C 1 -W 5 | jq -r '.{field}'"
         )
         try:
-            completed = subprocess.run(
+            completed = run_process(
                 ["/bin/bash", "-o", "pipefail", "-c", pipeline],
                 cwd=self.cwd,
-                capture_output=True,
-                text=True,
                 timeout=self.timeout_seconds,
-                check=False,
+                output_limit=self.max_file_bytes,
             )
         except subprocess.TimeoutExpired as exc:
             stdout = exc.stdout if isinstance(exc.stdout, str) else ""
@@ -190,13 +209,11 @@ class CommandRuntime(RestrictedCommandRuntime):
             payload,
         ]
         try:
-            completed = subprocess.run(
+            completed = run_process(
                 argv,
                 cwd=self.cwd,
-                capture_output=True,
-                text=True,
                 timeout=self.timeout_seconds,
-                check=False,
+                output_limit=self.max_file_bytes,
             )
         except subprocess.TimeoutExpired as exc:
             stdout = exc.stdout if isinstance(exc.stdout, str) else ""
@@ -253,13 +270,11 @@ class CommandRuntime(RestrictedCommandRuntime):
 
     def _bash(self, command: str) -> CommandResult:
         try:
-            completed = subprocess.run(
+            completed = run_process(
                 ["/bin/bash", "-c", command],
                 cwd=self.cwd,
-                capture_output=True,
-                text=True,
                 timeout=self.timeout_seconds,
-                check=False,
+                output_limit=self.max_file_bytes,
             )
         except subprocess.TimeoutExpired as exc:
             stdout = exc.stdout if isinstance(exc.stdout, str) else ""
@@ -294,5 +309,6 @@ class CommandRuntime(RestrictedCommandRuntime):
             stderr=completed.stderr,
             cwd=self.cwd,
             operation="bash",
-            metadata={"shell": "/bin/bash"},
+            metadata={"shell": "/bin/bash", **({"error_code": "timeout", "outcome": "uncertain"} if completed.returncode == 124 else {})},
         )
+
