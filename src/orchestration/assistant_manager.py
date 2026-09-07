@@ -96,7 +96,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         user_text = text.strip()
         folded = user_text.casefold().rstrip(".!?…")
 
-        if folded == "чат":
+        if folded in {"чат", "начало чата"}:
             self._chat_mode = True
             self._close_chat_after_reply = False
         elif folded == "конец чата":
