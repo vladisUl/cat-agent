@@ -44,3 +44,15 @@ field - это поля доступные в payload
 Пример:
 /work#mqtt_pub.sh zigbee2mqtt/rozetka state=ON
 [/TOOL]
+
+[TOOL read_pic]
+name: read_pic
+description:
+Чтение графического файла (*.png, *.jpg)
+prompt:
+Для чтения графического файла используется bush команда
+read_pic.sh <name>
+name - имя и расширение файла
+example:
+/work#read_pic.sh test.png
+[/TOOL]
