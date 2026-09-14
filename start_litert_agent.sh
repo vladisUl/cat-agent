@@ -40,4 +40,10 @@ export LITERT_AGENT_SPECULATIVE="$SPECULATIVE"
 export LITERT_AGENT_YNNPACK="$YNNPACK"
 export LITERT_AGENT_BENCH_SKILLS=""
 
+if [[ "$BACKEND" == "cpu" ]]; then
+    export LITERT_AGENT_CPU_THREADS="8"
+else
+    unset LITERT_AGENT_CPU_THREADS
+fi
+
 exec /opt/litert-lm-venv/bin/python3 -m litert_agent.main
