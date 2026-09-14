@@ -1,4 +1,4 @@
-[SKILL shell]
+[TOOL shell]
 name: shell
 description:
 Работа в локальной Linux-системе и рабочем каталоге: просмотр и изменение файлов,
@@ -13,9 +13,9 @@ prompt:
 
 Не выдумывай несуществующие команды. Если команда завершилась ошибкой, используй фактический stdout,
 stderr и exit_code из следующего сообщения runtime.
-[/SKILL]
+[/TOOL]
 
-[SKILL mqtt]
+[TOOL mqtt]
 name: mqtt
 description:
 Доступ к данным, датчикам и устройствам через MQTT
@@ -43,4 +43,4 @@ field - это поля доступные в payload
 
 Пример:
 /work#mqtt_pub.sh zigbee2mqtt/rozetka state=ON
-[/SKILL]
+[/TOOL]
