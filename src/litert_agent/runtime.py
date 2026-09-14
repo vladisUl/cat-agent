@@ -221,6 +221,7 @@ def _create_engine(
 ) -> tuple[litert_lm.Engine, float]:
     kwargs: dict[str, object] = {
         "backend": _backend(backend_name, cpu_threads),
+        "vision_backend": litert_lm.Backend.CPU(),
         "max_num_tokens": max_num_tokens,
         "enable_speculative_decoding": speculative,
         "enable_ynnpack": ynnpack,

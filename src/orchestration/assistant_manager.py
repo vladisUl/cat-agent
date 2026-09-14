@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from copy import copy
+from .image_tool import read_picture
 from .workspace_command_runtime import CommandRuntime
 import math
 import shlex
@@ -305,7 +306,7 @@ class AssistantManagerRuntime(ManagerRuntime):
                     else:
                         LOGGER.info("MANAGER CHAT context preserved after silent work result")
                     return ManagerTurn("silent", "")
-                LOGGER.info("MANAGER WORK RESULT\n%s", result)
+                LOGGER.info("MANAGER WORK RESULT\n%s", "[image attached]" if isinstance(result, list) else result)
                 self._append_user(result)
                 yield
                 continue
@@ -383,6 +384,9 @@ class AssistantManagerRuntime(ManagerRuntime):
         return self._execute_work_command(command)
 
     def _execute_work_command(self, command: str) -> str | None:
+        picture = read_picture(command, self._direct_runtime, self.client)
+        if picture is not None:
+            return picture
         try:
             argv = shlex.split(command, posix=True)
         except ValueError as exc:

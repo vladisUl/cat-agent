@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .image_tool import read_picture
 
 from dataclasses import dataclass
 from enum import Enum
@@ -334,6 +335,11 @@ class AgentWorker:
                 deferred,
             )
             self._messages.append({"role": "user", "content": deferred})
+            return self._continue_or_limit(step)
+
+        picture = read_picture(directive.command, self._runtime, self.client)
+        if picture is not None:
+            self._messages.append({"role": "user", "content": picture})
             return self._continue_or_limit(step)
 
         result = self._runtime.execute(directive.command)

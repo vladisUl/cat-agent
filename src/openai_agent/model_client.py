@@ -21,6 +21,7 @@ ModelEventHandler = Callable[[str, str, str], None]
 
 
 class OpenAICompatibleChatClient:
+    supports_images = True
     """OpenAI-compatible /v1/chat/completions adapter for cat-agent CORE."""
 
     def __init__(

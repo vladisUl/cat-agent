@@ -16,7 +16,7 @@ class Skill:
     prompt: str
 
 
-_HEADER_RE = re.compile(r"^\[SKILL ([a-z][a-z0-9_-]*)\]$")
+_HEADER_RE = re.compile(r"^\[(SKILL|TOOL) ([a-z][a-z0-9_-]*)\]$")
 
 
 class SkillBase:
@@ -61,14 +61,15 @@ class SkillBase:
             match = _HEADER_RE.fullmatch(line)
             if not match:
                 raise SkillBaseError(f"Expected [SKILL name], got: {line!r}")
-            header_name = match.group(1)
+            block_type, header_name = match.groups()
+            closing = f"[/{block_type}]"
 
             block: list[str] = []
-            while index < len(lines) and lines[index].strip() != "[/SKILL]":
+            while index < len(lines) and lines[index].strip() != closing:
                 block.append(lines[index])
                 index += 1
             if index >= len(lines):
-                raise SkillBaseError(f"Skill {header_name!r} has no [/SKILL]")
+                raise SkillBaseError(f"Skill {header_name!r} has no {closing}")
             index += 1
 
             skill = SkillBase._parse_block(header_name, block)

@@ -785,8 +785,14 @@ class ManagerRuntime:
         self._append_user(text)
 
     def _append_user(self, text: str) -> None:
-        content = text.strip()
+        content = text if isinstance(text, list) else text.strip()
         if self.messages and self.messages[-1]["role"] == "user":
+            previous = self.messages[-1]["content"]
+            if isinstance(content, list) or isinstance(previous, list):
+                before = previous if isinstance(previous, list) else [{"type": "text", "text": previous}]
+                after = content if isinstance(content, list) else [{"type": "text", "text": content}]
+                self.messages[-1]["content"] = before + after
+                return
             previous = self.messages[-1]["content"].rstrip()
             self.messages[-1]["content"] = f"{previous}\n\n{content}" if previous else content
             return

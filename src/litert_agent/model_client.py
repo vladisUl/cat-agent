@@ -32,6 +32,8 @@ ModelEventHandler = Callable[[str, str, str], None]
 class LiteRTChatClient:
     """LiteRT-LM adapter backed by the low-level Session API."""
 
+    supports_images = True
+
     def __init__(
         self,
         engine: litert_lm.Engine,
@@ -56,6 +58,7 @@ class LiteRTChatClient:
             seed=0,
         )
         self._renderer: litert_lm.Conversation | None = None
+        self._vision_conversation = None
         self._session = None
         self._lib = None
         self._base_preface = ""
@@ -106,6 +109,7 @@ class LiteRTChatClient:
         return not stop_requested()
 
     def close(self) -> None:
+        self._close_vision()
         if self._session is not None:
             self._session.close()
             self._session = None
@@ -212,6 +216,7 @@ class LiteRTChatClient:
             )
 
         try:
+            self._close_vision()
             result = self._lib.litert_lm_session_rewind_to_checkpoint(
                 self._session._ptr,
                 self._checkpoint_label,
@@ -240,6 +245,12 @@ class LiteRTChatClient:
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
         if not messages or messages[-1].get("role") != "user":
             raise ModelClientError("LiteRT Session turn must end in a user message")
+
+        if self._vision_conversation is not None and messages[:-1] != self._synced_messages:
+            if not self._try_reset_prefix(messages):
+                raise ModelClientError("LiteRT vision history no longer extends the current conversation")
+        if self._vision_conversation is not None or isinstance(messages[-1].get("content"), list):
+            return self._chat_multimodal(messages)
 
         if self._session is None or self._renderer is None:
             if not self._try_reset_prefix(messages):
@@ -346,6 +357,83 @@ class LiteRTChatClient:
         except Exception as exc:
             self._finish_failed_timing(total_started, prompt_seconds, generation_seconds)
             raise ModelClientError(f"LiteRT-LM Session request failed: {exc}") from exc
+
+    def _close_vision(self):
+        if self._vision_conversation is not None:
+            self._vision_conversation.close()
+            self._vision_conversation = None
+
+    def _chat_multimodal(self, messages):
+        """Move the complete logical dialogue to the native vision processor.
+
+        Session.run_prefill in LiteRT's Python API accepts text only. Conversation
+        owns model-specific image preprocessing; keep it for all subsequent turns
+        until reset_to_base, rather than starting an independent image query.
+        """
+        started = time.monotonic()
+        first_chunk = None
+        self._inference_timing = InferenceTiming("prefill", started, None, None, None, None)
+        self._emit_event("prefill_start")
+        try:
+            if self._vision_conversation is None:
+                self._vision_conversation = self.engine.create_conversation(
+                    messages=[_vision_message(m) for m in messages[:-1]],
+                    automatic_tool_calling=False,
+                    sampler_config=self.sampler_config,
+                    max_output_tokens=self.max_output_tokens,
+                )
+                LOGGER.info("litert-vision-context %s migrated_messages=%d", self.label, len(messages) - 1)
+            conversation = self._vision_conversation
+            chunks = []
+            for response in conversation.send_message_async(_vision_message(messages[-1])):
+                content = response.get("content", [])
+                text = content if isinstance(content, str) else "".join(
+                    part.get("text", "") for part in content if part.get("type") == "text"
+                )
+                if not text:
+                    continue
+                if first_chunk is None:
+                    first_chunk = time.monotonic()
+                    self._inference_timing = InferenceTiming(
+                        "generate", first_chunk, first_chunk - started, None, None, None
+                    )
+                    self._emit_event("decode_start")
+                chunks.append(text)
+                self._emit_event("chunk", text)
+            text = "".join(chunks)
+            if not text:
+                raise ModelClientError("LiteRT vision conversation returned no text")
+            finished = time.monotonic()
+            elapsed = finished - started
+            # TTFT includes image processing, prefill and the first decoded token.
+            prompt_seconds = first_chunk - started
+            generation_seconds = finished - first_chunk
+            benchmark = conversation.get_benchmark_info()
+            prefill_n = benchmark.last_prefill_token_count
+            decode_n = benchmark.last_decode_token_count
+            # The public benchmark exposes only the last prefill, not the full
+            # migrated history/vision KV size. Do not report an invented total.
+            self._resident_tokens = None
+            self._synced_messages = deepcopy(messages)
+            self._synced_messages.append({"role": "assistant", "content": text})
+            result = ChatResponse(
+                content=text, prompt_tokens=None, completion_tokens=decode_n,
+                elapsed_seconds=elapsed, cached_tokens=None,
+                prompt_evaluated_tokens=prefill_n, prompt_seconds=prompt_seconds,
+                generation_seconds=generation_seconds,
+            )
+            self._last_response = result
+            self._inference_timing = InferenceTiming(
+                "idle", None, prompt_seconds, generation_seconds, elapsed, finished
+            )
+            self._emit_event("decode_done")
+            LOGGER.info("litert-vision %s wall=%.3fs ttft=%.3fs", self.label, elapsed, prompt_seconds)
+            return result
+        except Exception as exc:
+            self._close_vision()
+            self._synced_messages = []  # Never resume the stale text KV after a failed image turn.
+            self._finish_failed_timing(started, None, None)
+            raise ModelClientError(f"LiteRT-LM vision request failed: {exc}") from exc
 
     def _finish_failed_timing(
         self,
@@ -463,6 +551,27 @@ class LiteRTChatClient:
         if not suffix:
             raise RuntimeError("Rendered user turn is empty")
         return suffix
+
+
+def _vision_message(message):
+    """Translate the shared OpenAI content representation to LiteRT JSON."""
+    result = deepcopy(message)
+    content = result.get("content")
+    if isinstance(content, list):
+        converted = []
+        for part in content:
+            if part.get("type") == "text":
+                converted.append(part)
+            elif part.get("type") == "image_url":
+                url = part["image_url"]["url"]
+                header, separator, encoded = url.partition(",")
+                if not separator or header not in {"data:image/png;base64", "data:image/jpeg;base64"}:
+                    raise ModelClientError("LiteRT images must be embedded PNG/JPEG data")
+                converted.append({"type": "image", "blob": encoded})
+            else:
+                raise ModelClientError("Unsupported multimodal content type")
+        result["content"] = converted
+    return result
 
 
 def _session_response_text(response) -> str:
