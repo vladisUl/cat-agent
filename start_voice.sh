@@ -2,6 +2,8 @@
 
 set -e
 
+source "$(dirname -- "${BASH_SOURCE[0]}")/scripts/select_core.sh" "$@"
+
 cd /opt/cat-agent
 export PYTHONPATH=/opt/cat-agent/src
 

@@ -11,6 +11,7 @@ import threading
 import uuid
 from .connection import ClientConnection as _ClientConnection
 from .outbox import NotificationOutbox
+from .socket_owner import SocketOwner
 from typing import Any
 
 from orchestration.manager import ManagerTurn
@@ -99,28 +100,34 @@ class CoreServer:
         self._clients: list[_ClientConnection] = []
         self._server_socket: socket.socket | None = None
         self._stop = threading.Event()
+        self._socket_owner = SocketOwner(self.path)
 
     def start(self) -> None:
         if self._server_socket is not None:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.unlink(missing_ok=True)
-
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._socket_owner.acquire()
+        sock = None
         try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.bind(str(self.path))
+            self._socket_owner.bound()
             os.chmod(self.path, 0o660)
             sock.listen(16)
             sock.settimeout(0.25)
         except Exception:
-            sock.close()
-            self.path.unlink(missing_ok=True)
+            if sock is not None:
+                sock.close()
+            self._socket_owner.release()
             raise
 
         self._stop.clear()
         self._server_socket = sock
-        self.outbox.start()
-        self.scheduler.start()
+        try:
+            self.outbox.start()
+            self.scheduler.start()
+        except Exception:
+            self.close()
+            raise
         LOGGER.info("CORE socket ready: %s", self.path)
 
     def serve_forever(self) -> None:
@@ -169,9 +176,13 @@ class CoreServer:
         for client in clients:
             client.close()
 
-        self.scheduler.close()
-        self.outbox.close()
-        self.path.unlink(missing_ok=True)
+        try:
+            self.scheduler.close()
+        finally:
+            try:
+                self.outbox.close()
+            finally:
+                self._socket_owner.release()
         LOGGER.info("CORE socket stopped: %s", self.path)
 
     def session_owner(self) -> str | None:

@@ -184,7 +184,7 @@ def main() -> int:
         bundle.system_runtime.arm_task_timers()
         LOGGER.info("SYSTEM persistent task timers armed after model warmup")
 
-        core = CoreServer(bundle)
+        core = CoreServer(bundle, path=Path("/run/cat-agent/litert.sock"))
         mqtt_monitor = MqttEventMonitor(
             bundle.runtime.event_store,
             lambda binding, value: _enqueue_mqtt_event(core, bundle, binding, value),
