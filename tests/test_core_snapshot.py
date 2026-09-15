@@ -8,6 +8,9 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
+
+from orchestration.tasks import TaskRecord
 
 from litert_agent.core_server import CoreServer
 from agent_core.types import InferenceTiming
@@ -38,14 +41,6 @@ class FakeClient:
 
 
 @dataclass
-class FakeTask:
-    task_id: int
-    description: str
-    method: str
-    enabled: bool = True
-
-
-@dataclass
 class FakeTimer:
     task_id: int
     period_seconds: float
@@ -56,8 +51,8 @@ class FakeTimer:
 class FakeSystemRuntime:
     def task_snapshot(self):
         return (
-            FakeTask(1, "temperature", "query"),
-            FakeTask(2, "door", "query", False),
+            TaskRecord(1, "temperature", "check temperature", method="query"),
+            TaskRecord(2, "door", "check door", method="query", enabled=False, executor="openai"),
         )
 
     def task_timer_snapshot(self):
@@ -71,6 +66,12 @@ class FakeRuntime:
 
 
 class FakeScheduler:
+    def __init__(self) -> None:
+        self.released_sessions: list[str] = []
+
+    def release_human_session(self, session_id: str) -> None:
+        self.released_sessions.append(session_id)
+
     def start(self) -> None:
         pass
 
@@ -117,6 +118,55 @@ def recv(reader) -> dict[str, object]:
 
 
 class CoreSnapshotTest(unittest.TestCase):
+    def assert_snapshot(self, status) -> None:
+        self.assertTrue(status["chat_open"])
+        self.assertEqual(status["manager"]["resident_tokens"], 1200)
+        self.assertEqual(status["agent"]["resident_tokens"], 700)
+        self.assertEqual(status["inference"]["total_seconds"], 0.6)
+        self.assertTrue(status["tasks"][0]["enabled"])
+        self.assertFalse(status["tasks"][1]["enabled"])
+        self.assertEqual(status["tasks"][0]["timer"]["period_seconds"], 60.0)
+        self.assertIsNone(status["tasks"][1]["timer"])
+        self.assertEqual(status["tasks"][0]["executor"], "litert")
+        self.assertEqual(status["tasks"][1]["executor"], "openai")
+
+    def test_snapshot_without_socket(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            server = CoreServer(
+                FakeBundle(), scheduler=FakeScheduler(),
+                path=Path(temp) / "core.sock",
+                outbox_path=Path(temp) / "outbox.sqlite3",
+            )
+            try:
+                self.assert_snapshot(server._telemetry_snapshot())
+            finally:
+                server.close()
+
+    def test_detach_releases_human_session_without_socket(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            scheduler = FakeScheduler()
+            server = CoreServer(
+                FakeBundle(), scheduler=scheduler,
+                path=Path(temp) / "core.sock",
+                outbox_path=Path(temp) / "outbox.sqlite3",
+            )
+            client = SimpleNamespace(
+                client_name="tui", session_id="test-session",
+                human_owner=True, fallback=True,
+            )
+            server._human = server._fallback = client
+            server._clients.append(client)
+            try:
+                server._detach_client(client)
+                self.assertEqual(scheduler.released_sessions, ["test-session"])
+                self.assertIsNone(server._human)
+                self.assertIsNone(server._fallback)
+                self.assertEqual(server._clients, [])
+                self.assertFalse(client.human_owner)
+                self.assertFalse(client.fallback)
+            finally:
+                server.close()
+
     def test_snapshot_contains_model_stats_task_timer_and_chat_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "core.sock"
@@ -130,6 +180,7 @@ class CoreSnapshotTest(unittest.TestCase):
             thread.start()
 
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(3.0)
             sock.connect(str(path))
             reader = sock.makefile("r", encoding="utf-8", newline="\n")
             try:
@@ -140,14 +191,7 @@ class CoreSnapshotTest(unittest.TestCase):
                 reply = recv(reader)
                 self.assertEqual(reply["type"], "snapshot")
                 status = reply["status"]
-                self.assertTrue(status["chat_open"])
-                self.assertEqual(status["manager"]["resident_tokens"], 1200)
-                self.assertEqual(status["agent"]["resident_tokens"], 700)
-                self.assertEqual(status["inference"]["total_seconds"], 0.6)
-                self.assertTrue(status["tasks"][0]["enabled"])
-                self.assertFalse(status["tasks"][1]["enabled"])
-                self.assertEqual(status["tasks"][0]["timer"]["period_seconds"], 60.0)
-                self.assertIsNone(status["tasks"][1]["timer"])
+                self.assert_snapshot(status)
             finally:
                 sock.close()
                 reader.close()
@@ -157,4 +201,3 @@ class CoreSnapshotTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
