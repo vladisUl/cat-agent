@@ -406,14 +406,23 @@ class AssistantManagerRuntime(ManagerRuntime):
             if separator < 3 or separator != len(argv) - 2:
                 return usage
             normalized = [argv[0], argv[1], *argv[2:separator], argv[separator + 1]]
-            return self._execute_task_command(normalized)
+            executor = "litert"
+            if "--executor" in normalized[2:-1]:
+                index = normalized.index("--executor", 2)
+                if index + 1 >= len(normalized) - 1:
+                    return usage
+                executor = normalized[index + 1]
+                del normalized[index:index + 2]
+            return self._execute_task_command(normalized, executor=executor)
         if argv[0] == "timer.sh":
             return self._execute_timer_command(argv)
 
         result = self._direct_runtime.execute(command)
         return self._direct_runtime.format_result(result)
 
-    def _execute_task_command(self, argv: list[str]) -> str | None:
+    def _execute_task_command(self, argv: list[str], *, executor: str = "litert") -> str | None:
+        if executor not in {"litert", "openai"}:
+            return "SYSTEM_ERROR\nexecutor must be litert or openai"
         if len(argv) < 4:
             return (
                 "SYSTEM_ERROR\nusage: task_timer.sh|query_timer.sh "
@@ -452,6 +461,7 @@ class AssistantManagerRuntime(ManagerRuntime):
                 task_text,
                 skill_names,
                 skills,
+                executor=executor,
             )
 
         try:
@@ -461,6 +471,7 @@ class AssistantManagerRuntime(ManagerRuntime):
                 skill_names,
                 period,
                 method=method,
+                executor=executor,
             )
         except (TaskStoreError, ValueError) as exc:
             return f"SYSTEM_ERROR\n{exc}"
@@ -473,6 +484,8 @@ class AssistantManagerRuntime(ManagerRuntime):
         task_text: str,
         skill_names: tuple[str, ...],
         skills,
+        *,
+        executor: str = "litert",
     ) -> str:
         if "mqtt" not in skill_names:
             return "SYSTEM_ERROR\nexternal event currently requires mqtt skill"
@@ -510,28 +523,21 @@ class AssistantManagerRuntime(ManagerRuntime):
             return f"SYSTEM_ERROR\n{exc}"
 
         try:
-            task = store.create(
-                task_text,
-                task_text,
-                method=method,
-                skills=skill_names,
-                timer_period_seconds=None,
-                enabled=True,
-            )
-            try:
-                binding = self.event_store.register(
-                    task.task_id,
-                    task_text,
-                    source="mqtt",
-                    topic=topic,
-                    field=field,
-                    value_type=rule.value_type,
-                    values=rule.values,
-                    command=command,
-                )
-            except Exception:
-                store.delete(task.task_id)
-                raise
+            task_kwargs = dict(description=task_text, text=task_text, method=method,
+                               skills=skill_names, timer_period_seconds=None,
+                               enabled=True, executor=executor)
+            binding_kwargs = dict(source="mqtt", topic=topic, field=field,
+                                  value_type=rule.value_type, values=rule.values,
+                                  command=command)
+            if getattr(self.system_runtime, "is_remote", False) is True:
+                task = self.system_runtime.create_external_task(task_kwargs, binding_kwargs)
+            else:
+                task = store.create(**task_kwargs)
+                try:
+                    binding = self.event_store.register(task.task_id, task_text, **binding_kwargs)
+                except Exception:
+                    store.delete(task.task_id)
+                    raise
         except (TaskStoreError, EventStoreError, OSError) as exc:
             return f"SYSTEM_ERROR\n{exc}"
 
@@ -539,10 +545,10 @@ class AssistantManagerRuntime(ManagerRuntime):
             "SYSTEM external MQTT task created id=%d method=%s event=%s topic=%s field=%s values=%s",
             task.task_id,
             task.method,
-            binding.name,
-            binding.topic,
-            binding.field,
-            ",".join(binding.values),
+            f"task_mqtt{task.task_id}",
+            topic,
+            field,
+            ",".join(rule.values),
         )
         return f"SYSTEM_OK\nTASK {task.task_id} created and started"
 
@@ -590,8 +596,13 @@ class AssistantManagerRuntime(ManagerRuntime):
                     return f"SYSTEM_OK\nTASK {task_id} stopped"
                 if not self.system_runtime.delete_task(task_id):
                     return f"SYSTEM_ERROR\nunknown task: {task_id}"
-                self.event_store.unregister_task(task_id)
+                if getattr(self.system_runtime, "is_remote", False) is not True:
+                    self.event_store.unregister_task(task_id)
                 return f"SYSTEM_OK\nTASK {task_id} deleted"
+
+            if op == "executor" and len(argv) == 4:
+                task = self.system_runtime.task_store.set_executor(int(argv[3]), argv[2])
+                return f"SYSTEM_OK\nTASK {task.task_id} executor={task.executor}"
 
             if op == "period" and len(argv) == 4:
                 period = float(argv[2])

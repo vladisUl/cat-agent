@@ -15,7 +15,7 @@ from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
 from orchestration.skills import SkillBase
 from orchestration.system_events import SystemRuntime
-from orchestration.tasks import DEFAULT_TASK_FILE, TaskStore
+from task_system.client import RemoteSystemRuntime
 
 from .model_client import LiteRTChatClient, WarmResult
 
@@ -113,7 +113,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
     skill_base = SkillBase(settings.prompt_dir / "prompt_base.txt")
     if bench_skills is not None:
         skill_base.require(bench_skills)
-    system_runtime = SystemRuntime(TaskStore(DEFAULT_TASK_FILE))
+    system_runtime = RemoteSystemRuntime('litert')
 
     manager_client = LiteRTChatClient(
         manager_engine,
@@ -158,6 +158,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         prompt_store,
         AgentPool(workers, event_worker_id=event_worker_id),
         system_runtime,
+        event_store=system_runtime.event_store,
         max_steps=settings.max_manager_steps,
         forced_delegate_skills=bench_skills,
     )

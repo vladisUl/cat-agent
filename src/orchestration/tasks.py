@@ -37,6 +37,7 @@ class TaskRecord:
     timer_period_seconds: float | None = None
     enabled: bool = True
     generation: str = field(default_factory=lambda: uuid.uuid4().hex)
+    executor: str = "litert"
 
 
 class TaskStore:
@@ -86,6 +87,8 @@ class TaskStore:
                     None if timer_raw is None else float(timer_raw)
                 )
                 enabled = bool(item.get("enabled", True))
+                executor = str(item.get("executor", "litert"))
+                self._validate_executor(executor)
             except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
                 raise TaskStoreError(
                     f"invalid task record at {self.path}:{line_number}"
@@ -114,6 +117,7 @@ class TaskStore:
                 timer_period_seconds=timer_period_seconds,
                 enabled=enabled,
                 generation=str(item.get("generation") or uuid.uuid4().hex),
+                executor=executor,
             )
 
         self._tasks = tasks
@@ -128,7 +132,9 @@ class TaskStore:
         skills: tuple[str, ...] = (),
         timer_period_seconds: float | None = None,
         enabled: bool = True,
+        executor: str = "litert",
     ) -> TaskRecord:
+        self._validate_executor(executor)
         description = description.strip()
         text = text.strip()
         method = method.strip().lower()
@@ -155,6 +161,7 @@ class TaskStore:
             skills=skills,
             timer_period_seconds=timer_period_seconds,
             enabled=enabled,
+            executor=executor,
         )
         self._tasks[task_id] = record
         try:
@@ -206,6 +213,19 @@ class TaskStore:
             self._tasks[task_id] = record
             raise
         return True
+
+    @staticmethod
+    def _validate_executor(executor: str) -> None:
+        if executor not in {"litert", "openai"}:
+            raise TaskStoreError("executor must be litert or openai")
+
+    @synchronized
+    def set_executor(self, task_id: int, executor: str) -> TaskRecord:
+        self._validate_executor(executor)
+        current = self.require(task_id)
+        updated = replace(current, executor=executor, generation=uuid.uuid4().hex)
+        self._replace(updated)
+        return updated
 
     def status_text(self) -> str:
         tasks = self.list()
@@ -273,6 +293,7 @@ class TaskStore:
                     "timer_period_seconds": task.timer_period_seconds,
                     "enabled": task.enabled,
                     "generation": task.generation,
+                    "executor": task.executor,
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),

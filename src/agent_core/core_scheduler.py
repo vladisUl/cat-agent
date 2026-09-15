@@ -11,6 +11,7 @@ import uuid
 
 from orchestration.manager import AutonomousTaskCompletion, ManagerTurn
 from orchestration.system_events import SystemEvent
+from orchestration.tasks import TaskStoreError
 from .types import InferenceTiming
 from .metrics import current_metrics
 
@@ -46,6 +47,8 @@ class _PriorityRequest:
     cancelled: bool = False
     busy_seconds: float = 0.0
     metrics: dict = field(default_factory=dict)
+    task_run: SystemEvent | None = None
+    task_started: bool = False
 
 
 class CoreScheduler:
@@ -107,6 +110,8 @@ class CoreScheduler:
         for item in remaining:
             self._executor.submit(self._discard, item).result()
             self._complete(item, ManagerTurn("cancelled", "CORE остановлен"))
+        if getattr(getattr(self.bundle, "system_runtime", None), "is_remote", False) is True:
+            self.bundle.system_runtime.flush_completions()
         self._executor.submit(self._close_all_contexts).result()
         self.bundle.manager_client.set_event_handler(None)
         self._executor.shutdown(wait=True, cancel_futures=False)
@@ -178,6 +183,10 @@ class CoreScheduler:
 
     def enqueue_external_event(self, event, *, priority=HARDWARE_EVENT_PRIORITY, coalesce=False):
         self._validate_external_priority(priority)
+        system = getattr(self.bundle, "system_runtime", None)
+        if getattr(system, "is_remote", False) is True:
+            system.submit_event(event)
+            return
         self._enqueue_event(event, priority=priority,
                             coalesce_key=self._event_label(event) if coalesce else None)
 
@@ -185,8 +194,17 @@ class CoreScheduler:
         with self._queue_lock:
             if coalesce_key is not None and self._has_coalesced_event(coalesce_key):
                 return
-            self._append_locked(_PriorityRequest("system", self._event_label(event), event,
-                                                 event.created_monotonic, priority, coalesce_key))
+            if event.run_id and any(item is not None and item.task_run is not None and
+                                    item.task_run.run_id == event.run_id
+                                    for item in [*self._pending, self._active_request]):
+                return
+            item = _PriorityRequest("system", self._event_label(event), event,
+                                    event.created_monotonic, priority, coalesce_key)
+            if event.run_id:
+                item.task_run = event
+            self._append_locked(item)
+        if event.run_id:
+            self.bundle.system_runtime.accepted(event)
         self._emit_status()
 
     def _has_coalesced_event(self, key):
@@ -196,7 +214,7 @@ class CoreScheduler:
     def _poll_system_events(self):
         for event in self.bundle.system_runtime.poll_due(busy=False):
             try:
-                self._enqueue_event(event, priority=DEFAULT_EVENT_PRIORITY,
+                self._enqueue_event(event, priority=HARDWARE_EVENT_PRIORITY if event.source == "mqtt" else DEFAULT_EVENT_PRIORITY,
                                     coalesce_key=self._event_label(event) if event.source == "timer" else None)
             except QueueFull:
                 LOGGER.error("CORE timer activation rejected task=%s", event.task_id)
@@ -217,8 +235,14 @@ class CoreScheduler:
         if item.cancelled or item.iterator is not None:
             return True
         if item.kind == "system" and item.payload.task_id is not None:
+            if item.task_run is not None:
+                pool = self.bundle.runtime.pool
+                return (pool.acquire_event() if item.payload.source == "mqtt" else pool.acquire()) is not None
             can_begin = getattr(self.bundle.runtime, "can_begin_autonomous_task", None)
-            return can_begin is None or can_begin(item.payload)
+            try:
+                return can_begin is None or can_begin(item.payload)
+            except TaskStoreError:
+                return False
         if item.kind in {"user", "manager"}:
             # A later input in the same dialogue cannot overtake its suspended turn.
             return not any(other is not item and other.kind in {"user", "manager"} and
@@ -245,6 +269,18 @@ class CoreScheduler:
     def _advance(self, item):
         token = current_metrics.set(item.metrics)
         try:
+            if item.task_run is not None and not item.cancelled:
+                system = self.bundle.system_runtime
+                try:
+                    allowed = (system.valid_run(item.task_run) if item.task_started
+                               else system.begin_run(item.task_run))
+                except TaskStoreError:
+                    # Pause at the boundary until the authoritative service returns.
+                    return None
+                if allowed:
+                    item.task_started = True
+                else:
+                    item.cancelled = True
             if item.cancelled:
                 self._discard(item)
                 return ManagerTurn("cancelled", "")
@@ -360,6 +396,8 @@ class CoreScheduler:
         self._emit_status()
 
     def _complete(self, item, turn):
+        if item.task_run is not None:
+            self.bundle.system_runtime.finish_run(item.task_run, turn.kind)
         self._last_request_seconds = time.monotonic() - item.queued_at
         self._last_metrics = {**item.metrics, "request_id": item.request_id,
                               "total_seconds": self._last_request_seconds,

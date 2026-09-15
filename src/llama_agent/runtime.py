@@ -11,7 +11,7 @@ from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
 from orchestration.skills import SkillBase
 from orchestration.system_events import SystemRuntime
-from orchestration.tasks import DEFAULT_TASK_FILE, TaskStore
+from task_system.client import RemoteSystemRuntime
 
 from .model_client import LlamaChatClient, WarmResult
 
@@ -70,7 +70,7 @@ def build_bundle(settings: Settings) -> LlamaRuntimeBundle:
     prompt_store = PromptStore(settings.prompt_dir, settings.agent_count)
     prompt_store.validate()
     skill_base = SkillBase(settings.prompt_dir / "prompt_base.txt")
-    system_runtime = SystemRuntime(TaskStore(DEFAULT_TASK_FILE))
+    system_runtime = RemoteSystemRuntime(None)
 
     manager_client = _client(
         settings,
@@ -108,6 +108,7 @@ def build_bundle(settings: Settings) -> LlamaRuntimeBundle:
         prompt_store,
         AgentPool(workers, event_worker_id=event_worker_id),
         system_runtime,
+        event_store=system_runtime.event_store,
         max_steps=settings.max_manager_steps,
     )
 

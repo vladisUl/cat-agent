@@ -8,18 +8,13 @@ import sys
 import litert_lm
 
 from orchestration.config import Settings
-from orchestration.mqtt_events import MqttEventMonitor
 
-from .core_scheduler import HARDWARE_EVENT_PRIORITY
 from .core_server import CoreServer
 from .runtime import build_bundle, warm_bundle
 
 LOGGER = logging.getLogger(__name__)
 LOG_DIR = Path("/var/log/litertlm")
 LOG_PATH = LOG_DIR / "cat-agent.log"
-MQTT_ACTIVE_STATE_PATH = (
-    Path(__file__).resolve().parents[2] / "config" / "mqtt_event_active.json"
-)
 
 
 class _ProtocolLogFilter(logging.Filter):
@@ -144,17 +139,6 @@ class _ProtocolLogFilter(logging.Filter):
         return False
 
 
-def _enqueue_mqtt_event(core: CoreServer, bundle, binding, value: str) -> None:
-    event = bundle.runtime.external_event("mqtt", binding.name, value=value)
-    if event is None:
-        return
-    core.scheduler.enqueue_external_event(
-        event,
-        priority=HARDWARE_EVENT_PRIORITY,
-        coalesce=False,
-    )
-
-
 def main() -> int:
     settings = Settings.from_env(require_model=False)
     try:
@@ -181,21 +165,12 @@ def main() -> int:
             agent_warm.elapsed_seconds,
         )
 
-        bundle.system_runtime.arm_task_timers()
-        LOGGER.info("SYSTEM persistent task timers armed after model warmup")
 
         core = CoreServer(bundle, path=Path("/run/cat-agent/litert.sock"))
-        mqtt_monitor = MqttEventMonitor(
-            bundle.runtime.event_store,
-            lambda binding, value: _enqueue_mqtt_event(core, bundle, binding, value),
-            active_state_path=MQTT_ACTIVE_STATE_PATH,
-        )
         core.start()
-        mqtt_monitor.start()
         try:
             core.serve_forever()
         finally:
-            mqtt_monitor.close()
             core.close()
         return 0
     finally:

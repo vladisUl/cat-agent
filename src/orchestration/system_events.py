@@ -21,6 +21,7 @@ class SystemEvent:
     created_monotonic: float
     task_id: int | None = None
     task_generation: str = ""
+    run_id: str = ""
 
     def manager_text(self) -> str:
         if self.task_id is not None:
@@ -123,9 +124,10 @@ class SystemRuntime:
         text: str,
         *,
         skills: tuple[str, ...] = (),
+        executor: str = "litert",
     ) -> TaskRecord:
         store = self._require_task_store()
-        task = store.create(description, text, skills=skills)
+        task = store.create(description, text, skills=skills, executor=executor)
         LOGGER.info("SYSTEM task created id=%d description=%r", task.task_id, task.description)
         return task
 
@@ -137,6 +139,7 @@ class SystemRuntime:
         period_seconds: float,
         *,
         method: str = "task",
+        executor: str = "litert",
     ) -> TaskRecord:
         if not skills:
             raise TaskStoreError("periodic task requires at least one skill")
@@ -151,6 +154,7 @@ class SystemRuntime:
             skills=skills,
             timer_period_seconds=float(period_seconds),
             enabled=True,
+            executor=executor,
         )
         now = time.monotonic()
         with self._lock:

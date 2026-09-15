@@ -15,6 +15,7 @@ from .socket_owner import SocketOwner
 from typing import Any
 
 from orchestration.manager import ManagerTurn
+from orchestration.tasks import TaskStoreError
 
 from .core_scheduler import CoreScheduler, HARDWARE_EVENT_PRIORITY
 from .types import InferenceTiming
@@ -625,17 +626,20 @@ class CoreServer:
         status["manager"] = self._client_snapshot(getattr(context, "client", self.bundle.manager_client))
         status["agent"] = self._client_snapshot(self.bundle.agent_client)
 
-        timers = {
-            timer.task_id: timer
-            for timer in self.bundle.system_runtime.task_timer_snapshot()
-        }
+        try:
+            timers = {timer.task_id: timer for timer in self.bundle.system_runtime.task_timer_snapshot()}
+            task_snapshot = self.bundle.system_runtime.task_snapshot()
+        except TaskStoreError as exc:
+            status["task_system_error"] = str(exc)
+            timers, task_snapshot = {}, ()
         tasks: list[dict[str, object]] = []
-        for task in self.bundle.system_runtime.task_snapshot():
+        for task in task_snapshot:
             timer = timers.get(task.task_id)
             tasks.append(
                 {
                     "task_id": task.task_id,
                     "description": task.description,
+                    "executor": task.executor,
                     "method": task.method,
                     "enabled": task.enabled,
                     "timer": (
