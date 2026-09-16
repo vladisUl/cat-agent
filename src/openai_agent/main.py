@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from agent_core.core_server import CoreServer
+from agent_core.systemd_notify import notify_systemd
 from llama_agent.main import _ProtocolLogFilter
 from orchestration.config import Settings
 
@@ -29,14 +30,17 @@ def main() -> int:
     LOGGER.info("Prompt dir: %s", settings.prompt_dir)
     LOGGER.info("Model endpoint: %s model=%s", settings.api_base_url, settings.model)
 
+    notify_systemd(status="Initializing OpenAI CORE runtime")
     bundle = build_bundle(settings)
     try:
-
+        notify_systemd(status="Starting OpenAI CORE socket")
         core = CoreServer(bundle, path=Path("/run/cat-agent/openai.sock"))
         core.start()
+        notify_systemd(status="OpenAI CORE ready", ready=True)
         try:
             core.serve_forever()
         finally:
+            notify_systemd(status="Stopping OpenAI CORE", stopping=True)
             core.close()
         return 0
     finally:
@@ -74,4 +78,3 @@ if __name__ == "__main__":
         sys.exit(main())
     except KeyboardInterrupt:
         sys.exit(0)
-
