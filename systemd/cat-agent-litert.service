@@ -1,0 +1,15 @@
+[Unit]
+Description=cat-agent LiteRT CORE
+After=cat-agent-task-system.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cat-agent
+ExecStart=/opt/cat-agent/start_litert_agent.sh e2b-cpu
+Restart=always
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
