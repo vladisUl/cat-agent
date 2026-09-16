@@ -34,3 +34,38 @@ class VoiceChatTest(unittest.TestCase):
             self.assertEqual(wake.AcceptWaveform.call_count, 1)
             self.assertEqual(beep.call_count, 1)
             self.assertEqual([call.args[0] for call in run.call_args_list], ["Чат", "температура", "Конец чата"])
+
+    def test_wake_reopens_capture_before_beep(self):
+        events = []
+        wake = Mock()
+        wake.AcceptWaveform.return_value = True
+        wake.Result.return_value = json.dumps({"text": "гена"})
+        command = Mock()
+
+        first_pcm = Mock()
+        first_pcm.read.return_value = (800, b"\0" * 1600)
+        first_pcm.close.side_effect = lambda: events.append("close")
+
+        second_pcm = Mock()
+        second_pcm.read.side_effect = KeyboardInterrupt()
+        second_pcm.close.side_effect = lambda: events.append("final-close")
+
+        captures = iter([first_pcm, second_pcm])
+
+        def open_microphone(_alsa):
+            events.append("open")
+            return next(captures)
+
+        def beep():
+            events.append("beep")
+
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(voice, "COMMAND_WAV_PATH", Path(temp) / "command.wav"), \
+             patch.object(voice, "_open_microphone", side_effect=open_microphone), \
+             patch.object(voice, "_make_wake_recognizer", return_value=wake), \
+             patch.object(voice, "_make_command_recognizer", return_value=command), \
+             patch.object(voice, "play_wake_beep", side_effect=beep):
+            with self.assertRaises(KeyboardInterrupt):
+                voice._run_loop(SimpleNamespace(ALSAAudioError=RuntimeError), None, None, None, None)
+
+        self.assertEqual(events[:4], ["open", "close", "open", "beep"])
