@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 from litert_agent import voice
@@ -23,6 +24,7 @@ class VoiceChatTest(unittest.TestCase):
              patch.object(voice, "_make_wake_recognizer", return_value=wake), \
              patch.object(voice, "_make_command_recognizer", return_value=command), \
              patch.object(voice, "play_wake_beep") as beep, \
+             patch.object(voice, "_run_while_draining_pcm", side_effect=lambda _pcm, _alsa, work: work()), \
              patch.object(voice, "_transcribe_command", side_effect=["Чат", "температура", "Конец чата"]), \
              patch.object(voice, "_run_core_voice_turn", side_effect=[
                  voice.VoiceTurnResult("Чат создан", True),
@@ -34,3 +36,29 @@ class VoiceChatTest(unittest.TestCase):
             self.assertEqual(wake.AcceptWaveform.call_count, 1)
             self.assertEqual(beep.call_count, 1)
             self.assertEqual([call.args[0] for call in run.call_args_list], ["Чат", "температура", "Конец чата"])
+
+    def test_processing_drains_same_pcm_while_foreground_work_runs(self):
+        read_started = threading.Event()
+        release_read = threading.Event()
+
+        class PCM:
+            def read(self):
+                read_started.set()
+                release_read.wait(timeout=1.0)
+                return 800, b"\0" * 1600
+
+        def work():
+            self.assertTrue(read_started.wait(timeout=1.0))
+            release_read.set()
+            return "done"
+
+        result = voice._run_while_draining_pcm(
+            PCM(),
+            SimpleNamespace(ALSAAudioError=RuntimeError),
+            work,
+        )
+        self.assertEqual(result, "done")
+
+
+if __name__ == "__main__":
+    unittest.main()
