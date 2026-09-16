@@ -48,7 +48,7 @@ openai:
   # OpenAI-compatible API endpoint used by the OpenAI CORE.
   base_url: http://127.0.0.1:11434/v1
   # Model name sent to the OpenAI-compatible backend.
-  model: gemma4:31b
+  model: gemma4:31b-cloud
   # Reasoning effort passed to compatible models.
   # Allowed: none, minimal, low, medium, high, xhigh.
   reasoning_effort: none
