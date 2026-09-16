@@ -1,0 +1,128 @@
+# cat-agent.yaml reference
+#
+# This file documents every normal runtime setting stored in cat-agent.yaml.
+# Secrets are intentionally NOT stored in YAML because cat-agent.yaml is tracked
+# in GitHub. Keep API keys and other credentials in local env files such as
+# /opt/cat-agent/.env.openai with restrictive permissions.
+#
+# Configuration is read when a component starts. After changing a section,
+# restart the corresponding process/service. There is no hot reload.
+
+litert:
+  # Selects the profile loaded by the long-running LiteRT CORE.
+  # Change this value, then restart cat-agent-litert.service.
+  active_profile: e4b
+
+  # Named, known-good LiteRT runtime profiles. Add new profiles here when new
+  # models/backends are tested. active_profile must reference one of these keys.
+  profiles:
+    e2b:
+      # LiteRT-LM model file.
+      model: /storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm
+      # LiteRT execution backend: cpu or gpu.
+      backend: gpu
+      # Optional activation data type: fp32, fp16, int16 or int8.
+      # Omit when the LiteRT default should be used.
+      activation_dtype: fp32
+      # Enable LiteRT speculative decoding for this profile.
+      speculative: true
+      # Enable the YNNPACK CPU delegate. Disabled for this GPU profile.
+      ynnpack: false
+
+    e2b-cpu:
+      model: /storage/models/litertlm/gemma-4-E2B-it.litertlm
+      backend: cpu
+      # CPU thread count passed to LiteRT Backend.CPU().
+      cpu_threads: 8
+      speculative: false
+      ynnpack: true
+
+    e4b:
+      model: /storage/models/litertlm/gemma-4-E4B-it.litertlm
+      backend: cpu
+      cpu_threads: 8
+      speculative: false
+      ynnpack: true
+
+openai:
+  # OpenAI-compatible API endpoint used by the OpenAI CORE.
+  base_url: http://127.0.0.1:11434/v1
+  # Model name sent to the OpenAI-compatible backend.
+  model: gemma4:31b
+  # Reasoning effort passed to compatible models.
+  # Allowed: none, minimal, low, medium, high, xhigh.
+  reasoning_effort: none
+  # API keys do NOT belong here. Keep CAT_AGENT_API_KEY / OPENAI_API_KEY and
+  # OLLAMA_API_KEY in /opt/cat-agent/.env.openai.
+
+agent:
+  # Number of worker Agent instances available to Manager.
+  count: 3
+  # Maximum internal Manager steps for one request.
+  manager_max_steps: 12
+  # Maximum internal steps for each worker Agent request.
+  agent_max_steps: 12
+  # Maximum model output tokens for one Manager inference step.
+  manager_max_output_tokens: 256
+  # Maximum model output tokens for one worker Agent inference step.
+  agent_max_output_tokens: 128
+  # Sampling temperature. 0.0 gives deterministic/low-randomness behavior.
+  temperature: 0.0
+  # Nucleus sampling limit. 1.0 means no top-p truncation.
+  top_p: 1.0
+
+runtime:
+  # Agent command workspace.
+  workspace: /opt/model
+  # Directory containing Manager/Agent/system prompt files.
+  prompt_dir: /opt/cat-agent/prompts
+  # Maximum execution time in seconds for one external/tool command.
+  command_timeout: 20
+  # HTTP request timeout in seconds for the OpenAI-compatible backend.
+  http_timeout: 60
+  # Number of retries after a failed OpenAI-compatible HTTP request.
+  request_retries: 0
+  # Delay in seconds between HTTP retries when request_retries > 0.
+  retry_delay: 2.0
+  # Maximum file size, in bytes, accepted by Agent file operations in one read.
+  max_file_bytes: 65536
+
+web:
+  # HTTP bind address. 0.0.0.0 listens on all interfaces.
+  host: 0.0.0.0
+  # Web UI HTTP port.
+  http_port: 8080
+  # WebSocket port used by the browser frontend.
+  ws_port: 8765
+  # CAT_AGENT_WEB_TOKEN remains a secret/local environment setting and is not
+  # stored in this YAML.
+
+voice:
+  # Accepted wake words/phrases. Entries are normalized to lowercase.
+  # Example alternative: "крокодил гена".
+  wake_words:
+    - гена
+  # Seconds to wait after wake before cancelling when speech has not started.
+  no_command_timeout: 7
+  # Maximum duration in seconds of one captured voice command.
+  max_command_seconds: 20
+  # Audio device and Vosk/GigaAM/Piper model locations remain infrastructure
+  # constants/low-level env overrides and are intentionally not in this YAML.
+
+logging:
+  # Python application log level for both COREs.
+  # Allowed: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+  level: INFO
+
+notifications:
+  # Path to Firebase service-account credentials. The credential CONTENT is
+  # secret; this YAML stores only its local path.
+  firebase_credentials: /opt/firebase/zigbee.json
+  # Path to the local Firebase device-token file.
+  firebase_tokens: /opt/firebase/tokens.txt
+  # Notification title shown by Firebase push messages.
+  firebase_title: Гена
+  # Firebase message time-to-live in seconds. 3600 = one hour.
+  ttl: 3600
+  # Firebase Android channel id is still an optional low-level env override via
+  # CAT_AGENT_FIREBASE_CHANNEL_ID; it is intentionally not part of normal config.
