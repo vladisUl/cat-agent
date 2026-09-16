@@ -4,8 +4,6 @@ import unittest
 from unittest.mock import patch
 
 from litert_agent.voice_tts import (
-    POST_TTS_GUARD_SECONDS,
-    TTS_TAIL_SILENCE_SECONDS,
     WAKE_BEEP_FREQUENCY_HZ,
     WAKE_BEEP_SAMPLE_RATE,
     WAKE_BEEP_SECONDS,
@@ -31,10 +29,6 @@ class WakeBeepTest(unittest.TestCase):
         run_mock.assert_called_once()
         pcm = run_mock.call_args.kwargs["input"]
         self.assertEqual(pcm, _wake_beep_pcm())
-
-    def test_chat_turn_has_no_long_artificial_post_tts_blind_interval(self) -> None:
-        self.assertEqual(TTS_TAIL_SILENCE_SECONDS, 0.0)
-        self.assertLessEqual(POST_TTS_GUARD_SECONDS, 0.02)
 
 
 if __name__ == "__main__":

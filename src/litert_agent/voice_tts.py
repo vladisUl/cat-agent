@@ -12,12 +12,8 @@ from typing import Any
 
 
 _TTS_STOP = object()
-# aplay drains its PCM queue before process.wait() returns, so an additional
-# half-second silent tail only creates a period in which the user hears silence
-# while capture is still closed. Keep only a very short acoustic guard before
-# reopening the microphone for the next chat turn.
-TTS_TAIL_SILENCE_SECONDS = 0.0
-POST_TTS_GUARD_SECONDS = 0.02
+TTS_TAIL_SILENCE_SECONDS = 0.50
+POST_TTS_GUARD_SECONDS = 0.10
 APLAY_DEVICE = os.environ.get("VLAD_APLAY_DEVICE", "").strip()
 
 WAKE_BEEP_FREQUENCY_HZ = 784.0
@@ -189,8 +185,7 @@ class StreamingTTSPlayer:
 
                 tail_frames = round(sample_rate * TTS_TAIL_SILENCE_SECONDS)
                 tail_bytes = tail_frames * sample_width * channels
-                if tail_bytes:
-                    process.stdin.write(b"\x00" * tail_bytes)
+                process.stdin.write(b"\x00" * tail_bytes)
                 process.stdin.close()
 
                 return_code = process.wait()
@@ -198,8 +193,7 @@ class StreamingTTSPlayer:
                     raise subprocess.CalledProcessError(return_code, process.args)
 
                 self._playback_finished_at = time.monotonic()
-                if POST_TTS_GUARD_SECONDS:
-                    time.sleep(POST_TTS_GUARD_SECONDS)
+                time.sleep(POST_TTS_GUARD_SECONDS)
 
         except BaseException as exc:
             self._error = exc
