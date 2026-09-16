@@ -10,7 +10,7 @@ ExecStart=/opt/cat-agent/start_litert_agent.sh
 Restart=always
 RestartSec=2
 KillSignal=SIGTERM
-TimeoutStartSec=120
+TimeoutStartSec=300
 TimeoutStopSec=30
 
 [Install]
