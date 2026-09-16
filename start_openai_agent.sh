@@ -16,6 +16,8 @@ export PYTHONPATH=/opt/cat-agent/src
 
 # Ordinary OpenAI settings come from cat-agent.yaml. The local env file is
 # intentionally reserved for secrets such as API keys.
-eval "$(/opt/litert-lm-venv/bin/python3 -m orchestration.config_env openai)"
+CONFIG_ENV="$(/opt/litert-lm-venv/bin/python3 -m orchestration.config_env openai)"
+eval "$CONFIG_ENV"
+unset CONFIG_ENV
 
 exec /opt/litert-lm-venv/bin/python3 -m openai_agent.main
