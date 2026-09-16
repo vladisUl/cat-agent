@@ -12,7 +12,6 @@ import uuid
 LOGGER = logging.getLogger(__name__)
 
 DISPATCHER_LEASE_SECONDS = 1.0
-NEW_NOTIFICATION_GRACE_SECONDS = 0.25
 PUMP_INTERVAL_SECONDS = 0.1
 
 
@@ -88,14 +87,12 @@ class NotificationOutbox:
         now = time.time()
         with self._lock, self._connect() as db:
             self._heartbeat(db, now)
+            # Keep legacy retry semantics: a newly queued notification is due
+            # immediately. Multi-CORE duplicate prevention is handled by the
+            # dispatcher election, not by delaying the notification itself.
             db.execute(
-                "INSERT INTO notifications(id,text,due,scope) VALUES(?,?,?,?)",
-                (
-                    identifier,
-                    text,
-                    now + NEW_NOTIFICATION_GRACE_SECONDS,
-                    self.scope,
-                ),
+                "INSERT INTO notifications(id,text,scope) VALUES(?,?,?)",
+                (identifier, text, self.scope),
             )
         return identifier
 
