@@ -1,0 +1,15 @@
+[Unit]
+Description=cat-agent Task SYSTEM
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cat-agent
+ExecStart=/opt/cat-agent/start_task_system.sh
+Restart=always
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
