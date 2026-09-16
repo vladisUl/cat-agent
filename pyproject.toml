@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Experimental local LLM agent runtime"
 requires-python = ">=3.10"
 dependencies = [
+    "PyYAML>=6,<7",
     "websockets>=12,<17",
 ]
 
