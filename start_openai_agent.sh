@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
 cd /opt/cat-agent
 
@@ -12,9 +12,10 @@ if [ -f "$ENV_FILE" ]; then
     set +a
 fi
 
-: "${CAT_AGENT_API_BASE_URL:?CAT_AGENT_API_BASE_URL is not set}"
-: "${CAT_AGENT_MODEL:?CAT_AGENT_MODEL is not set}"
-
 export PYTHONPATH=/opt/cat-agent/src
+
+# Ordinary OpenAI settings come from cat-agent.yaml. The local env file is
+# intentionally reserved for secrets such as API keys.
+eval "$(/opt/litert-lm-venv/bin/python3 -m orchestration.config_env openai)"
 
 exec /opt/litert-lm-venv/bin/python3 -m openai_agent.main
