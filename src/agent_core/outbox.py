@@ -1,4 +1,4 @@
-"""Persistent at-least-once notification delivery, independent of inference."""
+"""Persistent at-least-once notification delivery shared by all COREs."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,14 +11,18 @@ import uuid
 
 LOGGER = logging.getLogger(__name__)
 
+DISPATCHER_LEASE_SECONDS = 1.0
+NEW_NOTIFICATION_GRACE_SECONDS = 0.25
+PUMP_INTERVAL_SECONDS = 0.1
+
 
 class NotificationOutbox:
     def __init__(self, path, sender, *, scope: str | None = None):
         self.path = Path(path)
         self.sender = sender
+        self._sender_owner = getattr(sender, "__self__", None)
         if scope is None:
-            owner = getattr(sender, "__self__", None)
-            owner_path = getattr(owner, "path", None)
+            owner_path = getattr(self._sender_owner, "path", None)
             scope = str(owner_path) if owner_path is not None else "default"
         self.scope = str(scope).strip() or "default"
         self._stop = threading.Event()
@@ -32,9 +36,8 @@ class NotificationOutbox:
         db = sqlite3.connect(self.path, timeout=5)
         db.execute("PRAGMA synchronous=FULL")
         if not self._ready:
-            # Several COREs intentionally share one SQLite file. Serialize schema
-            # migration and legacy-row adoption so only one scope can claim an
-            # old undelivered row.
+            # COREs share one SQLite file. Serialize schema migration so two
+            # processes cannot race while adding the routing metadata.
             db.execute("BEGIN IMMEDIATE")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS notifications ("
@@ -49,9 +52,13 @@ class NotificationOutbox:
                 db.execute(
                     "ALTER TABLE notifications ADD COLUMN scope TEXT NOT NULL DEFAULT ''"
                 )
-            # Existing pending rows predate CORE scoping. The first CORE that
-            # opens the migrated DB adopts them; already-delivered history is
-            # left untouched.
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS dispatchers ("
+                "scope TEXT PRIMARY KEY, human INTEGER NOT NULL DEFAULT 0, "
+                "last_seen REAL NOT NULL DEFAULT 0)"
+            )
+            # Old undelivered rows have no producer scope. Give them a stable
+            # scope for diagnostics; dispatch itself is elected globally.
             db.execute(
                 "UPDATE notifications SET scope=? "
                 "WHERE scope='' AND delivered IS NULL",
@@ -65,34 +72,78 @@ class NotificationOutbox:
         finally:
             db.close()
 
+    def _human_active(self) -> bool:
+        owner = self._sender_owner
+        return owner is not None and getattr(owner, "_human", None) is not None
+
+    def _heartbeat(self, db, now: float) -> None:
+        db.execute(
+            "INSERT INTO dispatchers(scope,human,last_seen) VALUES(?,?,?) "
+            "ON CONFLICT(scope) DO UPDATE SET human=excluded.human,last_seen=excluded.last_seen",
+            (self.scope, 1 if self._human_active() else 0, now),
+        )
+
     def enqueue(self, text):
         identifier = uuid.uuid4().hex
+        now = time.time()
         with self._lock, self._connect() as db:
+            self._heartbeat(db, now)
             db.execute(
-                "INSERT INTO notifications(id,text,scope) VALUES(?,?,?)",
-                (identifier, text, self.scope),
+                "INSERT INTO notifications(id,text,due,scope) VALUES(?,?,?,?)",
+                (
+                    identifier,
+                    text,
+                    now + NEW_NOTIFICATION_GRACE_SECONDS,
+                    self.scope,
+                ),
             )
         return identifier
 
     def acknowledge(self, identifier):
+        # The human interface may live on a different CORE from the one that
+        # produced the notification, so acknowledgement is intentionally global.
         with self._lock, self._connect() as db:
             db.execute(
                 "UPDATE notifications SET delivered=?,error='' "
-                "WHERE id=? AND scope=? AND delivered IS NULL",
-                (time.time(), identifier, self.scope),
+                "WHERE id=? AND delivered IS NULL",
+                (time.time(), identifier),
             )
 
     def pump(self, now=None):
         now = time.time() if now is None else now
+        live_after = now - DISPATCHER_LEASE_SECONDS
         with self._lock, self._connect() as db:
+            self._heartbeat(db, now)
+
+            # If any live CORE owns a human interface, one deterministic human
+            # CORE dispatches all notifications regardless of producer.
+            winner = db.execute(
+                "SELECT scope FROM dispatchers "
+                "WHERE human=1 AND last_seen>=? ORDER BY scope LIMIT 1",
+                (live_after,),
+            ).fetchone()
+
+            # Otherwise elect one live CORE to perform Firebase fallback. This
+            # prevents two COREs from pushing the same shared notification.
+            if winner is None:
+                winner = db.execute(
+                    "SELECT scope FROM dispatchers "
+                    "WHERE last_seen>=? ORDER BY scope LIMIT 1",
+                    (live_after,),
+                ).fetchone()
+
+            if winner is None or str(winner[0]) != self.scope:
+                return False
+
             row = db.execute(
                 "SELECT id,text,attempts FROM notifications "
-                "WHERE delivered IS NULL AND due<=? AND scope=? "
-                "ORDER BY rowid LIMIT 1",
-                (now, self.scope),
+                "WHERE delivered IS NULL AND due<=? ORDER BY rowid LIMIT 1",
+                (now,),
             ).fetchone()
+
         if row is None:
             return False
+
         identifier, text, attempts = row
         try:
             accepted = self.sender(identifier, text)
@@ -103,18 +154,20 @@ class NotificationOutbox:
         except Exception as exc:
             error = str(exc)
             LOGGER.warning("Notification pending id=%s error=%s", identifier, error)
+
         delay = min(300, 10 * 2 ** min(attempts, 5))
         with self._lock, self._connect() as db:
             db.execute(
                 "UPDATE notifications SET attempts=attempts+1,due=?,error=? "
-                "WHERE id=? AND scope=? AND delivered IS NULL",
-                (now + delay, error, identifier, self.scope),
+                "WHERE id=? AND delivered IS NULL",
+                (now + delay, error, identifier),
             )
         return True
 
     def start(self):
-        with self._lock, self._connect():
-            pass
+        now = time.time()
+        with self._lock, self._connect() as db:
+            self._heartbeat(db, now)
         if self._thread is None:
             self._thread = threading.Thread(
                 target=self._run, name="cat-agent-outbox", daemon=True
@@ -127,9 +180,15 @@ class NotificationOutbox:
                 self.pump()
             except Exception:
                 LOGGER.exception("Outbox worker failed")
-            self._stop.wait(0.5)
+            self._stop.wait(PUMP_INTERVAL_SECONDS)
 
     def close(self):
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2)
+        if self._ready:
+            try:
+                with self._lock, self._connect() as db:
+                    db.execute("DELETE FROM dispatchers WHERE scope=?", (self.scope,))
+            except Exception:
+                LOGGER.exception("Failed to remove outbox dispatcher scope=%s", self.scope)
