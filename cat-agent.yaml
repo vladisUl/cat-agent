@@ -1,0 +1,67 @@
+litert:
+  active_profile: e4b
+
+  profiles:
+    e2b:
+      model: /storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm
+      backend: gpu
+      activation_dtype: fp32
+      speculative: true
+      ynnpack: false
+
+    e2b-cpu:
+      model: /storage/models/litertlm/gemma-4-E2B-it.litertlm
+      backend: cpu
+      cpu_threads: 8
+      speculative: false
+      ynnpack: true
+
+    e4b:
+      model: /storage/models/litertlm/gemma-4-E4B-it.litertlm
+      backend: cpu
+      cpu_threads: 8
+      speculative: false
+      ynnpack: true
+
+openai:
+  base_url: http://127.0.0.1:11434/v1
+  model: gemma4:31b
+  reasoning_effort: none
+
+agent:
+  count: 3
+  manager_max_steps: 12
+  agent_max_steps: 12
+  manager_max_output_tokens: 256
+  agent_max_output_tokens: 128
+  temperature: 0.0
+  top_p: 1.0
+
+runtime:
+  workspace: /opt/model
+  prompt_dir: /opt/cat-agent/prompts
+  command_timeout: 20
+  http_timeout: 60
+  request_retries: 0
+  retry_delay: 2.0
+  max_file_bytes: 65536
+
+web:
+  host: 0.0.0.0
+  http_port: 8080
+  ws_port: 8765
+
+voice:
+  wake_words:
+    - гена
+  no_command_timeout: 7
+  max_command_seconds: 20
+
+logging:
+  level: INFO
+
+notifications:
+  firebase_credentials: /opt/firebase/zigbee.json
+  firebase_tokens: /opt/firebase/tokens.txt
+  firebase_title: Гена
+  ttl: 3600
