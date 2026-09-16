@@ -7,6 +7,7 @@ import sys
 
 import litert_lm
 
+from agent_core.systemd_notify import notify_systemd
 from orchestration.config import Settings
 
 from .core_server import CoreServer
@@ -154,8 +155,10 @@ def main() -> int:
     LOGGER.info("Workspace: %s", settings.workspace)
     LOGGER.info("Prompt dir: %s", settings.prompt_dir)
 
+    notify_systemd(status="Loading LiteRT model")
     bundle = build_bundle(settings)
     try:
+        notify_systemd(status="Warming LiteRT prefixes")
         manager_warm, agent_warm = warm_bundle(bundle, settings)
         LOGGER.info(
             "LiteRT prefixes ready: manager=%d tokens %.3fs, agent=%d tokens %.3fs",
@@ -165,12 +168,14 @@ def main() -> int:
             agent_warm.elapsed_seconds,
         )
 
-
+        notify_systemd(status="Starting LiteRT CORE socket")
         core = CoreServer(bundle, path=Path("/run/cat-agent/litert.sock"))
         core.start()
+        notify_systemd(status="LiteRT CORE ready", ready=True)
         try:
             core.serve_forever()
         finally:
+            notify_systemd(status="Stopping LiteRT CORE", stopping=True)
             core.close()
         return 0
     finally:
