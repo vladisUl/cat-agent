@@ -161,7 +161,7 @@ class LauncherSelectionTest(unittest.TestCase):
     def select(self, args, override=""):
         env = dict(os.environ, CAT_AGENT_CORE_SOCKET=override)
         return subprocess.run(
-            ["bash", "-c", 'source "$1" "${@:2}"; printf "%s" "$CAT_AGENT_CORE_SOCKET"',
+            ["bash", "-c", 'script="$1"; shift; source "$script" "$@"; printf "%s" "$CAT_AGENT_CORE_SOCKET"',
              "launcher", str(self.root / "scripts/select_core.sh"), *args],
             env=env, text=True, capture_output=True)
 
