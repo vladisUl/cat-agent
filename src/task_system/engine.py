@@ -73,7 +73,7 @@ class OwnedEvents(EventStore):
 
 class TaskEngine:
     def __init__(self, path: Path, *, task_file=DEFAULT_TASK_FILE,
-                 event_file=DEFAULT_EVENT_FILE, alive=process_alive):
+                 event_file=DEFAULT_EVENT_FILE, alive=process_alive, clock=time.monotonic, lease_seconds=20.0):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._file_lock = path.with_name(path.name + ".lock").open("a")
@@ -84,6 +84,9 @@ class TaskEngine:
             raise
         self._lock = threading.RLock()
         self.alive = alive
+        self.clock = clock
+        self.lease_seconds = lease_seconds
+        self.workers = {}  # Readiness is never restored from disk.
         self.db = None
         try:
             self.db = sqlite3.connect(path, check_same_thread=False)
@@ -131,7 +134,7 @@ class TaskEngine:
             self.db.execute("INSERT OR REPLACE INTO state VALUES(1,?)", (body,))
 
     def _restore(self, data):
-        self.tasks._tasks = {t['task_id']: TaskRecord(**{**t, 'skills': tuple(t['skills'])}) for t in data['tasks']}
+        self.tasks._tasks = {t['task_id']: TaskRecord(**{**t, 'executor': t.get('executor', 'litert'), 'skills': tuple(t['skills'])}) for t in data['tasks']}
         with self.events._lock:
             self.events._bindings = {e['name']: EventBinding(**{**e, 'values': tuple(e['values'])}) for e in data['events']}
         offset = time.time() - time.monotonic()
@@ -165,7 +168,7 @@ class TaskEngine:
         identifier = uuid.uuid4().hex
         payload = asdict(event)
         payload['run_id'] = identifier
-        self.runs[identifier] = dict(event=payload, executor=task.executor, state='pending',
+        self.runs[identifier] = dict(event=payload, policy=task.executor, executor=None if task.executor == 'auto' else task.executor, state='pending',
                                      owner='', peer='', outcome='')
         LOGGER.info('TASK queued id=%s run=%s executor=%s source=%s', task.task_id, identifier, task.executor, event.source)
         return identifier
@@ -174,9 +177,11 @@ class TaskEngine:
         for run in self.runs.values():
             if run['state'] in {'pending', 'offered'} and not self._current(run):
                 run['state'] = 'cancelled'
-            elif run['state'] in {'offered', 'running'} and not self.alive(run['peer']):
+            elif run['state'] == 'offered' and self._offer_lost(run):
+                self._return_pending(run)
+            elif run['state'] == 'running' and not self.alive(run['peer']):
                 # Never replay potentially completed side effects after a worker crash.
-                run['state'] = 'pending' if run['state'] == 'offered' else 'interrupted'
+                run['state'] = 'interrupted'
                 LOGGER.warning('TASK worker disappeared run=%s state=%s', run['event']['run_id'], run['state'])
                 run['owner'] = run['peer'] = ''
         completed = [key for key, run in self.runs.items() if run['state'] in TERMINAL]
@@ -262,6 +267,8 @@ class TaskEngine:
             if method == 'run_task':
                 task = self.tasks.require(args[0])
                 return self._queue(SystemEvent('manual', f'task:{task.task_id}', '', time.monotonic(), task.task_id, task.generation))
+            if method == 'cores':
+                return self.core_status()
             if method == 'runs':
                 return list(self.runs.values())
             if method == 'external_event':
@@ -294,27 +301,112 @@ class TaskEngine:
                          f"runs={states} {task.description}")
         return '\n'.join(lines) or 'no tasks'
 
+    @staticmethod
+    def _policy(run):
+        return run.get('policy', run['executor'])  # Pre-auto journals stay pinned.
+
+    def _lease_live(self, worker):
+        return (worker is not None and self.alive(worker['peer']) and
+                self.clock() - worker['last_seen'] < self.lease_seconds)
+
+    def _worker_ready(self, owner, peer):
+        worker = self.workers.get((owner, peer))
+        return self._lease_live(worker) and worker['ready']
+
+    def _best_ready(self):
+        for executor in ('openai', 'litert'):
+            if any(w['executor'] == executor and self._lease_live(w) and w['ready']
+                   for w in self.workers.values()):
+                return executor
+        return None
+
+    def core_status(self):
+        result = []
+        for executor in ('openai', 'litert'):
+            workers = [w for w in self.workers.values() if w['executor'] == executor]
+            fresh = [w for w in workers if self._lease_live(w)]
+            ready = any(w['ready'] for w in fresh)
+            if ready:
+                reason = ''
+            elif fresh:
+                reason = max(fresh, key=lambda w: w['last_seen'])['reason']
+            elif workers:
+                reason = 'heartbeat_expired' if any(self.alive(w['peer']) for w in workers) else 'process_unavailable'
+            else:
+                reason = 'not_registered'
+            result.append(dict(executor=executor, state='READY' if ready else 'NOT_READY', reason=reason))
+        return result
+
+    def _offer_lost(self, run):
+        if not self.alive(run['peer']):
+            return True
+        worker = self.workers.get((run['owner'], run['peer']))
+        if self._policy(run) == 'auto':
+            return not self._worker_ready(run['owner'], run['peer'])
+        # Explicit legacy clients need no quota evidence; lease-capable clients
+        # still relinquish unstarted offers when their heartbeat expires.
+        return worker is not None and not self._lease_live(worker)
+
+    def _return_pending(self, run):
+        run.update(state='pending', owner='', peer='')
+        run['event']['offer_id'] = ''
+        if self._policy(run) == 'auto':
+            run['executor'] = None
+
     def _worker(self, method, kw, peer):
         owner = kw['owner']
         if not peer or not owner:
             raise TaskStoreError('worker identity required')
+        # Revoke expired grants BEFORE accepting a renewed heartbeat.
         self._reconcile()
+        if method == 'heartbeat':
+            executor = kw['executor']
+            if executor not in {'litert', 'openai'} or type(kw['ready']) is not bool:
+                raise TaskStoreError('invalid CORE heartbeat')
+            from .readiness import REASONS
+            reason = kw.get('reason', '')
+            if reason not in REASONS:
+                reason = 'readiness_unknown'
+            self.workers[(owner, peer)] = dict(owner=owner, peer=peer, executor=executor,
+                ready=kw['ready'], reason='' if kw['ready'] else reason or 'readiness_unknown',
+                last_seen=self.clock())
+            return True
+        if method == 'offline':
+            worker = self.workers.get((owner, peer))
+            if worker is not None:
+                worker.update(ready=False, reason='stopping', last_seen=self.clock() - self.lease_seconds)
+            self._reconcile()
+            return True
         if method == 'pull':
             executor = kw['executor']
-            self.tasks._validate_executor(executor)
+            if executor not in {'litert', 'openai'}:
+                raise TaskStoreError('worker executor must be litert or openai')
             seen = set(kw.get('seen', []))
             for run in self.runs.values():
-                if run['state'] == 'offered' and run['owner'] == owner and run['peer'] == peer and run['event']['run_id'] not in seen:
+                if (run['state'] == 'offered' and run['owner'] == owner and run['peer'] == peer
+                        and (run['event'].get('offer_id') or run['event']['run_id']) not in seen):
                     return run['event']
             occupied = {r['event']['task_id'] for r in self.runs.values() if r['state'] in {'offered', 'running'}}
             for run in self.runs.values():
-                if run['state'] == 'pending' and run['executor'] == executor and run['event']['task_id'] not in occupied:
-                    run.update(state='offered', owner=owner, peer=peer)
-                    LOGGER.info('TASK offered id=%s run=%s executor=%s', run['event']['task_id'], run['event']['run_id'], executor)
-                    return run['event']
+                if run['state'] != 'pending' or run['event']['task_id'] in occupied:
+                    continue
+                policy = self._policy(run)
+                selected = self._best_ready() if policy == 'auto' else policy
+                if selected != executor:
+                    continue
+                worker = self.workers.get((owner, peer))
+                if policy == 'auto' and (not self._worker_ready(owner, peer) or worker['executor'] != executor):
+                    continue
+                if worker is not None and not self._lease_live(worker):
+                    continue
+                run.update(state='offered', owner=owner, peer=peer, executor=executor)
+                run['event']['offer_id'] = uuid.uuid4().hex
+                LOGGER.info('TASK offered id=%s run=%s executor=%s policy=%s', run['event']['task_id'], run['event']['run_id'], executor, policy)
+                return run['event']
             return None
         run = self.runs.get(kw['run_id'])
-        if run is None or run['owner'] != owner or run['peer'] != peer:
+        if (run is None or run['owner'] != owner or run['peer'] != peer or
+                run['event'].get('offer_id', '') != kw.get('offer_id', '')):
             return False
         if method in {'begin', 'valid'}:
             if run['state'] not in {'offered', 'running'} or not self._current(run):
@@ -328,7 +420,7 @@ class TaskEngine:
                 return True
             outcome = kw.get('outcome', 'done')
             if run['state'] == 'offered' and self._current(run):
-                run.update(state='pending', owner='', peer='')
+                self._return_pending(run)
             else:
                 run.update(state=outcome if outcome in TERMINAL else 'done', outcome=outcome)
             LOGGER.info('TASK finished id=%s run=%s state=%s', run['event']['task_id'], kw['run_id'], run['state'])

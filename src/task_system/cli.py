@@ -8,7 +8,7 @@ from .client import TaskRPC
 def main():
     parser = argparse.ArgumentParser()
     subs = parser.add_subparsers(dest='command', required=True)
-    for name in ('list', 'runs'):
+    for name in ('list', 'runs', 'cores'):
         subs.add_parser(name)
     for name in ('start', 'stop', 'delete', 'run'):
         subs.add_parser(name).add_argument('task_id', type=int)
@@ -17,18 +17,20 @@ def main():
     p.add_argument('seconds', type=float)
     p = subs.add_parser('executor')
     p.add_argument('task_id', type=int)
-    p.add_argument('executor', choices=('litert', 'openai'))
+    p.add_argument('executor', choices=('auto', 'litert', 'openai'))
     p = subs.add_parser('create')
     p.add_argument('--description', required=True)
     p.add_argument('--text', required=True)
     p.add_argument('--skill', action='append', required=True, dest='skills')
     p.add_argument('--period', type=float, required=True)
-    p.add_argument('--executor', choices=('litert', 'openai'), default='litert')
+    p.add_argument('--executor', choices=('auto', 'litert', 'openai'), default='auto')
     args = parser.parse_args()
     rpc = TaskRPC()
     op = args.command
     if op == 'list':
         result = rpc.call('system', 'task_status_text')
+    elif op == 'cores':
+        result = '\n'.join(f"{c['executor']} {c['state']} {c['reason']}".rstrip() for c in rpc.call('system', 'cores'))
     elif op == 'runs':
         result = rpc.call('system', 'runs')
     elif op == 'create':

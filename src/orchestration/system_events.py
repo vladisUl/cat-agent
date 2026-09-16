@@ -22,6 +22,7 @@ class SystemEvent:
     task_id: int | None = None
     task_generation: str = ""
     run_id: str = ""
+    offer_id: str = ""
 
     def manager_text(self) -> str:
         if self.task_id is not None:
@@ -124,7 +125,7 @@ class SystemRuntime:
         text: str,
         *,
         skills: tuple[str, ...] = (),
-        executor: str = "litert",
+        executor: str = "auto",
     ) -> TaskRecord:
         store = self._require_task_store()
         task = store.create(description, text, skills=skills, executor=executor)
@@ -139,7 +140,7 @@ class SystemRuntime:
         period_seconds: float,
         *,
         method: str = "task",
-        executor: str = "litert",
+        executor: str = "auto",
     ) -> TaskRecord:
         if not skills:
             raise TaskStoreError("periodic task requires at least one skill")

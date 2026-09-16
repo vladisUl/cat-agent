@@ -37,7 +37,7 @@ class TaskRecord:
     timer_period_seconds: float | None = None
     enabled: bool = True
     generation: str = field(default_factory=lambda: uuid.uuid4().hex)
-    executor: str = "litert"
+    executor: str = "auto"
 
 
 class TaskStore:
@@ -132,7 +132,7 @@ class TaskStore:
         skills: tuple[str, ...] = (),
         timer_period_seconds: float | None = None,
         enabled: bool = True,
-        executor: str = "litert",
+        executor: str = "auto",
     ) -> TaskRecord:
         self._validate_executor(executor)
         description = description.strip()
@@ -216,8 +216,8 @@ class TaskStore:
 
     @staticmethod
     def _validate_executor(executor: str) -> None:
-        if executor not in {"litert", "openai"}:
-            raise TaskStoreError("executor must be litert or openai")
+        if executor not in {"auto", "litert", "openai"}:
+            raise TaskStoreError("executor must be auto, litert or openai")
 
     @synchronized
     def set_executor(self, task_id: int, executor: str) -> TaskRecord:

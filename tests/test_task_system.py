@@ -182,6 +182,9 @@ class TaskSystemTest(unittest.TestCase):
         (self.root / 'system.db').unlink()
         old = TaskStore(self.root / 'tasks.txt')
         old.create('legacy', 'work', skills=('mqtt',), timer_period_seconds=60)
+        legacy = json.loads((self.root / 'tasks.txt').read_text())
+        legacy.pop('executor')
+        (self.root / 'tasks.txt').write_text(json.dumps(legacy) + '\n')
         original = (self.root / 'tasks.txt').read_bytes()
         self.engine = self.open_engine()
         task = self.engine.tasks.require(1)
@@ -230,7 +233,7 @@ class TaskSystemTest(unittest.TestCase):
             self.root, ['/work#printf first', '/work#touch forbidden'])
         runtime.system_runtime = self.a
         runtime.event_store = self.a.event_store
-        task = self.b.create_periodic_task('test', 'test', ('shell',), 60)
+        task = self.b.create_periodic_task('test', 'test', ('shell',), 60, executor='litert')
         self.due(task)
         scheduler = CoreScheduler(SimpleNamespace(runtime=runtime, system_runtime=self.a))
         self.addCleanup(scheduler._executor.shutdown, wait=True)

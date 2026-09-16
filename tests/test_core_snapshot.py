@@ -51,7 +51,7 @@ class FakeTimer:
 class FakeSystemRuntime:
     def task_snapshot(self):
         return (
-            TaskRecord(1, "temperature", "check temperature", method="query"),
+            TaskRecord(1, "temperature", "check temperature", method="query", executor="litert"),
             TaskRecord(2, "door", "check door", method="query", enabled=False, executor="openai"),
         )
 

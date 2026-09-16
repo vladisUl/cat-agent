@@ -103,7 +103,7 @@ class RemoteSystemRuntime:
     """A client only: no TaskStore cache, timers or local MQTT subscriptions."""
     is_remote = True
 
-    def __init__(self, executor=None, *, rpc=None):
+    def __init__(self, executor=None, *, rpc=None, readiness_probe=None):
         self.rpc = rpc or TaskRPC()
         self.executor = executor  # None: management access without TASK execution.
         self.task_store = RemoteTaskStore(self.rpc)
@@ -114,6 +114,8 @@ class RemoteSystemRuntime:
         self._lock = threading.RLock()
         self._next_poll = 0.0
         self._next_warning = 0.0
+        self.readiness_probe = readiness_probe
+        self._reporter = None
 
     def set_task_handler(self, handler):
         pass  # Shared TASKs enter CORE only via a recorded execution grant.
@@ -161,7 +163,7 @@ class RemoteSystemRuntime:
         return self.rpc.call('system', 'timer_status_text')
 
     def capabilities_text(self):
-        return 'TASK SYSTEM: shared; executor=litert|openai (default litert)'
+        return 'TASK SYSTEM: shared; executor=auto|litert|openai (default auto)'
 
     def execute(self, command, body):
         return 'SYSTEM_ERROR\nUse saved TASK commands; local legacy timers are disabled'
@@ -169,13 +171,44 @@ class RemoteSystemRuntime:
     def submit_event(self, event):
         return self.rpc.call('system', 'submit_event', asdict(event))
 
+    def heartbeat(self, ready, reason=''):
+        return self.rpc.call('worker', 'heartbeat', owner=self.owner, executor=self.executor,
+                             ready=ready, reason=reason)
+
+    def start_worker(self, runtime_alive):
+        if self.executor is None or self._reporter is not None:
+            return
+        from .readiness import HealthReporter
+        from .ollama_usage import CheckResult
+        probe = self.readiness_probe
+        if self.executor == 'openai' and probe is None:
+            # An OpenAI client without a configured probe is explicit-only.
+            class UnknownProbe:
+                def check(self):
+                    return CheckResult(False, 'readiness_unknown')
+            probe = UnknownProbe()
+        self._reporter = HealthReporter(
+            lambda result: self.heartbeat(result.ready, result.reason), runtime_alive, probe=probe)
+        self._reporter.start()
+
+    def stop_worker(self):
+        if self._reporter is not None:
+            self._reporter.close()
+            self._reporter = None
+        if self.executor is not None:
+            try:
+                self.rpc.call('worker', 'offline', owner=self.owner)
+            except TaskStoreError:
+                pass
+
     def flush_completions(self):
         try:
             with self._lock:
-                for identifier, outcome in list(self._finished.items()):
-                    self.rpc.call('worker', 'finish', owner=self.owner, run_id=identifier, outcome=outcome)
-                    self._finished.pop(identifier)
-                    self._seen.discard(identifier)
+                for token, (event, outcome) in list(self._finished.items()):
+                    self.rpc.call('worker', 'finish', owner=self.owner, run_id=event.run_id,
+                                  offer_id=event.offer_id, outcome=outcome)
+                    self._finished.pop(token)
+                    self._seen.discard(token)
         except TaskStoreError:
             return False
         return True
@@ -199,16 +232,16 @@ class RemoteSystemRuntime:
 
     def accepted(self, event):
         with self._lock:
-            self._seen.add(event.run_id)
+            self._seen.add(event.offer_id or event.run_id)
 
     def begin_run(self, event):
-        return self.rpc.call('worker', 'begin', owner=self.owner, run_id=event.run_id)
+        return self.rpc.call('worker', 'begin', owner=self.owner, run_id=event.run_id, offer_id=event.offer_id)
 
     def valid_run(self, event):
-        return self.rpc.call('worker', 'valid', owner=self.owner, run_id=event.run_id)
+        return self.rpc.call('worker', 'valid', owner=self.owner, run_id=event.run_id, offer_id=event.offer_id)
 
     def finish_run(self, event, outcome):
         with self._lock:
-            self._finished[event.run_id] = outcome
+            self._finished[event.offer_id or event.run_id] = (event, outcome)
         # Kept until acknowledged; losing a completion reply cannot replay a run.
         self._next_poll = 0

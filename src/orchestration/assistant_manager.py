@@ -406,7 +406,7 @@ class AssistantManagerRuntime(ManagerRuntime):
             if separator < 3 or separator != len(argv) - 2:
                 return usage
             normalized = [argv[0], argv[1], *argv[2:separator], argv[separator + 1]]
-            executor = "litert"
+            executor = "auto"
             if "--executor" in normalized[2:-1]:
                 index = normalized.index("--executor", 2)
                 if index + 1 >= len(normalized) - 1:
@@ -420,9 +420,9 @@ class AssistantManagerRuntime(ManagerRuntime):
         result = self._direct_runtime.execute(command)
         return self._direct_runtime.format_result(result)
 
-    def _execute_task_command(self, argv: list[str], *, executor: str = "litert") -> str | None:
-        if executor not in {"litert", "openai"}:
-            return "SYSTEM_ERROR\nexecutor must be litert or openai"
+    def _execute_task_command(self, argv: list[str], *, executor: str = "auto") -> str | None:
+        if executor not in {"auto", "litert", "openai"}:
+            return "SYSTEM_ERROR\nexecutor must be auto, litert or openai"
         if len(argv) < 4:
             return (
                 "SYSTEM_ERROR\nusage: task_timer.sh|query_timer.sh "
@@ -485,7 +485,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         skill_names: tuple[str, ...],
         skills,
         *,
-        executor: str = "litert",
+        executor: str = "auto",
     ) -> str:
         if "mqtt" not in skill_names:
             return "SYSTEM_ERROR\nexternal event currently requires mqtt skill"

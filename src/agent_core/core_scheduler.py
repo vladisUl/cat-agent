@@ -96,9 +96,15 @@ class CoreScheduler:
         self._executor.submit(self._prepare_contexts).result()
         self._thread = threading.Thread(target=self._run, name="cat-agent-scheduler", daemon=True)
         self._thread.start()
+        system = getattr(self.bundle, "system_runtime", None)
+        if getattr(system, "is_remote", False) is True:
+            system.start_worker(lambda: self._thread is not None and self._thread.is_alive() and not self._stop.is_set())
 
     def close(self):
         self._stop.set()
+        system = getattr(self.bundle, "system_runtime", None)
+        if getattr(system, "is_remote", False) is True:
+            system.stop_worker()
         if self._thread is not None:
             self._thread.join()
         self._thread = None
@@ -195,7 +201,7 @@ class CoreScheduler:
             if coalesce_key is not None and self._has_coalesced_event(coalesce_key):
                 return
             if event.run_id and any(item is not None and item.task_run is not None and
-                                    item.task_run.run_id == event.run_id
+                                    item.task_run.run_id == event.run_id and item.task_run.offer_id == event.offer_id
                                     for item in [*self._pending, self._active_request]):
                 return
             item = _PriorityRequest("system", self._event_label(event), event,
