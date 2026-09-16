@@ -13,9 +13,13 @@ LOGGER = logging.getLogger(__name__)
 
 
 class NotificationOutbox:
-    def __init__(self, path, sender, *, scope: str = "default"):
+    def __init__(self, path, sender, *, scope: str | None = None):
         self.path = Path(path)
         self.sender = sender
+        if scope is None:
+            owner = getattr(sender, "__self__", None)
+            owner_path = getattr(owner, "path", None)
+            scope = str(owner_path) if owner_path is not None else "default"
         self.scope = str(scope).strip() or "default"
         self._stop = threading.Event()
         self._thread = None
