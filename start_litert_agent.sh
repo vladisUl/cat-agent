@@ -10,7 +10,9 @@ if [[ $# -ne 0 ]]; then
     exit 2
 fi
 
-eval "$(/opt/litert-lm-venv/bin/python3 -m orchestration.config_env litert)"
+CONFIG_ENV="$(/opt/litert-lm-venv/bin/python3 -m orchestration.config_env litert)"
+eval "$CONFIG_ENV"
+unset CONFIG_ENV
 
 # Benchmark skill forcing remains a low-level diagnostic override, not normal
 # application configuration.
