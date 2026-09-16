@@ -46,7 +46,10 @@ else
     unset LITERT_AGENT_CPU_THREADS
 fi
 
-YNNPACK_NOISE='ERROR: third_party/tensorflow/lite/delegates/ynnpack/copy.cc:198 IsConstant(begin, options.static_shape) was not true.'
+# YNNPACK reports unsupported delegation candidates as ERROR even though
+# LiteRT falls back normally. Suppress only those capability-check messages;
+# preserve every other native stderr line.
+YNNPACK_NOISE_RE='^ERROR: third_party/tensorflow/lite/delegates/ynnpack/.*(was not true\.|is not supported\.?)$'
 
 exec /opt/litert-lm-venv/bin/python3 -m litert_agent.main \
-    2> >(grep --line-buffered -vF -- "$YNNPACK_NOISE" >&2)
+    2> >(grep --line-buffered -vE -- "$YNNPACK_NOISE_RE" >&2)
