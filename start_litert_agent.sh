@@ -46,4 +46,7 @@ else
     unset LITERT_AGENT_CPU_THREADS
 fi
 
-exec /opt/litert-lm-venv/bin/python3 -m litert_agent.main
+YNNPACK_NOISE='ERROR: third_party/tensorflow/lite/delegates/ynnpack/copy.cc:198 IsConstant(begin, options.static_shape) was not true.'
+
+exec /opt/litert-lm-venv/bin/python3 -m litert_agent.main \
+    2> >(grep --line-buffered -vF -- "$YNNPACK_NOISE" >&2)
