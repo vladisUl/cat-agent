@@ -1,6 +1,7 @@
 # Sourced by interface launchers before changing directory.
 # No argument: select the preferred READY CORE (openai, then litert).
 # One argument: explicit administrative override.
+# CAT_AGENT_CORE_SOCKET remains the lowest-level socket override.
 
 _repo_root="$(cd "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -18,6 +19,17 @@ if [[ $# -eq 1 ]]; then
             ;;
     esac
 else
+    _selected_core=""
+fi
+
+# Preserve the existing low-level debugging/administrative override, but only
+# after validating launcher arguments.
+if [[ -n "${CAT_AGENT_CORE_SOCKET:-}" ]]; then
+    unset _repo_root _selected_core
+    return 0 2>/dev/null || exit 0
+fi
+
+if [[ -z "$_selected_core" ]]; then
     if ! _core_status="$("$_repo_root/task_system.sh" cores 2>/dev/null)"; then
         echo "Cannot query Task SYSTEM CORE readiness." >&2
         return 1 2>/dev/null || exit 1
