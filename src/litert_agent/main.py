@@ -147,7 +147,7 @@ def main() -> int:
         print(f"Cannot initialize log {LOG_PATH}: {exc}", file=sys.stderr)
         return 2
 
-    litert_lm.set_min_log_severity(litert_lm.LogSeverity.FATAL)
+    litert_lm.set_min_log_severity(litert_lm.LogSeverity.ERROR)
 
     LOGGER.info("cat-agent CORE starting")
     LOGGER.info("Log file: %s", LOG_PATH)
