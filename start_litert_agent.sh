@@ -1,50 +1,20 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
 cd /opt/cat-agent
-
-case "${1:-}" in
-    e2b)
-        MODEL_PATH="/storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm"
-        BACKEND="gpu"
-        ACTIVATION_DATA_TYPE="fp32"
-        SPECULATIVE="1"
-        YNNPACK="0"
-        ;;
-    e2b-cpu)
-        MODEL_PATH="/storage/models/litertlm/gemma-4-E2B-it.litertlm"
-        BACKEND="cpu"
-        ACTIVATION_DATA_TYPE=""
-        SPECULATIVE="0"
-        YNNPACK="1"
-        ;;
-    e4b)
-        MODEL_PATH="/storage/models/litertlm/gemma-4-E4B-it.litertlm"
-        BACKEND="cpu"
-        ACTIVATION_DATA_TYPE=""
-        SPECULATIVE="0"
-        YNNPACK="1"
-        ;;
-    *)
-        echo "Usage: $0 e2b|e2b-cpu|e4b" >&2
-        exit 2
-        ;;
-esac
-
 export PYTHONPATH=/opt/cat-agent/src
-export LITERT_AGENT_MODEL_PATH="$MODEL_PATH"
-export LITERT_AGENT_BACKEND="$BACKEND"
-export LITERT_AGENT_ACTIVATION_DATA_TYPE="$ACTIVATION_DATA_TYPE"
-export LITERT_AGENT_SPECULATIVE="$SPECULATIVE"
-export LITERT_AGENT_YNNPACK="$YNNPACK"
-export LITERT_AGENT_BENCH_SKILLS=""
 
-if [[ "$BACKEND" == "cpu" ]]; then
-    export LITERT_AGENT_CPU_THREADS="8"
-else
-    unset LITERT_AGENT_CPU_THREADS
+if [[ $# -ne 0 ]]; then
+    echo "LiteRT profile is configured by litert.active_profile in cat-agent.yaml" >&2
+    exit 2
 fi
+
+eval "$(/opt/litert-lm-venv/bin/python3 -m orchestration.config_env litert)"
+
+# Benchmark skill forcing remains a low-level diagnostic override, not normal
+# application configuration.
+export LITERT_AGENT_BENCH_SKILLS="${LITERT_AGENT_BENCH_SKILLS:-}"
 
 # YNNPACK reports unsupported delegation candidates as ERROR even though
 # LiteRT falls back normally. Suppress only those capability-check messages;
