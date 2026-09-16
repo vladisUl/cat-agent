@@ -281,16 +281,15 @@ def _run_loop(
                 if wake_text not in WAKE_WORDS:
                     continue
 
-                # Do not let the acknowledgement tone leak into command capture.
-                # Capture is reopened after the synchronous beep, which also clears
-                # any samples accumulated while the speaker was active.
+                # The acknowledgement tone is the user's cue to start speaking.
+                # Reopen capture first so ALSA is already available when the cue
+                # is heard; never reopen it after the beep.
                 pcm.close()
+                pcm = _open_microphone(alsaaudio_module)
                 try:
                     play_wake_beep()
                 except Exception as exc:
                     print(f"WAKE_BEEP_ERROR: {type(exc).__name__}: {exc}")
-                finally:
-                    pcm = _open_microphone(alsaaudio_module)
 
                 command_recognizer = _make_command_recognizer(vosk_module, vosk_model)
                 command_wav = _open_command_wav(COMMAND_WAV_PATH)
@@ -425,4 +424,3 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"FATAL: {type(exc).__name__}: {exc}")
         raise
-
