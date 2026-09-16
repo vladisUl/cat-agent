@@ -176,8 +176,13 @@ class LauncherSelectionTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "/tmp/debug.sock")
 
+    def test_no_argument_accepts_override(self):
+        result = self.select([], "/tmp/debug.sock")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "/tmp/debug.sock")
+
     def test_invalid_arguments_fail_even_with_override(self):
-        for args in ([], ["unknown"], ["litert", "openai"]):
+        for args in (["unknown"], ["litert", "openai"]):
             result = self.select(args, "/tmp/debug.sock")
             self.assertEqual(result.returncode, 2)
 
