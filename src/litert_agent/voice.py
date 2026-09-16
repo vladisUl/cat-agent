@@ -7,8 +7,9 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import threading
 import time
-from typing import Any
+from typing import Any, Callable, TypeVar
 import wave
 
 from .core_server import DEFAULT_CORE_SOCKET
@@ -43,6 +44,8 @@ PERIOD_FRAMES = 800
 ALSA_PERIODS = 8
 NO_COMMAND_TIMEOUT_SECONDS = 7.0
 MAX_COMMAND_SECONDS = 20.0
+
+T = TypeVar("T")
 
 
 def _require_path(path: Path, description: str) -> None:
@@ -106,6 +109,44 @@ def _transcribe_command(gigaam_model: Any, wav_path: Path) -> str:
     elapsed = time.monotonic() - started
     print(f"GIGAAM_TIME: {elapsed:.3f} с")
     return text
+
+
+def _run_while_draining_pcm(
+    pcm: Any,
+    alsaaudio_module: Any,
+    work: Callable[[], T],
+) -> T:
+    """Keep ALSA capture running while STT/CORE/TTS owns the foreground thread."""
+    stop = threading.Event()
+    errors: list[BaseException] = []
+
+    def drain() -> None:
+        while not stop.is_set():
+            try:
+                frames, _data = pcm.read()
+            except alsaaudio_module.ALSAAudioError as exc:
+                errors.append(exc)
+                return
+            if frames == -errno.EPIPE:
+                continue
+            if frames < 0:
+                errors.append(RuntimeError(f"ALSA drain read failed: frames={frames}"))
+                return
+
+    thread = threading.Thread(
+        target=drain,
+        name="cat-agent-voice-capture-drain",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        return work()
+    finally:
+        stop.set()
+        thread.join()
+        if errors:
+            error = errors[0]
+            print(f"ALSA_DRAIN_ERROR: {type(error).__name__}: {error}")
 
 
 def _send_json(sock: socket.socket, payload: dict[str, object]) -> None:
@@ -343,22 +384,29 @@ def _run_loop(
             else:
                 print(f"AUDIO_READY: {COMMAND_WAV_PATH} duration={duration:.3f} с")
 
-                # Keep the proven behaviour: close capture during heavy STT/agent/TTS
-                # processing and reopen ALSA with an empty buffer afterwards.
-                pcm.close()
-                try:
+                # Keep capture alive while GigaAM, the CORE and TTS are busy.
+                # A dedicated reader drains microphone PCM so ALSA never needs a
+                # close/reopen cycle between chat turns; this removes the blind
+                # interval that clipped the beginning of fast follow-up speech.
+                def process_turn() -> VoiceTurnResult:
                     user_text = _transcribe_command(gigaam_model, COMMAND_WAV_PATH)
-                    if user_text:
-                        turn = _run_core_voice_turn(user_text, piper_voice)
-                        chat_open = turn.chat_open
-                    else:
+                    if not user_text:
                         print("SKIP_CORE: GigaAM вернула пустой текст")
+                        return VoiceTurnResult()
+                    return _run_core_voice_turn(user_text, piper_voice)
+
+                try:
+                    turn = _run_while_draining_pcm(
+                        pcm,
+                        alsaaudio_module,
+                        process_turn,
+                    )
+                    chat_open = turn.chat_open
                 except Exception as exc:
                     chat_open = False
                     print(f"PROCESSING_ERROR: {type(exc).__name__}: {exc}")
 
-                pcm = _open_microphone(alsaaudio_module)
-                print("ALSA_RESUMED")
+                print("ALSA_CONTINUOUS")
 
             wake_recognizer = _make_wake_recognizer(vosk_module, vosk_model)
             if chat_open:
@@ -425,4 +473,3 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"FATAL: {type(exc).__name__}: {exc}")
         raise
-
