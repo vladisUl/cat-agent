@@ -34,7 +34,7 @@ class YamlConfigTest(unittest.TestCase):
         )
         self.assertEqual(config.litert.active.backend, "cpu")
         self.assertEqual(config.litert.active.cpu_threads, 8)
-        self.assertEqual(config.runtime.http_timeout, 60)
+        self.assertEqual(config.runtime.http_timeout, 180)
         self.assertEqual(config.voice.wake_words, ("гена",))
         self.assertEqual(config.openai.active_profile, "laptop-12b")
         self.assertEqual(config.openai.active.base_url, "http://192.168.0.129:5001/v1")
@@ -82,8 +82,8 @@ class YamlConfigTest(unittest.TestCase):
     def test_openai_and_common_settings_are_exported(self) -> None:
         exported = self._capture("openai")
         expected = (
-            "export CAT_AGENT_API_BASE_URL=http://192.168.0.129:8082/v1",
-            "export CAT_AGENT_MODEL=gemma-4-12b",
+            "export CAT_AGENT_API_BASE_URL=http://192.168.0.129:5001/v1",
+            "export CAT_AGENT_MODEL=koboldcpp/gemma-4-12B-it-Q4_K_M",
             "export CAT_AGENT_OPENAI_READINESS=openai",
             "export CAT_AGENT_REASONING_EFFORT=none",
             "export CAT_AGENT_AGENT_COUNT=3",
@@ -96,7 +96,7 @@ class YamlConfigTest(unittest.TestCase):
             "export CAT_AGENT_WORKSPACE=/opt/model",
             "export CAT_AGENT_PROMPT_DIR=/opt/cat-agent/prompts",
             "export CAT_AGENT_COMMAND_TIMEOUT_SECONDS=20",
-            "export CAT_AGENT_HTTP_TIMEOUT_SECONDS=60",
+            "export CAT_AGENT_HTTP_TIMEOUT_SECONDS=180",
             "export CAT_AGENT_REQUEST_RETRIES=0",
             "export CAT_AGENT_RETRY_DELAY_SECONDS=2.0",
             "export CAT_AGENT_MAX_FILE_BYTES=65536",
