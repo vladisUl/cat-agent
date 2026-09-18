@@ -95,10 +95,21 @@ class LiteRTConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class OpenAIConfig:
+class OpenAIProfile:
     base_url: str
     model: str
     reasoning_effort: str
+    readiness: str
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAIConfig:
+    active_profile: str
+    profiles: dict[str, OpenAIProfile]
+
+    @property
+    def active(self) -> OpenAIProfile:
+        return self.profiles[self.active_profile]
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,16 +231,45 @@ def _parse_litert(data: Any) -> LiteRTConfig:
 
 def _parse_openai(data: Any) -> OpenAIConfig:
     section = _mapping(data, "openai")
-    _check_keys(section, "openai", {"base_url", "model", "reasoning_effort"})
-    reasoning = _string(section, "reasoning_effort", "openai").lower()
-    allowed = {"none", "minimal", "low", "medium", "high", "xhigh"}
-    if reasoning not in allowed:
-        raise ValueError(f"openai.reasoning_effort must be one of {sorted(allowed)}")
-    return OpenAIConfig(
-        base_url=_string(section, "base_url", "openai").rstrip("/"),
-        model=_string(section, "model", "openai"),
-        reasoning_effort=reasoning,
-    )
+    _check_keys(section, "openai", {"active_profile", "profiles"})
+    active_profile = _string(section, "active_profile", "openai")
+    raw_profiles = _mapping(section.get("profiles"), "openai.profiles")
+    if not raw_profiles:
+        raise ValueError("openai.profiles must not be empty")
+
+    profiles: dict[str, OpenAIProfile] = {}
+    allowed_keys = {"base_url", "model", "reasoning_effort", "readiness"}
+    allowed_reasoning = {"none", "minimal", "low", "medium", "high", "xhigh"}
+    allowed_readiness = {"ollama", "openai"}
+
+    for profile_name, raw in raw_profiles.items():
+        if not isinstance(profile_name, str) or not profile_name.strip():
+            raise ValueError("openai.profiles keys must be non-empty strings")
+        name = f"openai.profiles.{profile_name}"
+        item = _mapping(raw, name)
+        _check_keys(item, name, allowed_keys)
+
+        reasoning = _string(item, "reasoning_effort", name).lower()
+        if reasoning not in allowed_reasoning:
+            raise ValueError(
+                f"{name}.reasoning_effort must be one of {sorted(allowed_reasoning)}"
+            )
+        readiness = _string(item, "readiness", name).lower()
+        if readiness not in allowed_readiness:
+            raise ValueError(
+                f"{name}.readiness must be one of {sorted(allowed_readiness)}"
+            )
+
+        profiles[profile_name] = OpenAIProfile(
+            base_url=_string(item, "base_url", name).rstrip("/"),
+            model=_string(item, "model", name),
+            reasoning_effort=reasoning,
+            readiness=readiness,
+        )
+
+    if active_profile not in profiles:
+        raise ValueError(f"openai.active_profile references unknown profile {active_profile!r}")
+    return OpenAIConfig(active_profile=active_profile, profiles=profiles)
 
 
 def _parse_agent(data: Any) -> AgentConfig:
