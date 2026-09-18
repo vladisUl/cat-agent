@@ -98,7 +98,7 @@ runtime:
   # Maximum execution time in seconds for one external/tool command.
   command_timeout: 20
   # HTTP request timeout in seconds for the OpenAI-compatible backend.
-  http_timeout: 60
+  http_timeout: 180
   # Number of retries after a failed OpenAI-compatible HTTP request.
   request_retries: 0
   # Delay in seconds between HTTP retries when request_retries > 0.
