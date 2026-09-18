@@ -52,7 +52,7 @@ runtime:
   workspace: /opt/model
   prompt_dir: /opt/cat-agent/prompts
   command_timeout: 20
-  http_timeout: 60
+  http_timeout: 180
   request_retries: 0
   retry_delay: 2.0
   max_file_bytes: 65536
