@@ -104,6 +104,42 @@ class OllamaReadinessTest(unittest.TestCase):
         probe.fetch = Mock(return_value={'unexpected': True})
         self.assertEqual(probe.check().reason, 'ollama_invalid_response')
 
+    def test_generic_openai_endpoint_is_ready_when_model_is_listed(self):
+        fetch = Mock(return_value={
+            'object': 'list',
+            'data': [{'id': 'gemma-4-12b', 'object': 'model'}],
+        })
+        probe = OpenAIReadiness(
+            'http://192.168.0.129:8082/v1',
+            mode='openai',
+            model='gemma-4-12b',
+            fetch=fetch,
+        )
+        self.assertEqual(probe.check(), CheckResult(True))
+        fetch.assert_called_once_with('http://192.168.0.129:8082/v1/models', timeout=3.0)
+
+    def test_generic_openai_endpoint_rejects_missing_model(self):
+        fetch = Mock(return_value={'object': 'list', 'data': [{'id': 'other-model'}]})
+        probe = OpenAIReadiness(
+            'http://192.168.0.129:8082/v1',
+            mode='openai',
+            model='gemma-4-12b',
+            fetch=fetch,
+        )
+        self.assertEqual(probe.check(), CheckResult(False, 'openai_model_unavailable'))
+
+    def test_generic_openai_endpoint_rejects_invalid_or_unreachable_api(self):
+        probe = OpenAIReadiness(
+            'http://192.168.0.129:8082/v1',
+            mode='openai',
+            model='gemma-4-12b',
+            fetch=Mock(side_effect=TimeoutError()),
+        )
+        self.assertEqual(probe.check(), CheckResult(False, 'openai_unavailable'))
+        probe.fetch = Mock(return_value={'unexpected': True})
+        self.assertEqual(probe.check(), CheckResult(False, 'openai_invalid_response'))
+
+
 
 class HealthReporterTest(unittest.TestCase):
     def test_litert_ready_only_after_runtime_initialization(self):
