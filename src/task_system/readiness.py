@@ -9,24 +9,49 @@ PROBE_SECONDS = 30.0
 REASONS = {'', 'initializing', 'stopping', 'runtime_unavailable', 'readiness_unknown',
            'missing_api_key', 'credentials_invalid', 'quota_exhausted',
            'usage_api_error', 'usage_invalid_response', 'usage_network_error',
-           'ollama_unavailable', 'ollama_invalid_response'}
+           'ollama_unavailable', 'ollama_invalid_response',
+           'openai_unavailable', 'openai_invalid_response', 'openai_model_unavailable'}
 
 
 class OpenAIReadiness:
-    def __init__(self, api_base_url, *, fetch=fetch_json, usage=None):
+    def __init__(self, api_base_url, *, mode='ollama', model='', fetch=fetch_json, usage=None):
         base = api_base_url.rstrip('/')
-        self.url = (base[:-3] if base.endswith('/v1') else base) + '/api/tags'
+        self.mode = mode
+        self.model = model
         self.fetch = fetch
         self.usage = usage or OllamaUsageProbe()
+        if mode == 'ollama':
+            self.url = (base[:-3] if base.endswith('/v1') else base) + '/api/tags'
+        elif mode == 'openai':
+            self.url = base + '/models'
+        else:
+            raise ValueError(f'unsupported OpenAI readiness mode: {mode!r}')
 
     def check(self):
+        if self.mode == 'ollama':
+            try:
+                data = self.fetch(self.url, timeout=HTTP_TIMEOUT)
+            except Exception:
+                return CheckResult(False, 'ollama_unavailable')
+            if not isinstance(data, dict) or not isinstance(data.get('models'), list):
+                return CheckResult(False, 'ollama_invalid_response')
+            return self.usage.check()
+
         try:
             data = self.fetch(self.url, timeout=HTTP_TIMEOUT)
         except Exception:
-            return CheckResult(False, 'ollama_unavailable')
-        if not isinstance(data, dict) or not isinstance(data.get('models'), list):
-            return CheckResult(False, 'ollama_invalid_response')
-        return self.usage.check()
+            return CheckResult(False, 'openai_unavailable')
+        models = data.get('data') if isinstance(data, dict) else None
+        if not isinstance(models, list):
+            return CheckResult(False, 'openai_invalid_response')
+        ids = {
+            item.get('id')
+            for item in models
+            if isinstance(item, dict) and isinstance(item.get('id'), str)
+        }
+        if self.model and self.model not in ids:
+            return CheckResult(False, 'openai_model_unavailable')
+        return CheckResult(True)
 
 
 class HealthReporter:
