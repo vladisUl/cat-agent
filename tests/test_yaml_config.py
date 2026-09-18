@@ -37,8 +37,8 @@ class YamlConfigTest(unittest.TestCase):
         self.assertEqual(config.runtime.http_timeout, 60)
         self.assertEqual(config.voice.wake_words, ("гена",))
         self.assertEqual(config.openai.active_profile, "laptop-12b")
-        self.assertEqual(config.openai.active.base_url, "http://192.168.0.129:8082/v1")
-        self.assertEqual(config.openai.active.model, "gemma-4-12b")
+        self.assertEqual(config.openai.active.base_url, "http://192.168.0.129:5001/v1")
+        self.assertEqual(config.openai.active.model, "koboldcpp/gemma-4-12B-it-Q4_K_M")
         self.assertEqual(config.openai.active.readiness, "openai")
 
     def test_active_profile_controls_litert_export(self) -> None:
