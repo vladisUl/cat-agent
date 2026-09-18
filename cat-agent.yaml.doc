@@ -45,15 +45,34 @@ litert:
       ynnpack: true
 
 openai:
-  # OpenAI-compatible API endpoint used by the OpenAI CORE.
-  base_url: http://127.0.0.1:11434/v1
-  # Model name sent to the OpenAI-compatible backend.
-  model: gemma4:31b-cloud
-  # Reasoning effort passed to compatible models.
-  # Allowed: none, minimal, low, medium, high, xhigh.
-  reasoning_effort: none
+  # Selects the OpenAI-compatible backend used by the long-running OpenAI CORE.
+  # Change this value, then restart cat-agent-openai.service.
+  active_profile: laptop-12b
+
+  # Named OpenAI-compatible backends. active_profile must reference one key.
+  profiles:
+    cloud:
+      # Local Ollama OpenAI-compatible endpoint; Ollama forwards this model to cloud.
+      base_url: http://127.0.0.1:11434/v1
+      model: gemma4:31b-cloud
+      reasoning_effort: none
+      # ollama = check local /api/tags and Ollama account quota.
+      readiness: ollama
+
+    laptop-12b:
+      # llama-server running on the Windows notebook.
+      base_url: http://192.168.0.129:8082/v1
+      # Must match llama-server --alias.
+      model: gemma-4-12b
+      reasoning_effort: none
+      # openai = check the standard OpenAI-compatible /v1/models endpoint
+      # and require this profile's model id to be present.
+      readiness: openai
+
+  # Allowed reasoning_effort values: none, minimal, low, medium, high, xhigh.
   # API keys do NOT belong here. Keep CAT_AGENT_API_KEY / OPENAI_API_KEY and
-  # OLLAMA_API_KEY in /opt/cat-agent/.env.openai.
+  # OLLAMA_API_KEY in /opt/cat-agent/.env.openai. OLLAMA_API_KEY is consulted
+  # only by profiles whose readiness mode is ollama.
 
 agent:
   # Number of worker Agent instances available to Manager.
