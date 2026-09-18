@@ -67,7 +67,14 @@ def build_bundle(settings: Settings) -> OpenAIRuntimeBundle:
     prompt_store = PromptStore(settings.prompt_dir, settings.agent_count)
     prompt_store.validate()
     skill_base = SkillBase(settings.prompt_dir / "prompt_base.txt")
-    system_runtime = RemoteSystemRuntime('openai', readiness_probe=OpenAIReadiness(settings.api_base_url))
+    system_runtime = RemoteSystemRuntime(
+        'openai',
+        readiness_probe=OpenAIReadiness(
+            settings.api_base_url,
+            mode=os.getenv("CAT_AGENT_OPENAI_READINESS", "ollama").strip().lower(),
+            model=settings.model,
+        ),
+    )
 
     manager_client = _client(
         settings,
