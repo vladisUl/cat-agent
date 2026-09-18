@@ -61,9 +61,11 @@ def _export_litert(config: AppConfig) -> None:
 
 
 def _export_openai(config: AppConfig) -> None:
-    _export_common(config, reasoning_effort=config.openai.reasoning_effort)
-    _export("CAT_AGENT_API_BASE_URL", config.openai.base_url)
-    _export("CAT_AGENT_MODEL", config.openai.model)
+    profile = config.openai.active
+    _export_common(config, reasoning_effort=profile.reasoning_effort)
+    _export("CAT_AGENT_API_BASE_URL", profile.base_url)
+    _export("CAT_AGENT_MODEL", profile.model)
+    _export("CAT_AGENT_OPENAI_READINESS", profile.readiness)
 
 
 def _export_web(config: AppConfig) -> None:
