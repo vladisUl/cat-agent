@@ -36,6 +36,10 @@ class YamlConfigTest(unittest.TestCase):
         self.assertEqual(config.litert.active.cpu_threads, 8)
         self.assertEqual(config.runtime.http_timeout, 60)
         self.assertEqual(config.voice.wake_words, ("гена",))
+        self.assertEqual(config.openai.active_profile, "laptop-12b")
+        self.assertEqual(config.openai.active.base_url, "http://192.168.0.129:8082/v1")
+        self.assertEqual(config.openai.active.model, "gemma-4-12b")
+        self.assertEqual(config.openai.active.readiness, "openai")
 
     def test_active_profile_controls_litert_export(self) -> None:
         source = yaml.safe_load((PROJECT_ROOT / "cat-agent.yaml").read_text(encoding="utf-8"))
@@ -59,11 +63,28 @@ class YamlConfigTest(unittest.TestCase):
         self.assertIn("export LITERT_AGENT_SPECULATIVE=1", exported)
         self.assertIn("export LITERT_AGENT_YNNPACK=0", exported)
 
+    def test_active_profile_controls_openai_export(self) -> None:
+        source = yaml.safe_load((PROJECT_ROOT / "cat-agent.yaml").read_text(encoding="utf-8"))
+        source["openai"]["active_profile"] = "cloud"
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "cat-agent.yaml"
+            path.write_text(
+                yaml.safe_dump(source, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            exported = self._capture("openai", config_path=path)
+
+        self.assertIn("export CAT_AGENT_API_BASE_URL=http://127.0.0.1:11434/v1", exported)
+        self.assertIn("export CAT_AGENT_MODEL=gemma4:31b-cloud", exported)
+        self.assertIn("export CAT_AGENT_OPENAI_READINESS=ollama", exported)
+
     def test_openai_and_common_settings_are_exported(self) -> None:
         exported = self._capture("openai")
         expected = (
-            "export CAT_AGENT_API_BASE_URL=http://127.0.0.1:11434/v1",
-            "export CAT_AGENT_MODEL=gemma4:31b",
+            "export CAT_AGENT_API_BASE_URL=http://192.168.0.129:8082/v1",
+            "export CAT_AGENT_MODEL=gemma-4-12b",
+            "export CAT_AGENT_OPENAI_READINESS=openai",
             "export CAT_AGENT_REASONING_EFFORT=none",
             "export CAT_AGENT_AGENT_COUNT=3",
             "export CAT_AGENT_MAX_MANAGER_STEPS=12",
