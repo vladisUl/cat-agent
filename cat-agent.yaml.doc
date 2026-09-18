@@ -60,10 +60,10 @@ openai:
       readiness: ollama
 
     laptop-12b:
-      # llama-server running on the Windows notebook.
-      base_url: http://192.168.0.129:8082/v1
-      # Must match llama-server --alias.
-      model: gemma-4-12b
+      # KoboldCpp OpenAI-compatible API running on the Windows notebook.
+      base_url: http://192.168.0.129:5001/v1
+      # Must match the model id returned by KoboldCpp /v1/models.
+      model: koboldcpp/gemma-4-12B-it-Q4_K_M
       reasoning_effort: none
       # openai = check the standard OpenAI-compatible /v1/models endpoint
       # and require this profile's model id to be present.
