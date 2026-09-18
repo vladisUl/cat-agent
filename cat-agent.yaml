@@ -24,9 +24,20 @@ litert:
       ynnpack: true
 
 openai:
-  base_url: http://127.0.0.1:11434/v1
-  model: gemma4:31b-cloud
-  reasoning_effort: none
+  active_profile: laptop-12b
+
+  profiles:
+    cloud:
+      base_url: http://127.0.0.1:11434/v1
+      model: gemma4:31b-cloud
+      reasoning_effort: none
+      readiness: ollama
+
+    laptop-12b:
+      base_url: http://192.168.0.129:8082/v1
+      model: gemma-4-12b
+      reasoning_effort: none
+      readiness: openai
 
 agent:
   count: 3
