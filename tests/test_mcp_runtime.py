@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 import importlib.util
 import json
 import time
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -170,3 +171,39 @@ class McpRuntimeTest(unittest.TestCase):
         self.assertEqual(runtime.snapshot()['slow']['state'],'unavailable')
         self.assertEqual([s.name for s in runtime.skills()],['mcp:good:echo'])
         self.assertIn('actual value',runtime.call('mcp:good:echo',{'text':'x'}))
+
+    def test_failed_call_marks_unavailable_before_slow_session_cleanup(self):
+        client = FakeClient()
+        closing = threading.Event()
+        release = threading.Event()
+
+        @asynccontextmanager
+        async def connection(config):
+            try:
+                yield client
+            finally:
+                closing.set()
+                # Emulate SDK waiting for an unresponsive stdio child to exit.
+                while not release.is_set():
+                    await asyncio.sleep(.005)
+
+        runtime = McpRuntime(
+            [McpServerConfig('local', True, 'stdio', 'unused',
+                             call_timeout_seconds=.1, reconnect_delay_seconds=.01)],
+            connection_factory=connection,
+        )
+        self.addCleanup(runtime.close)
+        self.addCleanup(release.set)
+        runtime.start()
+        frozen = runtime.skills()
+        client.fail_call = True
+        self.assertIn('outcome_unknown', runtime.call('mcp:local:echo', {'text': 'first'}))
+        self.assertTrue(closing.wait(1))
+        self.assertEqual(runtime.snapshot()['local']['state'], 'unavailable')
+        self.assertIn('unavailable', runtime.call('mcp:local:echo', {'text': 'during cleanup'}))
+        self.assertEqual(len(client.calls), 1)
+        release.set()
+        self.wait_ready(runtime, 'local')
+        self.assertIn('actual value', runtime.call('mcp:local:echo', {'text': 'after reconnect'}))
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(runtime.skills(), frozen)

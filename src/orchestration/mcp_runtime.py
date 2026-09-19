@@ -208,7 +208,10 @@ class McpRuntime:
                                     payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
                                     self._finish(current, "MCP_RESULT\n" + json.dumps(payload, ensure_ascii=False))
                                     current = None
-                                except Exception:
+                                except Exception as exc:
+                                    # Publish unavailability BEFORE releasing the caller and
+                                    # before SDK __aexit__, which can wait for a slow child.
+                                    self._state(config.name, "unavailable", type(exc).__name__)
                                     self._finish(current, "SYSTEM_ERROR\nMCP outcome_unknown: call failed or timed out; do not replay automatically")
                                     current = None
                                     raise

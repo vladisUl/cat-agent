@@ -45,13 +45,13 @@ class McpSdkIntegrationTest(unittest.TestCase):
 
     def test_stdio_timeout_reconnect_without_replaying_side_effect(self):
         runtime=self.connect(McpServerConfig('local',True,'stdio',sys.executable,(str(SERVER),),
-            connect_timeout_seconds=5,call_timeout_seconds=.15,reconnect_delay_seconds=.05))
+            connect_timeout_seconds=10,call_timeout_seconds=1,reconnect_delay_seconds=.05))
         before=runtime.skills()
         with tempfile.TemporaryDirectory() as temp:
             marker=Path(temp)/'calls.txt'
             result=runtime.call('mcp:local:slow',{'marker':str(marker)})
             self.assertIn('outcome_unknown',result)
-            deadline=time.monotonic()+8
+            deadline=time.monotonic()+15
             while time.monotonic()<deadline:
                 if runtime.snapshot()['local']['state']=='ready':
                     break

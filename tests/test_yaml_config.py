@@ -11,22 +11,28 @@ from unittest import mock
 import yaml
 
 from orchestration.config_env import main as config_env_main
-from orchestration.yaml_config import PROJECT_ROOT, load_app_config
+from orchestration.yaml_config import load_app_config
+
+FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "cat-agent.yaml"
 
 
 class YamlConfigTest(unittest.TestCase):
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.config_path = Path(temp.name) / "cat-agent.yaml"
+        self.config_path.write_bytes(FIXTURE_PATH.read_bytes())
+
     def _capture(self, target: str, *, config_path: Path | None = None) -> str:
         output = io.StringIO()
-        patch = {}
-        if config_path is not None:
-            patch["CAT_AGENT_CONFIG"] = str(config_path)
+        patch = {"CAT_AGENT_CONFIG": str(config_path or self.config_path)}
         with mock.patch.dict(os.environ, patch, clear=False):
             with contextlib.redirect_stdout(output):
                 self.assertEqual(config_env_main([target]), 0)
         return output.getvalue()
 
-    def test_repository_config_uses_e4b_profile(self) -> None:
-        config = load_app_config(PROJECT_ROOT / "cat-agent.yaml")
+    def test_fixture_config_uses_selected_profiles(self) -> None:
+        config = load_app_config(self.config_path)
         self.assertEqual(config.litert.active_profile, "e4b")
         self.assertEqual(
             config.litert.active.model,
@@ -42,7 +48,7 @@ class YamlConfigTest(unittest.TestCase):
         self.assertEqual(config.openai.active.readiness, "openai")
 
     def test_active_profile_controls_litert_export(self) -> None:
-        source = yaml.safe_load((PROJECT_ROOT / "cat-agent.yaml").read_text(encoding="utf-8"))
+        source = yaml.safe_load((self.config_path).read_text(encoding="utf-8"))
         source["litert"]["active_profile"] = "e2b"
 
         with tempfile.TemporaryDirectory() as temp:
@@ -64,7 +70,7 @@ class YamlConfigTest(unittest.TestCase):
         self.assertIn("export LITERT_AGENT_YNNPACK=0", exported)
 
     def test_active_profile_controls_openai_export(self) -> None:
-        source = yaml.safe_load((PROJECT_ROOT / "cat-agent.yaml").read_text(encoding="utf-8"))
+        source = yaml.safe_load((self.config_path).read_text(encoding="utf-8"))
         source["openai"]["active_profile"] = "cloud"
 
         with tempfile.TemporaryDirectory() as temp:
@@ -109,6 +115,11 @@ class YamlConfigTest(unittest.TestCase):
         for line in expected:
             self.assertIn(line, exported)
 
+    def test_exports_ignore_ambient_config_path(self) -> None:
+        with mock.patch.dict(os.environ, {"CAT_AGENT_CONFIG": "/missing/user-config.yaml"}):
+            exported = self._capture("openai")
+        self.assertIn("export CAT_AGENT_API_BASE_URL=http://192.168.0.129:5001/v1", exported)
+
     def test_web_settings_are_exported(self) -> None:
         exported = self._capture("web")
         self.assertIn("export CAT_AGENT_WEB_HOST=0.0.0.0", exported)
@@ -123,7 +134,7 @@ class YamlConfigTest(unittest.TestCase):
         self.assertIn("export CAT_AGENT_MAX_COMMAND_SECONDS=20.0", exported)
 
     def test_unknown_option_is_rejected(self) -> None:
-        source = yaml.safe_load((PROJECT_ROOT / "cat-agent.yaml").read_text(encoding="utf-8"))
+        source = yaml.safe_load((self.config_path).read_text(encoding="utf-8"))
         source["agent"]["manager_max_step"] = 99
 
         with tempfile.TemporaryDirectory() as temp:
