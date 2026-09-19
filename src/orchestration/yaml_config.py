@@ -7,6 +7,8 @@ from typing import Any
 
 import yaml
 
+from .mcp_config import McpServerConfig, parse_mcp_config
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "cat-agent.yaml"
 
@@ -171,6 +173,7 @@ class AppConfig:
     voice: VoiceConfig
     logging: LoggingConfig
     notifications: NotificationsConfig
+    mcp: tuple[McpServerConfig, ...] = ()
 
 
 def _parse_litert(data: Any) -> LiteRTConfig:
@@ -396,7 +399,7 @@ def load_app_config(path: str | Path | None = None) -> AppConfig:
 
     root = _mapping(raw, "cat-agent config")
     allowed = {"litert", "openai", "agent", "runtime", "web", "voice", "logging", "notifications"}
-    _check_keys(root, "top-level", allowed)
+    _check_keys(root, "top-level", allowed | {"mcp"})
     missing = allowed - set(root)
     if missing:
         raise ValueError(f"Missing cat-agent config section(s): {', '.join(sorted(missing))}")
@@ -410,4 +413,5 @@ def load_app_config(path: str | Path | None = None) -> AppConfig:
         voice=_parse_voice(root["voice"]),
         logging=_parse_logging(root["logging"]),
         notifications=_parse_notifications(root["notifications"]),
+        mcp=parse_mcp_config(root.get("mcp", {})),
     )

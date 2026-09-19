@@ -111,6 +111,8 @@ class PromptStore:
         return path
 
     def _skill_context(self, skill_name: str) -> str:
+        if skill_name.startswith("mcp:"):
+            return ""
         path = self.prompt_dir / f"{skill_name}.txt"
         if not path.is_file():
             return ""

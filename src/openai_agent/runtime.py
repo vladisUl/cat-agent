@@ -9,7 +9,8 @@ from orchestration.assistant_manager import AssistantManagerRuntime
 from orchestration.config import Settings
 from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
-from orchestration.skills import SkillBase
+from orchestration.tool_catalog import build_tool_catalog
+from orchestration.tool_dispatcher import ToolDispatcher
 from orchestration.system_events import SystemRuntime
 from task_system.client import RemoteSystemRuntime
 from task_system.readiness import OpenAIReadiness
@@ -36,6 +37,9 @@ class OpenAIRuntimeBundle:
         return self.agent_clients[0]
 
     def close(self) -> None:
+        close_tools = getattr(self.runtime.skill_base, "close", None)
+        if close_tools is not None:
+            close_tools()
         self.manager_client.close()
         for client in self.agent_clients:
             client.close()
@@ -66,59 +70,69 @@ def _client(
 def build_bundle(settings: Settings) -> OpenAIRuntimeBundle:
     prompt_store = PromptStore(settings.prompt_dir, settings.agent_count)
     prompt_store.validate()
-    skill_base = SkillBase(settings.prompt_dir / "prompt_base.txt")
-    system_runtime = RemoteSystemRuntime(
-        'openai',
-        readiness_probe=OpenAIReadiness(
-            settings.api_base_url,
-            mode=os.getenv("CAT_AGENT_OPENAI_READINESS", "ollama").strip().lower(),
-            model=settings.model,
-        ),
-    )
+    skill_base = build_tool_catalog(settings.prompt_dir / "prompt_base.txt", settings.mcp_servers)
+    try:
+        dispatcher = ToolDispatcher(getattr(skill_base, "mcp_runtime", None))
+        system_runtime = RemoteSystemRuntime(
+            'openai',
+            readiness_probe=OpenAIReadiness(
+                settings.api_base_url,
+                mode=os.getenv("CAT_AGENT_OPENAI_READINESS", "ollama").strip().lower(),
+                model=settings.model,
+            ),
+        )
 
-    manager_client = _client(
-        settings,
-        max_output_tokens=settings.manager_max_output_tokens,
-        label="manager",
-    )
-    agent_clients = tuple(
-        _client(
+        manager_client = _client(
             settings,
-            max_output_tokens=settings.agent_max_output_tokens,
-            label=f"agent{index}",
+            max_output_tokens=settings.manager_max_output_tokens,
+            label="manager",
         )
-        for index in range(1, settings.agent_count + 1)
-    )
+        agent_clients = tuple(
+            _client(
+                settings,
+                max_output_tokens=settings.agent_max_output_tokens,
+                label=f"agent{index}",
+            )
+            for index in range(1, settings.agent_count + 1)
+        )
 
-    workers = [
-        AgentWorker(
-            f"agent{index}",
-            agent_clients[index - 1],
+        workers = [
+            AgentWorker(
+                f"agent{index}",
+                agent_clients[index - 1],
+                prompt_store,
+                settings.workspace,
+                max_steps=settings.max_agent_steps,
+                max_file_bytes=settings.max_file_bytes,
+                command_timeout_seconds=settings.command_timeout_seconds,
+                tool_dispatcher=dispatcher,
+            )
+            for index in range(1, settings.agent_count + 1)
+        ]
+        event_worker_id = (
+            f"agent{settings.agent_count}" if settings.agent_count > 1 else None
+        )
+        runtime = AssistantManagerRuntime(
+            manager_client,
+            skill_base,
             prompt_store,
-            settings.workspace,
-            max_steps=settings.max_agent_steps,
-            max_file_bytes=settings.max_file_bytes,
-            command_timeout_seconds=settings.command_timeout_seconds,
+            AgentPool(workers, event_worker_id=event_worker_id),
+            system_runtime,
+            event_store=system_runtime.event_store,
+            max_steps=settings.max_manager_steps,
+            tool_dispatcher=dispatcher,
         )
-        for index in range(1, settings.agent_count + 1)
-    ]
-    event_worker_id = (
-        f"agent{settings.agent_count}" if settings.agent_count > 1 else None
-    )
-    runtime = AssistantManagerRuntime(
-        manager_client,
-        skill_base,
-        prompt_store,
-        AgentPool(workers, event_worker_id=event_worker_id),
-        system_runtime,
-        event_store=system_runtime.event_store,
-        max_steps=settings.max_manager_steps,
-    )
 
-    return OpenAIRuntimeBundle(
-        runtime=runtime,
-        system_runtime=system_runtime,
-        manager_client=manager_client,
-        agent_clients=agent_clients,
-        model_path=Path(settings.model),
-    )
+        return OpenAIRuntimeBundle(
+            runtime=runtime,
+            system_runtime=system_runtime,
+            manager_client=manager_client,
+            agent_clients=agent_clients,
+            model_path=Path(settings.model),
+        )
+
+    except BaseException:
+        close_tools = getattr(skill_base, "close", None)
+        if close_tools is not None:
+            close_tools()
+        raise

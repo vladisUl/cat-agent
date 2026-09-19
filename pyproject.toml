@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 litert = ["litert-lm>=0.16"]
 notifications = ["firebase-admin"]
+mcp = ["mcp==2.2.0", "jsonschema>=4.23,<5"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

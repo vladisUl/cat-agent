@@ -76,3 +76,7 @@ notifications:
   firebase_tokens: /opt/firebase/tokens.txt
   firebase_title: Гена
   ttl: 3600
+
+# Optional MCP clients. Install .[mcp] and configure servers to enable.
+mcp:
+  servers: []

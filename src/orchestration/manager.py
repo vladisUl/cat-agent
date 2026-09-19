@@ -15,6 +15,8 @@ from .protocol import (
     parse_manager_output,
 )
 from .skills import SkillBase, SkillBaseError
+from .tool_catalog import ToolCatalog
+from .tool_dispatcher import ToolDispatcher
 from .system_events import SystemEvent, SystemRuntime, TaskActivation
 from .tasks import TaskRecord, TaskStoreError
 from .workspace_command_runtime import CommandRuntime
@@ -45,14 +47,16 @@ class ManagerRuntime:
     def __init__(
         self,
         client: OpenAIChatClient,
-        skill_base: SkillBase,
+        skill_base: SkillBase | ToolCatalog,
         prompt_store: PromptStore,
         pool: AgentPool,
         system_runtime: SystemRuntime | None = None,
         *,
         max_steps: int,
+        tool_dispatcher: ToolDispatcher | None = None,
         forced_delegate_skills: tuple[str, ...] | None = None,
     ) -> None:
+        self.tool_dispatcher = tool_dispatcher or ToolDispatcher(getattr(skill_base, "mcp_runtime", None))
         self.client = client
         self.skill_base = skill_base
         self.prompt_store = prompt_store
@@ -90,6 +94,9 @@ class ManagerRuntime:
             + "\n\n"
             + bootstrap.strip()
         )
+        mcp_prompt = getattr(skill_base, "mcp_prompt", lambda: "")()
+        if mcp_prompt:
+            system_context = system_context.rstrip() + "\n\n" + mcp_prompt
         self.prompt_store.write_manager_prompt(system_context)
         self.messages: list[dict[str, str]] = [
             {"role": "system", "content": system_context},
@@ -509,6 +516,10 @@ class ManagerRuntime:
 
             assert directive.command is not None
             LOGGER.info("MANAGER DIRECT TOOL COMMAND %s", directive.command)
+            mcp_result = self.tool_dispatcher.dispatch(directive.command, self._direct_runtime)
+            if mcp_result is not None:
+                self._append_user(mcp_result)
+                continue
             result = self._direct_runtime.execute(directive.command)
             formatted = self._direct_runtime.format_result(result)
             LOGGER.info(

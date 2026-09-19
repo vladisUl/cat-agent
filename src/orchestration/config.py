@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
+from .mcp_config import McpServerConfig, load_mcp_config
+
 
 def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
     value = int(os.getenv(name, str(default)))
@@ -47,6 +49,7 @@ class Settings:
     top_p: float
     reasoning_effort: str
     log_level: str
+    mcp_servers: tuple[McpServerConfig, ...] = ()
 
     @classmethod
     def from_env(cls, *, require_model: bool = True) -> "Settings":
@@ -94,4 +97,5 @@ class Settings:
             top_p=_env_float("CAT_AGENT_TOP_P", 1.0, minimum=0.0, maximum=1.0),
             reasoning_effort=reasoning_effort,
             log_level=os.getenv("CAT_AGENT_LOG_LEVEL", "INFO").upper(),
+            mcp_servers=load_mcp_config(),
         )

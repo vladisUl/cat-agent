@@ -9,7 +9,8 @@ from orchestration.assistant_manager import AssistantManagerRuntime
 from orchestration.config import Settings
 from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
-from orchestration.skills import SkillBase
+from orchestration.tool_catalog import build_tool_catalog
+from orchestration.tool_dispatcher import ToolDispatcher
 from orchestration.system_events import SystemRuntime
 from task_system.client import RemoteSystemRuntime
 
@@ -38,6 +39,9 @@ class LlamaRuntimeBundle:
         return self.agent_clients[0]
 
     def close(self) -> None:
+        close_tools = getattr(self.runtime.skill_base, "close", None)
+        if close_tools is not None:
+            close_tools()
         self.manager_client.close()
         for client in self.agent_clients:
             if client is not self.manager_client:
@@ -69,63 +73,73 @@ def _client(
 def build_bundle(settings: Settings) -> LlamaRuntimeBundle:
     prompt_store = PromptStore(settings.prompt_dir, settings.agent_count)
     prompt_store.validate()
-    skill_base = SkillBase(settings.prompt_dir / "prompt_base.txt")
-    system_runtime = RemoteSystemRuntime(None)
+    skill_base = build_tool_catalog(settings.prompt_dir / "prompt_base.txt", settings.mcp_servers)
+    try:
+        dispatcher = ToolDispatcher(getattr(skill_base, "mcp_runtime", None))
+        system_runtime = RemoteSystemRuntime(None)
 
-    manager_client = _client(
-        settings,
-        max_output_tokens=settings.manager_max_output_tokens,
-        label="manager",
-        id_slot=MANAGER_SLOT,
-    )
-    # llama-server runs two fixed slots: manager=0 and agent=1. All agent
-    # containers intentionally share slot 1; CORE serializes model TT calls.
-    agent_client = _client(
-        settings,
-        max_output_tokens=settings.agent_max_output_tokens,
-        label="agent",
-        id_slot=AGENT_SLOT,
-    )
-
-    workers = [
-        AgentWorker(
-            f"agent{index}",
-            agent_client,
-            prompt_store,
-            settings.workspace,
-            max_steps=settings.max_agent_steps,
-            max_file_bytes=settings.max_file_bytes,
-            command_timeout_seconds=settings.command_timeout_seconds,
+        manager_client = _client(
+            settings,
+            max_output_tokens=settings.manager_max_output_tokens,
+            label="manager",
+            id_slot=MANAGER_SLOT,
         )
-        for index in range(1, settings.agent_count + 1)
-    ]
-    event_worker_id = (
-        f"agent{settings.agent_count}" if settings.agent_count > 1 else None
-    )
-    runtime = AssistantManagerRuntime(
-        manager_client,
-        skill_base,
-        prompt_store,
-        AgentPool(workers, event_worker_id=event_worker_id),
-        system_runtime,
-        event_store=system_runtime.event_store,
-        max_steps=settings.max_manager_steps,
-    )
+        # llama-server runs two fixed slots: manager=0 and agent=1. All agent
+        # containers intentionally share slot 1; CORE serializes model TT calls.
+        agent_client = _client(
+            settings,
+            max_output_tokens=settings.agent_max_output_tokens,
+            label="agent",
+            id_slot=AGENT_SLOT,
+        )
 
-    speculative = os.getenv("CAT_AGENT_LLAMA_SPECULATIVE", "1").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    return LlamaRuntimeBundle(
-        runtime=runtime,
-        system_runtime=system_runtime,
-        manager_client=manager_client,
-        agent_clients=(agent_client,),
-        model_path=Path(settings.model),
-        speculative=speculative,
-    )
+        workers = [
+            AgentWorker(
+                f"agent{index}",
+                agent_client,
+                prompt_store,
+                settings.workspace,
+                max_steps=settings.max_agent_steps,
+                max_file_bytes=settings.max_file_bytes,
+                command_timeout_seconds=settings.command_timeout_seconds,
+                tool_dispatcher=dispatcher,
+            )
+            for index in range(1, settings.agent_count + 1)
+        ]
+        event_worker_id = (
+            f"agent{settings.agent_count}" if settings.agent_count > 1 else None
+        )
+        runtime = AssistantManagerRuntime(
+            manager_client,
+            skill_base,
+            prompt_store,
+            AgentPool(workers, event_worker_id=event_worker_id),
+            system_runtime,
+            event_store=system_runtime.event_store,
+            max_steps=settings.max_manager_steps,
+            tool_dispatcher=dispatcher,
+        )
+
+        speculative = os.getenv("CAT_AGENT_LLAMA_SPECULATIVE", "1").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        return LlamaRuntimeBundle(
+            runtime=runtime,
+            system_runtime=system_runtime,
+            manager_client=manager_client,
+            agent_clients=(agent_client,),
+            model_path=Path(settings.model),
+            speculative=speculative,
+        )
+
+    except BaseException:
+        close_tools = getattr(skill_base, "close", None)
+        if close_tools is not None:
+            close_tools()
+        raise
 
 
 def warm_bundle(

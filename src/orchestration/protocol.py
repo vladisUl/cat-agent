@@ -45,7 +45,7 @@ class AgentDirective:
     error: str | None = None
 
 
-_SKILL_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+_SKILL_RE = re.compile(r"^(?:[a-z][a-z0-9_-]*|mcp:[a-z][a-z0-9_-]*:[A-Za-z0-9_.-]+)$")
 _AGENT_RE = re.compile(r"^agent[1-9][0-9]*$")
 _TIMER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _MANAGER_CONTROL_WORDS = {"ASK", "WAIT", "REPLY"}

@@ -11,6 +11,7 @@ from .model_client import ModelClientError, OpenAIChatClient
 from .prompt_store import PromptStore
 from .protocol import AgentAction, AgentDirective, parse_agent_output
 from .skills import Skill
+from .tool_dispatcher import ToolDispatcher
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,7 +41,9 @@ class AgentWorker:
         max_steps: int,
         max_file_bytes: int,
         command_timeout_seconds: int,
+        tool_dispatcher: ToolDispatcher | None = None,
     ) -> None:
+        self.tool_dispatcher = tool_dispatcher or ToolDispatcher()
         self.agent_id = agent_id
         self.client = client
         self.prompt_store = prompt_store
@@ -335,6 +338,11 @@ class AgentWorker:
                 deferred,
             )
             self._messages.append({"role": "user", "content": deferred})
+            return self._continue_or_limit(step)
+
+        mcp_result = self.tool_dispatcher.dispatch(directive.command, self._runtime)
+        if mcp_result is not None:
+            self._messages.append({"role": "user", "content": mcp_result})
             return self._continue_or_limit(step)
 
         picture = read_picture(directive.command, self._runtime, self.client)

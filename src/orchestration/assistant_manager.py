@@ -350,6 +350,8 @@ class AssistantManagerRuntime(ManagerRuntime):
         )
 
     def _execute_work_steps(self, command):
+        if self.tool_dispatcher.is_mcp(command):
+            return self._execute_work_command(command)
         try:
             argv = shlex.split(command, posix=True)
             if argv and argv[0] in {"task_timer.sh", "query_timer.sh"} and float(argv[1]) == 0:
@@ -384,6 +386,9 @@ class AssistantManagerRuntime(ManagerRuntime):
         return self._execute_work_command(command)
 
     def _execute_work_command(self, command: str) -> str | None:
+        mcp_result = self.tool_dispatcher.dispatch(command, self._direct_runtime)
+        if mcp_result is not None:
+            return mcp_result
         picture = read_picture(command, self._direct_runtime, self.client)
         if picture is not None:
             return picture

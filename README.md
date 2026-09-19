@@ -154,3 +154,7 @@ TUI/Web acknowledge receipt; Firebase success means acceptance by the provider,
 not confirmation that a phone displayed the notification. Delivery is at least
 once, so a crash or partial Firebase failure can cause duplicate notifications.
 Pending input events are still in-memory; they are not replayed after a restart.
+
+Optional MCP client tools (stdio and Streamable HTTP), configuration and checks:
+[docs/mcp.md](docs/mcp.md). Install with `pip install -e '.[mcp]'`; the catalog is
+fixed at CORE startup and shared by manager/agent through the existing `/work#`.

@@ -145,3 +145,17 @@ notifications:
   ttl: 3600
   # Firebase Android channel id is still an optional low-level env override via
   # CAT_AGENT_FIREBASE_CHANNEL_ID; it is intentionally not part of normal config.
+
+MCP (необязательно)
+------------------
+mcp.servers — список MCP-серверов; по умолчанию пустой.
+Каждая запись: name, enabled, transport.
+transport=stdio: command и args (список строк).
+transport=streamable_http: url (HTTP/HTTPS).
+Таймауты в секундах: connect_timeout_seconds=10, call_timeout_seconds=30.
+reconnect_delay_seconds=5 — задержка повторного подключения.
+env для stdio и headers_env для HTTP — отображения имени переменной/заголовка
+в ИМЯ переменной окружения CORE, а не в значение секрета.
+Каталог tools фиксируется при старте CORE, до прогрева BASE.
+Reconnect не меняет каталог; изменения tools требуют restart CORE.
+Подробности, примеры и проверка: docs/mcp.md.
