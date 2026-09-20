@@ -66,7 +66,6 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
 
     backend_name = os.getenv("LITERT_AGENT_BACKEND", "cpu").strip().lower()
     cpu_threads = _env_optional_positive_int("LITERT_AGENT_CPU_THREADS")
-    max_num_tokens = _env_optional_positive_int("LITERT_AGENT_MAX_NUM_TOKENS")
     speculative = _env_bool("LITERT_AGENT_SPECULATIVE", False)
     ynnpack = _env_bool("LITERT_AGENT_YNNPACK", False)
     activation_data_type = _env_activation_data_type(
@@ -78,6 +77,11 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
     LOGGER.info("LiteRT backend: %s", backend_name)
     LOGGER.info("LiteRT speculative decoding: %s", speculative)
     LOGGER.info("LiteRT YNNPACK: %s", ynnpack)
+    LOGGER.info(
+        "LiteRT max_num_tokens: manager=%d agent=%d",
+        settings.manager_max_output_tokens,
+        settings.agent_max_output_tokens,
+    )
     LOGGER.info(
         "LiteRT activation data type: %s",
         activation_data_type.name if activation_data_type is not None else "default",
@@ -91,7 +95,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         model_path,
         backend_name,
         cpu_threads,
-        max_num_tokens,
+        settings.manager_max_output_tokens,
         speculative,
         ynnpack,
         activation_data_type,
@@ -102,7 +106,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
             model_path,
             backend_name,
             cpu_threads,
-            max_num_tokens,
+            settings.agent_max_output_tokens,
             speculative,
             ynnpack,
             activation_data_type,
