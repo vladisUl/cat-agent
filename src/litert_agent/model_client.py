@@ -30,6 +30,8 @@ ModelEventHandler = Callable[[str, str, str], None]
 
 
 class LiteRTChatClient:
+    supports_resident_context_pool = True
+
     """LiteRT-LM adapter backed by the low-level Session API."""
 
     supports_images = True
