@@ -19,6 +19,8 @@ from orchestration.tasks import TaskStore
 
 
 class FakeClient:
+    supports_resident_context_pool = True
+
     def __init__(self, replies: list[str]) -> None:
         self.replies = list(replies)
         self.calls: list[list[dict[str, str]]] = []
