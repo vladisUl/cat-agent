@@ -178,12 +178,26 @@ class HealthReporterTest(unittest.TestCase):
         reporter.report_once()
         self.assertEqual(reports, [])
 
-    def test_failed_core_warmup_never_starts_heartbeat(self):
+    def test_scheduler_start_keeps_session_contexts_lazy(self):
         from agent_core.core_scheduler import CoreScheduler
-        system = SimpleNamespace(is_remote=True, start_worker=Mock())
-        scheduler = CoreScheduler(SimpleNamespace(system_runtime=system, manager_client=Mock()))
-        self.addCleanup(scheduler._executor.shutdown, wait=True)
-        scheduler._prepare_contexts = Mock(side_effect=RuntimeError('model initialization failed'))
-        with self.assertRaises(RuntimeError):
+        system = SimpleNamespace(
+            is_remote=True,
+            start_worker=Mock(),
+            stop_worker=Mock(),
+            flush_completions=Mock(),
+        )
+        scheduler = CoreScheduler(
+            SimpleNamespace(system_runtime=system, manager_client=Mock())
+        )
+        scheduler._prepare_contexts = Mock(
+            side_effect=RuntimeError('lazy context must not be prepared at startup')
+        )
+        scheduler._run = Mock()
+        try:
             scheduler.start()
-        system.start_worker.assert_not_called()
+            scheduler._thread.join(timeout=1)
+            self.assertFalse(scheduler._thread.is_alive())
+            scheduler._prepare_contexts.assert_not_called()
+            system.start_worker.assert_called_once()
+        finally:
+            scheduler.close()
