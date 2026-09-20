@@ -170,7 +170,8 @@ class RealManagerSchedulingTest(unittest.TestCase):
                 s._thread.join(timeout=1)
                 self.assertFalse(s._thread.is_alive())
                 self.assertEqual(observed, [{}])
-                self.assertIs(s._spare_human_context, runtime)
+                self.assertEqual(s.manager_kv_snapshot()["kv1"]["state"], "ready")
+                self.assertTrue(any(candidate is runtime for candidate in s._manager_available))
                 client.fork.assert_not_called()
 
                 first = _PriorityRequest("user", "voice", "hello", 0, -10, session_id="first")
@@ -198,7 +199,7 @@ class RealManagerSchedulingTest(unittest.TestCase):
             finish(s, ManagerTurn("reply", "hello"))
 
             self.assertNotIn("human:web", s._contexts)
-            self.assertIs(s._spare_human_context, runtime)
+            self.assertTrue(any(candidate is runtime for candidate in s._manager_available))
 
             voice = _PriorityRequest("user", "voice", "weather", 0, -10, session_id="voice")
             self.assertIs(s._context(voice), runtime)
@@ -225,7 +226,7 @@ class RealManagerSchedulingTest(unittest.TestCase):
             context._direct_runtime._uncertain_commands = {"private command"}
             s._release_context("old")
 
-            self.assertIs(s._spare_human_context, runtime)
+            self.assertTrue(any(candidate is runtime for candidate in s._manager_available))
             self.assertEqual(client.reset_calls, [runtime._base_messages])
             self.assertEqual(context.messages, runtime._base_messages)
             self.assertFalse(context._chat_mode)
@@ -240,31 +241,69 @@ class RealManagerSchedulingTest(unittest.TestCase):
             s._close_all_contexts()
             client.close.assert_not_called()
 
-    def test_failed_kv_reset_discards_context(self):
-        s = CoreScheduler(SimpleNamespace(runtime=SimpleNamespace()))
-        self.addCleanup(s._executor.shutdown, wait=True)
-        context = SimpleNamespace(
-            reset_for_new_session=Mock(side_effect=RuntimeError("KV reset failed")),
-            client=SimpleNamespace(close=Mock()))
-        s._contexts["human:old"] = context
-        with self.assertLogs("agent_core.core_scheduler", level="ERROR"):
-            s._close_context("human:old")
-        self.assertIsNone(s._spare_human_context)
-        context.client.close.assert_called_once()
+    def test_failed_kv2_reset_discards_second_slot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, _client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
+            s = CoreScheduler(SimpleNamespace(runtime=runtime))
+            self.addCleanup(s._executor.shutdown, wait=True)
+            context = SimpleNamespace(
+                reset_for_new_session=Mock(side_effect=RuntimeError("KV reset failed")),
+                client=SimpleNamespace(close=Mock()),
+            )
+            s._manager_slots[1] = context
+            s._manager_slot_ready[1] = True
+            s._kv2_state = "ready"
+            s._contexts["human:old"] = context
+            with self.assertLogs("agent_core.core_scheduler", level="ERROR"):
+                s._close_context("human:old")
+            self.assertIsNone(s._manager_slots[1])
+            self.assertFalse(s._manager_slot_ready[1])
+            self.assertEqual(s._kv2_state, "not_ready")
+            context.client.close.assert_called_once()
 
     def test_release_waits_for_old_requests_before_recycling(self):
-        s = CoreScheduler(SimpleNamespace(runtime=SimpleNamespace()))
-        self.addCleanup(s._executor.shutdown, wait=True)
-        context = SimpleNamespace(reset_for_new_session=Mock(), client=SimpleNamespace(close=Mock()))
-        s._contexts["human:old"] = context
-        s.submit_user("unfinished", session_id="old")
-        s._release_context("old")
-        context.reset_for_new_session.assert_not_called()
-        self.assertIsNone(s._spare_human_context)
-        s._pending.clear()
-        s._release_context("old")
-        context.reset_for_new_session.assert_called_once()
-        self.assertIs(s._spare_human_context, context)
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
+            s = CoreScheduler(SimpleNamespace(runtime=runtime))
+            self.addCleanup(s._executor.shutdown, wait=True)
+            item = _PriorityRequest("user", "user", "hello", 0, 0, session_id="old")
+            self.assertIs(s._context(item), runtime)
+            s.submit_user("unfinished", session_id="old")
+            s._release_context("old")
+            self.assertEqual(client.reset_calls, [])
+            self.assertFalse(any(candidate is runtime for candidate in s._manager_available))
+            s._pending.clear()
+            s._release_context("old")
+            self.assertEqual(client.reset_calls, [runtime._base_messages])
+            self.assertTrue(any(candidate is runtime for candidate in s._manager_available))
+
+    def test_explicit_kv2_warm_keeps_second_context_resident(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
+            child = fixtures.FakeClient([])
+            child.close = Mock()
+            child.set_event_handler = Mock()
+            client.fork = Mock(return_value=child)
+            s = CoreScheduler(SimpleNamespace(runtime=runtime))
+            try:
+                self.assertEqual(s.manager_kv_snapshot()["kv2"]["state"], "not_ready")
+                self.assertEqual(s.request_manager_kv2_warm(), "queued")
+                s._poll_manager_kv2_warm()
+                self.assertIsNotNone(s._kv2_future)
+                s._kv2_future.result(timeout=1)
+                s._poll_manager_kv2_warm()
+                self.assertTrue(s.manager_kv_snapshot()["kv2"]["ready"])
+                self.assertEqual(client.fork.call_count, 1)
+                self.assertIs(s._manager_slots[1].client, child)
+
+                human = _PriorityRequest("user", "user", "hello", 0, 0, session_id="web")
+                self.assertIs(s._context(human), runtime)
+                voice = _PriorityRequest("user", "voice", "hello", 0, -10, session_id="voice")
+                self.assertIs(s._context(voice).client, child)
+                self.assertEqual(client.fork.call_count, 1)
+            finally:
+                s._close_all_contexts()
+                s._executor.shutdown(wait=True)
 
     def test_real_manager_tool_flow_resumes_after_voice(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -292,6 +331,12 @@ class RealManagerSchedulingTest(unittest.TestCase):
                     s._active_future.result(timeout=1); s._poll_future()
                 self.assertFalse(s._pending)
                 self.assertEqual(delivered, [("voice", "voice-result"), ("user", "terminal-result")])
-                self.assertIsNot(s._contexts['voice'].client, s._contexts['human:human'].client)
+                self.assertTrue(s._manager_slot_ready[0])
+                self.assertTrue(s._manager_slot_ready[1])
+                self.assertIs(s._manager_slots[0].client, client)
+                self.assertIsNot(s._manager_slots[1].client, client)
+                self.assertNotIn("voice", s._contexts)
+                self.assertNotIn("human:human", s._contexts)
             finally:
+                s._close_all_contexts()
                 s._executor.shutdown(wait=True)
