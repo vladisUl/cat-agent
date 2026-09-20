@@ -93,7 +93,6 @@ class CoreScheduler:
         self.bundle.manager_client.set_event_handler(self._model_event)
         for client in getattr(self.bundle, "agent_clients", ()):
             client.set_event_handler(self._model_event)
-        self._executor.submit(self._prepare_contexts).result()
         self._thread = threading.Thread(target=self._run, name="cat-agent-scheduler", daemon=True)
         self._thread.start()
         system = getattr(self.bundle, "system_runtime", None)
