@@ -33,6 +33,7 @@ class McpSdkIntegrationTest(unittest.TestCase):
         self.assertIn('mcp:local:echo',[s.name for s in runtime.skills()])
         result=runtime.call('mcp:local:echo',{'text':"O'Brien real stdio"})
         self.assertIn("O'Brien real stdio",result)
+        self.assertNotIn("structuredContent", json.loads(result.split("\n", 1)[1]))
         error=runtime.call('mcp:local:fail',{})
         self.assertTrue(json.loads(error.split('\n',1)[1])['isError'])
         self.assertEqual(runtime.snapshot()['local']['state'],'ready')

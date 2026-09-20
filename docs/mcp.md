@@ -96,8 +96,17 @@ The model requests one action:
 A shared dispatcher handles manager and agent commands before shell parsing.
 It validates the JSON object, tool assignment and startup input schema. The
 SDK executes `tools/call` using the server's original tool name. The model gets
-`MCP_RESULT` followed by the actual serialized SDK result, including `content`,
-`structuredContent` and `isError` where present. This first version preserves
+`MCP_RESULT` followed by a normalized payload with explicit `isError` and ordered
+`content` blocks. Text, media data, resource URIs and block annotations are kept.
+Top-level SDK metadata is not included. `structuredContent` contains only data
+not already represented by JSON text blocks: equal object fields at the same
+path are omitted, while extra/conflicting fields are kept. Arrays are compared
+as whole ordered values, never shortened/reindexed. Comparison ignores JSON
+whitespace/key ordering but distinguishes booleans, numbers, strings and null.
+The SDK's single-key `result` wrapper is also omitted when it exactly repeats
+one text value, the parsed JSON value, or an entire ordered sequence of text
+blocks representing list items. Arbitrary prose is not interpreted or
+summarized, and JSON inside embedded resources is not treated as root data. This first version preserves
 content blocks as JSON; it does not turn MCP image/audio blocks into model-native
 media inputs, fetch resource links, or add resources/prompts/sampling/elicitation.
 The existing `read_pic` image path is independent and unchanged.

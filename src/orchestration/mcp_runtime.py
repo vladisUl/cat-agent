@@ -18,6 +18,7 @@ from types import MappingProxyType
 
 from .mcp_config import McpServerConfig
 from .skills import Skill
+from .mcp_result import format_mcp_result
 
 LOGGER = logging.getLogger(__name__)
 
@@ -205,8 +206,7 @@ class McpRuntime:
                                         result = await client.session.call_tool(
                                             current.tool.name, current.arguments,
                                             read_timeout_seconds=config.call_timeout_seconds)
-                                    payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
-                                    self._finish(current, "MCP_RESULT\n" + json.dumps(payload, ensure_ascii=False))
+                                    self._finish(current, format_mcp_result(result))
                                     current = None
                                 except Exception as exc:
                                     # Publish unavailability BEFORE releasing the caller and

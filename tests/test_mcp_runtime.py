@@ -20,8 +20,9 @@ def tool(name='echo', description='Echo text'):
 
 
 class FakeResult:
-    def model_dump(self, **kwargs):
-        return {'content':[{'type':'text','text':'actual value'}], 'structuredContent':{'answer':42}, 'isError':False}
+    content = [{"type": "text", "text": "actual value"}]
+    structured_content = {"answer": 42}
+    is_error = False
 
 
 class FakeClient:
