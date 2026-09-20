@@ -81,12 +81,17 @@ class CoreScheduler:
         self._last_metrics = {}
         self._contexts = {}
         runtime = getattr(bundle, "runtime", None)
-        self._spare_human_context = (
-            runtime
-            if callable(getattr(runtime, "fork_context", None))
+        self._manager_pool_enabled = (
+            runtime is not None
+            and callable(getattr(runtime, "fork_context", None))
             and callable(getattr(runtime, "reset_for_new_session", None))
-            else None
         )
+        self._manager_slots = [runtime, None] if self._manager_pool_enabled else [None, None]
+        self._manager_slot_ready = [self._manager_pool_enabled, False]
+        self._manager_available = [runtime] if self._manager_pool_enabled else []
+        self._kv2_state = "not_ready"
+        self._kv2_requested = False
+        self._kv2_future = None
         self._released_sessions = set()
         self._stop = threading.Event()
         self._thread = None
@@ -116,6 +121,9 @@ class CoreScheduler:
         if self._active_future is not None:
             self._active_future.result()
             self._poll_future()
+        if self._kv2_future is not None:
+            self._kv2_future.result()
+            self._kv2_future = None
         with self._queue_lock:
             remaining, self._pending = self._pending, []
         for item in remaining:
@@ -128,25 +136,140 @@ class CoreScheduler:
         self._executor.shutdown(wait=True, cancel_futures=False)
 
     def _close_all_contexts(self):
-        for key in list(self._contexts):
-            self._close_context(key)
-        if self._spare_human_context is not None:
-            if self._spare_human_context is not self.bundle.runtime:
-                self._spare_human_context.client.close()
-            self._spare_human_context = None
+        runtime = getattr(self.bundle, "runtime", None)
+        seen = set()
+        for context in [*self._contexts.values(), *self._manager_slots]:
+            if context is None or id(context) in seen:
+                continue
+            seen.add(id(context))
+            if context is not runtime:
+                context.client.close()
+        self._contexts.clear()
+        self._manager_available.clear()
+        if self._manager_pool_enabled:
+            self._manager_slots = [runtime, None]
+            self._manager_slot_ready = [False, False]
+        else:
+            self._manager_slots = [None, None]
+            self._manager_slot_ready = [False, False]
+        self._kv2_state = "not_ready"
 
     def _prepare_contexts(self):
-        self._prepare_human_context()
+        # Session contexts are intentionally lazy. KV1 is the canonical manager
+        # runtime warmed before CORE start; KV2 is created explicitly or on demand.
+        return None
 
-    def _prepare_human_context(self):
-        runtime = self.bundle.runtime
-        if (self._spare_human_context is None
-                and callable(getattr(runtime, "fork_context", None))
-                and callable(getattr(runtime, "reset_for_new_session", None))):
-            context = runtime.fork_context("human:spare")
-            context.client.set_event_handler(self._model_event)
-            self._spare_human_context = context
-            LOGGER.info("CORE human session base ready")
+    def request_manager_kv2_warm(self):
+        if not self._manager_pool_enabled:
+            raise ValueError("manager KV pool is not supported by this runtime")
+        with self._queue_lock:
+            if self._manager_slot_ready[1]:
+                return "ready"
+            if self._kv2_state in {"queued", "warming"}:
+                return self._kv2_state
+            self._kv2_state = "queued"
+            self._kv2_requested = True
+        self._emit_status()
+        return "queued"
+
+    def _poll_manager_kv2_warm(self):
+        future = self._kv2_future
+        if future is not None:
+            if not future.done():
+                return
+            try:
+                future.result()
+            except Exception:
+                LOGGER.exception("CORE manager KV2 warm failed")
+                with self._queue_lock:
+                    self._kv2_state = "not_ready"
+                    self._manager_slot_ready[1] = False
+                    self._manager_slots[1] = None
+            self._kv2_future = None
+            self._emit_status()
+            return
+
+        with self._queue_lock:
+            requested = self._kv2_requested
+        if requested and self._active_future is None:
+            with self._queue_lock:
+                self._kv2_requested = False
+                self._kv2_state = "warming"
+            self._emit_status()
+            self._kv2_future = self._executor.submit(self._warm_manager_kv2)
+
+    def _warm_manager_kv2(self):
+        with self._queue_lock:
+            if self._manager_slot_ready[1]:
+                self._kv2_state = "ready"
+                return self._manager_slots[1]
+
+        context = self.bundle.runtime.fork_context("manager:kv2")
+        context.client.set_event_handler(self._model_event)
+        with self._queue_lock:
+            if self._manager_slot_ready[1]:
+                context.client.close()
+                return self._manager_slots[1]
+            self._manager_slots[1] = context
+            self._manager_slot_ready[1] = True
+            self._manager_available.append(context)
+            self._sort_manager_available_locked()
+            self._kv2_state = "ready"
+        LOGGER.info("CORE manager KV2 ready")
+        return context
+
+    def _ensure_manager_kv2_for_request(self):
+        with self._queue_lock:
+            if self._manager_slot_ready[1]:
+                return
+            self._kv2_state = "warming"
+            self._kv2_requested = False
+        self._emit_status()
+        try:
+            self._warm_manager_kv2()
+        except Exception:
+            with self._queue_lock:
+                self._kv2_state = "not_ready"
+                self._manager_slot_ready[1] = False
+                self._manager_slots[1] = None
+            self._emit_status()
+            raise
+        self._emit_status()
+
+    def _manager_slot_index(self, context):
+        for index, candidate in enumerate(self._manager_slots):
+            if candidate is context:
+                return index
+        return None
+
+    def _sort_manager_available_locked(self):
+        self._manager_available.sort(
+            key=lambda context: self._manager_slot_index(context)
+            if self._manager_slot_index(context) is not None else 99
+        )
+
+    def _take_manager_context(self):
+        with self._queue_lock:
+            if not self._manager_available:
+                return None
+            return self._manager_available.pop(0)
+
+    def manager_kv_snapshot(self):
+        with self._queue_lock:
+            result = {}
+            for index, context in enumerate(self._manager_slots):
+                ready = bool(self._manager_slot_ready[index] and context is not None)
+                available = any(candidate is context for candidate in self._manager_available) if ready else False
+                if index == 1 and not ready and self._kv2_state in {"queued", "warming"}:
+                    state = self._kv2_state
+                elif ready and available:
+                    state = "ready"
+                elif ready:
+                    state = "busy"
+                else:
+                    state = "not_ready"
+                result[f"kv{index + 1}"] = {"ready": ready, "state": state}
+            return result
 
     def submit_user(self, text, *, session_id="", request_id=None):
         return self._submit_input(text, "user", MANAGER_PRIORITY, session_id, request_id)
@@ -236,6 +359,7 @@ class CoreScheduler:
             try:
                 self._poll_system_events()
                 self._poll_future()
+                self._poll_manager_kv2_warm()
                 self._start_next()
             except Exception:
                 LOGGER.exception("CORE scheduler loop failed")
@@ -263,7 +387,7 @@ class CoreScheduler:
         return True
 
     def _start_next(self):
-        if self._active_future is not None:
+        if self._active_future is not None or self._kv2_future is not None:
             return
         with self._queue_lock:
             candidates = [i for i, item in enumerate(self._pending) if self._runnable(item)]
@@ -322,9 +446,14 @@ class CoreScheduler:
         key = self._context_key(item)
         if key not in self._contexts:
             fork = getattr(self.bundle.runtime, "fork_context", None)
-            if item.kind == "user" and self._spare_human_context is not None:
-                self._contexts[key] = self._spare_human_context
-                self._spare_human_context = None
+            if item.kind == "user" and self._manager_pool_enabled:
+                context = self._take_manager_context()
+                if context is None and not self._manager_slot_ready[1]:
+                    self._ensure_manager_kv2_for_request()
+                    context = self._take_manager_context()
+                if context is None:
+                    raise RuntimeError("all manager KV contexts are occupied")
+                self._contexts[key] = context
             else:
                 self._contexts[key] = fork(key) if fork is not None else self.bundle.runtime
             if fork is not None:
@@ -439,27 +568,39 @@ class CoreScheduler:
             LOGGER.exception("CORE completion delivery failed id=%s", item.request_id)
     def _close_context(self, key):
         context = self._contexts.pop(key, None)
-        if context is not None:
-            if ((key.startswith("human:") or key == "voice")
-                    and not self._stop.is_set()
-                    and callable(getattr(context, "reset_for_new_session", None))):
-                try:
-                    context.reset_for_new_session()
-                except Exception:
-                    LOGGER.exception("CORE cannot reuse interactive session base")
-                else:
-                    current = self._spare_human_context
-                    if current is None or context is self.bundle.runtime:
-                        if current is not None and current is not self.bundle.runtime:
-                            current.client.close()
-                        self._spare_human_context = context
-                        return
-                    if current is self.bundle.runtime:
-                        if context is not self.bundle.runtime:
-                            context.client.close()
-                        return
-            if context is not self.bundle.runtime:
-                context.client.close()
+        if context is None:
+            return
+
+        slot = self._manager_slot_index(context)
+        if slot is not None:
+            if self._stop.is_set():
+                return
+            try:
+                context.reset_for_new_session()
+            except Exception:
+                LOGGER.exception("CORE cannot reset manager KV%d to base", slot + 1)
+                with self._queue_lock:
+                    self._manager_slot_ready[slot] = False
+                    self._manager_available = [
+                        candidate for candidate in self._manager_available
+                        if candidate is not context
+                    ]
+                    if slot == 1:
+                        self._manager_slots[1] = None
+                        self._kv2_state = "not_ready"
+                        context.client.close()
+                return
+            with self._queue_lock:
+                if not any(candidate is context for candidate in self._manager_available):
+                    self._manager_available.append(context)
+                    self._sort_manager_available_locked()
+                self._manager_slot_ready[slot] = True
+                if slot == 1:
+                    self._kv2_state = "ready"
+            return
+
+        if context is not self.bundle.runtime:
+            context.client.close()
 
     def active_request_label(self):
         return self._active_request.label if self._active_request else ""
@@ -476,6 +617,7 @@ class CoreScheduler:
              if candidate.inference_timing.phase != "idle"), client,
         )
         return {"state": "BUSY" if item else "IDLE", "label": item.label if item else "",
+                "manager_kv": self.manager_kv_snapshot(),
                 "priority": item.priority if item else None, "request_id": item.request_id if item else None,
                 "request_started_monotonic": self._active_started,
                 "last_request_seconds": self._last_request_seconds, "last_metrics": self._last_metrics,
