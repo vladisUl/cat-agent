@@ -157,17 +157,10 @@ class CoreLifecycleTest(unittest.TestCase):
         self.assertEqual(calls, [("human:human", "terminal", 1), ("voice", "spoken", 1), ("voice", "spoken", 2), ("human:human", "terminal", 2)])
 
 class RealManagerSchedulingTest(unittest.TestCase):
-    def test_voice_context_is_lazy_and_reused(self):
+    def test_voice_can_take_warmed_manager_runtime_without_fork(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
-            children = []
-            def fork(label):
-                child = fixtures.FakeClient([])
-                child.set_event_handler = Mock()
-                child.close = Mock()
-                children.append(child)
-                return child
-            client.fork = Mock(side_effect=fork)
+            client.fork = Mock()
             client.set_event_handler = Mock()
             s = VoiceCoreScheduler(SimpleNamespace(runtime=runtime, manager_client=client))
             observed = []
@@ -182,14 +175,36 @@ class RealManagerSchedulingTest(unittest.TestCase):
 
                 first = _PriorityRequest("user", "voice", "hello", 0, -10, session_id="first")
                 voice = s._context(first)
-                self.assertEqual(client.fork.call_count, 1)
+                self.assertIs(voice, runtime)
+                client.fork.assert_not_called()
+
                 second = _PriorityRequest("user", "voice", "hello", 0, -10, session_id="second")
                 self.assertIs(s._context(second), voice)
-                self.assertEqual(client.fork.call_count, 1)
+                client.fork.assert_not_called()
             finally:
                 s.close()
-            for child in children:
-                child.close.assert_called_once()
+
+    def test_completed_web_turn_recycles_warmed_runtime_for_voice(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
+            client.fork = Mock()
+            s = VoiceCoreScheduler(SimpleNamespace(runtime=runtime))
+
+            human = _PriorityRequest("user", "user", "hello", 0, 0, session_id="web")
+            self.assertIs(s._context(human), runtime)
+            human.context = runtime
+            s._active_request = human
+            s._active_started = 0.0
+            finish(s, ManagerTurn("reply", "hello"))
+
+            self.assertNotIn("human:web", s._contexts)
+            self.assertIs(s._spare_human_context, runtime)
+
+            voice = _PriorityRequest("user", "voice", "weather", 0, -10, session_id="voice")
+            self.assertIs(s._context(voice), runtime)
+            client.fork.assert_not_called()
+            s._executor.shutdown(wait=True)
+
 
     def test_warmed_manager_runtime_is_reused_for_human_sessions(self):
         with tempfile.TemporaryDirectory() as temp:
