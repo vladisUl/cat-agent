@@ -22,7 +22,7 @@ HTTP_PORT = int(os.environ.get("CAT_AGENT_HTTP_PORT", "8080"))
 WS_PORT = int(os.environ.get("CAT_AGENT_WS_PORT", "8765"))
 CORE_SOCKET = Path(os.environ.get("CAT_AGENT_CORE_SOCKET", str(DEFAULT_CORE_SOCKET)))
 
-_ALLOWED_BROWSER_TYPES = {"user", "snapshot", "who", "ping", "acquire", "release", "notification_ack"}
+_ALLOWED_BROWSER_TYPES = {"user", "snapshot", "who", "ping", "acquire", "release", "notification_ack", "warm_kv2"}
 
 
 def _browser_to_core(raw: str | bytes) -> dict[str, object]:
