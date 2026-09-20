@@ -81,8 +81,12 @@ class CoreScheduler:
         self._last_metrics = {}
         self._contexts = {}
         runtime = getattr(bundle, "runtime", None)
+        manager_client = getattr(bundle, "manager_client", None)
+        if manager_client is None and runtime is not None:
+            manager_client = getattr(runtime, "client", None)
         self._manager_pool_enabled = (
             runtime is not None
+            and bool(getattr(manager_client, "supports_resident_context_pool", False))
             and callable(getattr(runtime, "fork_context", None))
             and callable(getattr(runtime, "reset_for_new_session", None))
         )
@@ -256,7 +260,7 @@ class CoreScheduler:
 
     def manager_kv_snapshot(self):
         with self._queue_lock:
-            result = {}
+            result = {"supported": self._manager_pool_enabled}
             for index, context in enumerate(self._manager_slots):
                 ready = bool(self._manager_slot_ready[index] and context is not None)
                 available = any(candidate is context for candidate in self._manager_available) if ready else False
