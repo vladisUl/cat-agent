@@ -17,6 +17,10 @@ class WebGatewayTest(unittest.TestCase):
         )
         self.assertEqual(payload, {"type": "acquire", "client": "web"})
 
+    def test_warm_kv2_message_is_forwarded_to_core(self) -> None:
+        payload = _browser_to_core(json.dumps({"type": "warm_kv2"}))
+        self.assertEqual(payload, {"type": "warm_kv2"})
+
     def test_unknown_browser_message_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             _browser_to_core(json.dumps({"type": "voice", "text": "обход"}))
