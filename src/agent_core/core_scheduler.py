@@ -80,7 +80,13 @@ class CoreScheduler:
         self._last_request_seconds = None
         self._last_metrics = {}
         self._contexts = {}
-        self._spare_human_context = None
+        runtime = getattr(bundle, "runtime", None)
+        self._spare_human_context = (
+            runtime
+            if callable(getattr(runtime, "fork_context", None))
+            and callable(getattr(runtime, "reset_for_new_session", None))
+            else None
+        )
         self._released_sessions = set()
         self._stop = threading.Event()
         self._thread = None
@@ -125,7 +131,8 @@ class CoreScheduler:
         for key in list(self._contexts):
             self._close_context(key)
         if self._spare_human_context is not None:
-            self._spare_human_context.client.close()
+            if self._spare_human_context is not self.bundle.runtime:
+                self._spare_human_context.client.close()
             self._spare_human_context = None
 
     def _prepare_contexts(self):
@@ -421,7 +428,7 @@ class CoreScheduler:
             LOGGER.exception("CORE completion delivery failed id=%s", item.request_id)
     def _close_context(self, key):
         context = self._contexts.pop(key, None)
-        if context is not None and context is not self.bundle.runtime:
+        if context is not None:
             if (key.startswith("human:") and not self._stop.is_set()
                     and self._spare_human_context is None
                     and callable(getattr(context, "reset_for_new_session", None))):
@@ -432,7 +439,8 @@ class CoreScheduler:
                 else:
                     self._spare_human_context = context
                     return
-            context.client.close()
+            if context is not self.bundle.runtime:
+                context.client.close()
 
     def active_request_label(self):
         return self._active_request.label if self._active_request else ""
