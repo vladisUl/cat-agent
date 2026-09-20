@@ -137,15 +137,16 @@ See [the rollout and behavior notes](docs/6-sept.md) for the ten implementation
 areas, configuration and Radxa verification steps. Restart CORE and its interfaces
 together: the voice client now waits for explicit `completed` messages.
 
-Requests have identities and are bound to their originating session. Human and
-voice turns use a two-slot resident manager-context pool. KV1 is the canonical
+Requests have identities and are bound to their originating session. LiteRT human
+and voice turns use a two-slot resident manager-context pool. KV1 is the canonical
 manager session warmed before CORE start. KV2 is created only on an explicit Web
 request or automatically when KV1 is already retained by another interactive
 dialogue; once created, KV2 remains resident until CORE stops. Completed ordinary
 turns reset their slot to BASE before it returns to the pool, while open chat/ASK
-state keeps its slot bound to that dialogue. Execution is cooperative: a model
-call or command finishes before a higher-priority request can run. No additional
-model engine is loaded for these dialogue slots.
+state keeps its slot bound to that dialogue. Backends without independent resident
+manager sessions keep their existing context behaviour. Execution is cooperative:
+a model call or command finishes before a higher-priority request can run. No
+additional model engine is loaded for the LiteRT dialogue slots.
 
 The Web frontend now binds to `127.0.0.1` by default. To expose it on the trusted
 LAN, explicitly configure `CAT_AGENT_WEB_HOST` and either `CAT_AGENT_WEB_TOKEN`
