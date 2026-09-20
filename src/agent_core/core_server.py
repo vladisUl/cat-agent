@@ -304,6 +304,20 @@ class CoreServer:
                 self.outbox.acknowledge(str(item.get("notification_id", "")))
             return
 
+        if message_type == "warm_kv2":
+            with self._lock:
+                owner = self._human is client
+                current = self._human.client_name if self._human is not None else None
+            if not owner:
+                self._safe_send(
+                    client,
+                    {"type": "busy", "owner": current, "text": "Гена занят"},
+                )
+                return
+            state = self.scheduler.request_manager_kv2_warm()
+            self._safe_send(client, {"type": "kv2_warm", "state": state})
+            return
+
         if message_type == "snapshot":
             self._safe_send(
                 client,
