@@ -157,7 +157,7 @@ class CoreLifecycleTest(unittest.TestCase):
         self.assertEqual(calls, [("human:human", "terminal", 1), ("voice", "spoken", 1), ("voice", "spoken", 2), ("human:human", "terminal", 2)])
 
 class RealManagerSchedulingTest(unittest.TestCase):
-    def test_voice_context_prepared_before_scheduler_loop_and_reused(self):
+    def test_voice_context_is_lazy_and_reused(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
             children = []
@@ -171,20 +171,21 @@ class RealManagerSchedulingTest(unittest.TestCase):
             client.set_event_handler = Mock()
             s = VoiceCoreScheduler(SimpleNamespace(runtime=runtime, manager_client=client))
             observed = []
-            s._run = lambda: observed.append(s._contexts.get("voice"))
+            s._run = lambda: observed.append(dict(s._contexts))
             try:
                 s.start()
                 s._thread.join(timeout=1)
                 self.assertFalse(s._thread.is_alive())
-                voice = s._contexts["voice"]
-                self.assertEqual(observed, [voice])
-                self.assertIsNot(voice, s._spare_human_context)
-                self.assertEqual(client.fork.call_count, 2)
-                for session in ("first", "second"):
-                    item = _PriorityRequest("user", "voice", "hello", 0, -10, session_id=session)
-                    self.assertIs(s._context(item), voice)
-                s._prepare_contexts()
-                self.assertEqual(client.fork.call_count, 2)
+                self.assertEqual(observed, [{}])
+                self.assertIsNone(s._spare_human_context)
+                client.fork.assert_not_called()
+
+                first = _PriorityRequest("user", "voice", "hello", 0, -10, session_id="first")
+                voice = s._context(first)
+                self.assertEqual(client.fork.call_count, 1)
+                second = _PriorityRequest("user", "voice", "hello", 0, -10, session_id="second")
+                self.assertIs(s._context(second), voice)
+                self.assertEqual(client.fork.call_count, 1)
             finally:
                 s.close()
             for child in children:
