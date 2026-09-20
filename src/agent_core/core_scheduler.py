@@ -322,7 +322,7 @@ class CoreScheduler:
         key = self._context_key(item)
         if key not in self._contexts:
             fork = getattr(self.bundle.runtime, "fork_context", None)
-            if key.startswith("human:") and self._spare_human_context is not None:
+            if item.kind == "user" and self._spare_human_context is not None:
                 self._contexts[key] = self._spare_human_context
                 self._spare_human_context = None
             else:
@@ -400,12 +400,23 @@ class CoreScheduler:
                     result = result.turn or ManagerTurn("silent", "")
             if result is not None:
                 self._complete(item, result)
+                self._recycle_completed_interactive_context(item, result)
         self._active_request = None
         self._active_future = None
         self._active_started = None
         if item.session_id in self._released_sessions:
             self._executor.submit(self._release_context, item.session_id)
         self._emit_status()
+
+    def _recycle_completed_interactive_context(self, item, turn):
+        if (item.kind != "user" or item.context is None
+                or turn.kind not in {"reply", "silent"}
+                or getattr(item.context, "_chat_mode", False)
+                or getattr(item.context, "_direct_waiting", False)):
+            return
+        key = self._context_key(item)
+        if self._contexts.get(key) is item.context:
+            self._close_context(key)
 
     def _complete(self, item, turn):
         if item.task_run is not None:
@@ -429,16 +440,24 @@ class CoreScheduler:
     def _close_context(self, key):
         context = self._contexts.pop(key, None)
         if context is not None:
-            if (key.startswith("human:") and not self._stop.is_set()
-                    and self._spare_human_context is None
+            if ((key.startswith("human:") or key == "voice")
+                    and not self._stop.is_set()
                     and callable(getattr(context, "reset_for_new_session", None))):
                 try:
                     context.reset_for_new_session()
                 except Exception:
-                    LOGGER.exception("CORE cannot reuse human session base")
+                    LOGGER.exception("CORE cannot reuse interactive session base")
                 else:
-                    self._spare_human_context = context
-                    return
+                    current = self._spare_human_context
+                    if current is None or context is self.bundle.runtime:
+                        if current is not None and current is not self.bundle.runtime:
+                            current.client.close()
+                        self._spare_human_context = context
+                        return
+                    if current is self.bundle.runtime:
+                        if context is not self.bundle.runtime:
+                            context.client.close()
+                        return
             if context is not self.bundle.runtime:
                 context.client.close()
 
