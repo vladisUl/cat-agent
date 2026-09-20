@@ -23,6 +23,10 @@ class FakeClient:
         self.replies = list(replies)
         self.calls: list[list[dict[str, str]]] = []
         self.reset_calls: list[list[dict[str, str]]] = []
+        self.event_handler = None
+
+    def set_event_handler(self, handler) -> None:
+        self.event_handler = handler
 
     def chat(self, messages: list[dict[str, str]]) -> ChatResponse:
         self.calls.append([dict(item) for item in messages])
