@@ -23,7 +23,7 @@ class LiteRTRuntimeTest(unittest.TestCase):
     def setUp(self) -> None:
         FakeEngine.calls.clear()
 
-    def test_create_engine_passes_ynnpack_option(self) -> None:
+    def test_create_engine_passes_runtime_options(self) -> None:
         backend = object()
         with (
             patch.object(runtime, "_backend", return_value=backend),
@@ -36,7 +36,7 @@ class LiteRTRuntimeTest(unittest.TestCase):
                         Path("model.litertlm"),
                         "cpu",
                         8,
-                        None,
+                        128000,
                         False,
                         enabled,
                         None,
@@ -46,6 +46,7 @@ class LiteRTRuntimeTest(unittest.TestCase):
                     model_path, kwargs = FakeEngine.calls[0]
                     self.assertEqual(model_path, "model.litertlm")
                     self.assertIs(kwargs["backend"], backend)
+                    self.assertEqual(kwargs["max_num_tokens"], 128000)
                     self.assertEqual(kwargs["enable_ynnpack"], enabled)
 
 
