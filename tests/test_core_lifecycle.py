@@ -277,6 +277,33 @@ class RealManagerSchedulingTest(unittest.TestCase):
             self.assertEqual(client.reset_calls, [runtime._base_messages])
             self.assertTrue(any(candidate is runtime for candidate in s._manager_available))
 
+    def test_voice_auto_warms_kv2_when_web_chat_holds_kv1(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
+            child = fixtures.FakeClient([])
+            child.close = Mock()
+            child.set_event_handler = Mock()
+            client.fork = Mock(return_value=child)
+            s = VoiceCoreScheduler(SimpleNamespace(runtime=runtime))
+            try:
+                human = _PriorityRequest("user", "user", "chat", 0, 0, session_id="web")
+                web_context = s._context(human)
+                self.assertIs(web_context, runtime)
+                web_context._chat_mode = True
+
+                voice = _PriorityRequest("user", "voice", "weather", 0, -10, session_id="voice")
+                voice_context = s._context(voice)
+
+                self.assertIsNot(voice_context, web_context)
+                self.assertIs(voice_context.client, child)
+                self.assertTrue(s.manager_kv_snapshot()["kv2"]["ready"])
+                self.assertEqual(client.fork.call_count, 1)
+                self.assertIs(s._contexts["human:web"], web_context)
+                self.assertIs(s._contexts["voice"], voice_context)
+            finally:
+                s._close_all_contexts()
+                s._executor.shutdown(wait=True)
+
     def test_explicit_kv2_warm_keeps_second_context_resident(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
