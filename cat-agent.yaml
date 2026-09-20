@@ -24,7 +24,7 @@ litert:
       ynnpack: true
 
 openai:
-  active_profile: laptop-12b
+  active_profile: cloud
 
   profiles:
     cloud:
@@ -43,8 +43,8 @@ agent:
   count: 3
   manager_max_steps: 12
   agent_max_steps: 12
-  manager_max_output_tokens: 256
-  agent_max_output_tokens: 128
+  manager_max_output_tokens: 128000
+  agent_max_output_tokens: 128000
   temperature: 0.0
   top_p: 1.0
 
@@ -79,4 +79,25 @@ notifications:
 
 # Optional MCP clients. Install .[mcp] and configure servers to enable.
 mcp:
-  servers: []
+  servers:
+    - name: demo
+      enabled: true
+      transport: stdio
+      command: /opt/litert-lm-venv/bin/python3
+      args:
+        - /opt/cat-agent/tests/fixtures/mcp_server.py
+      connect_timeout_seconds: 10
+      call_timeout_seconds: 30
+      reconnect_delay_seconds: 5
+
+    - name: fs
+      enabled: true
+      transport: stdio
+      command: /usr/bin/npx
+      args:
+        - -y
+        - "@modelcontextprotocol/server-filesystem"
+        - /opt/model
+      connect_timeout_seconds: 30
+      call_timeout_seconds: 30
+      reconnect_delay_seconds: 5
