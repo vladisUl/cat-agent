@@ -35,6 +35,7 @@ class FakeScheduler:
         self.human_releases = 0
         self.started = False
         self.active_label = ""
+        self.kv2_warm_requests = 0
 
     def start(self) -> None:
         self.started = True
@@ -53,6 +54,10 @@ class FakeScheduler:
 
     def active_request_label(self) -> str:
         return self.active_label
+
+    def request_manager_kv2_warm(self) -> str:
+        self.kv2_warm_requests += 1
+        return "queued"
 
     def enqueue_external_event(self, event, *, priority: int, coalesce: bool) -> None:
         self.events.append((event, priority, coalesce))
@@ -239,6 +244,24 @@ class CoreServerTest(unittest.TestCase):
                 voice_sock.close()
                 human_reader.close()
                 voice_reader.close()
+                server.close()
+                thread.join(timeout=1.0)
+
+    def test_human_owner_can_request_kv2_warm(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            server, scheduler, thread = self._start(root)
+            sock, reader = self._connect(server.path)
+            try:
+                send(sock, {"type": "acquire", "client": "web"})
+                self.assertEqual(recv(reader)["type"], "acquired")
+                send(sock, {"type": "warm_kv2"})
+                reply = recv(reader)
+                self.assertEqual(reply, {"type": "kv2_warm", "state": "queued"})
+                self.assertEqual(scheduler.kv2_warm_requests, 1)
+            finally:
+                sock.close()
+                reader.close()
                 server.close()
                 thread.join(timeout=1.0)
 
