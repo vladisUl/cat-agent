@@ -177,7 +177,7 @@ class RealManagerSchedulingTest(unittest.TestCase):
                 s._thread.join(timeout=1)
                 self.assertFalse(s._thread.is_alive())
                 self.assertEqual(observed, [{}])
-                self.assertIsNone(s._spare_human_context)
+                self.assertIs(s._spare_human_context, runtime)
                 client.fork.assert_not_called()
 
                 first = _PriorityRequest("user", "voice", "hello", 0, -10, session_id="first")
@@ -191,35 +191,39 @@ class RealManagerSchedulingTest(unittest.TestCase):
             for child in children:
                 child.close.assert_called_once()
 
-    def test_warmed_human_context_reused_without_history_or_new_fork(self):
+    def test_warmed_manager_runtime_is_reused_for_human_sessions(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
-            child = fixtures.FakeClient([])
-            child.set_event_handler = Mock()
-            child.close = Mock()
-            client.fork = Mock(return_value=child)
+            client.fork = Mock()
+            client.close = Mock()
             s = CoreScheduler(SimpleNamespace(runtime=runtime))
             self.addCleanup(s._executor.shutdown, wait=True)
-            s._prepare_human_context()
+
             first = _PriorityRequest("user", "user", "one", 0, 0, session_id="old")
             context = s._context(first)
+            self.assertIs(context, runtime)
+            client.fork.assert_not_called()
+
             context.messages.append({"role": "user", "content": "private history"})
             context._chat_mode = True
             context._direct_repeated = {"private command": 1}
             context._direct_runtime._uncertain_commands = {"private command"}
             s._release_context("old")
-            second = _PriorityRequest("user", "user", "two", 0, 0, session_id="new")
-            self.assertIs(s._context(second), context)
-            self.assertEqual(client.fork.call_count, 1)
-            self.assertEqual(child.reset_calls, [runtime._base_messages])
+
+            self.assertIs(s._spare_human_context, runtime)
+            self.assertEqual(client.reset_calls, [runtime._base_messages])
             self.assertEqual(context.messages, runtime._base_messages)
             self.assertFalse(context._chat_mode)
             self.assertEqual(context._direct_repeated, {})
             self.assertEqual(context._direct_runtime._uncertain_commands, set())
-            child.close.assert_not_called()
+
+            second = _PriorityRequest("user", "user", "two", 0, 0, session_id="new")
+            self.assertIs(s._context(second), runtime)
+            client.fork.assert_not_called()
+
             s._stop.set()
             s._close_all_contexts()
-            child.close.assert_called_once()
+            client.close.assert_not_called()
 
     def test_failed_kv_reset_discards_context(self):
         s = CoreScheduler(SimpleNamespace(runtime=SimpleNamespace()))
@@ -249,10 +253,12 @@ class RealManagerSchedulingTest(unittest.TestCase):
 
     def test_real_manager_tool_flow_resumes_after_voice(self):
         with tempfile.TemporaryDirectory() as temp:
-            runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
-            profiles = iter([["/work#printf terminal-result", "REPLY\nterminal-result"], ["REPLY\nvoice-result"]])
+            runtime, client = fixtures.AssistantManagerTest()._runtime(
+                Path(temp),
+                ["/work#printf terminal-result", "REPLY\nterminal-result"],
+            )
             def fork(label):
-                child = fixtures.FakeClient(next(profiles))
+                child = fixtures.FakeClient(["REPLY\nvoice-result"])
                 child.set_event_handler = lambda h: None
                 child.close = lambda: None
                 return child
