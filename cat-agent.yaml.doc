@@ -153,7 +153,8 @@ mcp.servers — список MCP-серверов; по умолчанию пу�
 description. manager=true (по умолчанию для совместимости) добавляет полные
 schemas tools этого MCP в BASE менеджера и разрешает ему прямые вызовы.
 manager=false оставляет в BASE менеджера только capability mcp:<name> и description;
-полные schemas получает только агент, которому назначен mcp:<name>.
+для manager=false непустой однострочный description обязателен. Полные schemas
+получает только агент, которому назначен mcp:<name>.
 transport=stdio: command и args (список строк).
 transport=streamable_http: url (HTTP/HTTPS).
 Таймауты в секундах: connect_timeout_seconds=10, call_timeout_seconds=30.
