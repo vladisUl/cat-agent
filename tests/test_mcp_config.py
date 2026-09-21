@@ -38,7 +38,7 @@ class McpConfigTest(unittest.TestCase):
     def test_invalid_config(self):
         for updates in ({"name":"a:b"}, {"enabled":"false"}, {"transport":"sse"},
                         {"args":"server.py"}, {"command":""}, {"call_timeout_seconds":0},
-                        {"connect_timeout_seconds":float("nan")}, {"manager":"false"},
+                        {"connect_timeout_seconds":float("nan")}, {"manager":"false"}, {"manager":False},
                         {"description":123}, {"description":"bad" + "\n" + "line"}, {"unknown":1}):
             with self.subTest(updates=updates), self.assertRaises(ValueError):
                 parse_mcp_config({"servers":[dict(self.entry, **updates)]})
