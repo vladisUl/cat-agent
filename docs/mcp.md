@@ -54,7 +54,8 @@ for backward compatibility. With `manager: true`, full tool schemas are added to
 Manager BASE and the manager may call those leaf tools directly. With
 `manager: false`, Manager BASE contains only the short `mcp:<server>` capability
 and `description`; the full frozen schemas are supplied only to an agent assigned
-that capability. Names must be unique and
+that capability. A non-empty single-line `description` is required when
+`manager: false`. Names must be unique and
 match `[a-z][a-z0-9_-]*`. Tool names must contain only letters, digits, `_`, `-`
 and `.`. Conflicting definitions from one server are rejected, never overwritten.
 
