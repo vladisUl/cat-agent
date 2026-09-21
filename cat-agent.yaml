@@ -92,14 +92,3 @@ mcp:
       connect_timeout_seconds: 10
       call_timeout_seconds: 30
       reconnect_delay_seconds: 5
-    - name: excel
-      enabled: true
-      manager: false
-      description: "Работа с Excel-файлами: чтение, запись, листы, формулы, таблицы, форматирование и диаграммы."
-      transport: stdio
-      command: /opt/mcp_env/bin/excel-mcp-server
-      args:
-        - stdio
-      connect_timeout_seconds: 15
-      call_timeout_seconds: 30
-      reconnect_delay_seconds: 5
