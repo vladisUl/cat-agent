@@ -87,69 +87,130 @@ def _read_core_reply(reader, expected_types: set[str]) -> dict[str, object]:
     raise RuntimeError("CORE reply not received")
 
 
-def _litert_snapshot() -> dict[str, object]:
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(2.0)
-            sock.connect(str(LITERT_CORE_SOCKET))
-            reader = sock.makefile("r", encoding="utf-8", newline="\n")
+class _LiteRTBridge:
+    """Persistent read/control channel to the LiteRT CORE.
+
+    It never owns the LiteRT human session while idle. Snapshot requests are
+    read-only. KV2 warm temporarily acquires the LiteRT human session and
+    releases it immediately after the command is accepted.
+    """
+
+    def __init__(self) -> None:
+        self.sock: socket.socket | None = None
+        self.reader = None
+        self._lock = threading.Lock()
+
+    def _ensure_connected_locked(self) -> None:
+        if self.sock is not None and self.reader is not None:
+            return
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(3.0)
+        sock.connect(str(LITERT_CORE_SOCKET))
+        self.sock = sock
+        self.reader = sock.makefile("r", encoding="utf-8", newline="\n")
+
+    def _close_locked(self) -> None:
+        reader, sock = self.reader, self.sock
+        self.reader = None
+        self.sock = None
+        if reader is not None:
             try:
-                sock.sendall(_encode({"type": "snapshot"}))
-                reply = _read_core_reply(reader, {"snapshot", "error"})
-            finally:
                 reader.close()
-        if reply.get("type") == "snapshot":
-            return {
-                "type": "litert_status",
-                "available": True,
-                "status": reply.get("status", {}),
-            }
-        return {"type": "litert_status", "available": False, "status": {}}
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
-        return {"type": "litert_status", "available": False, "status": {}}
-
-
-def _warm_litert_kv2() -> dict[str, object]:
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(3.0)
-            sock.connect(str(LITERT_CORE_SOCKET))
-            reader = sock.makefile("r", encoding="utf-8", newline="\n")
+            except OSError:
+                pass
+        if sock is not None:
             try:
-                sock.sendall(_encode({"type": "acquire", "client": "web-litert-control"}))
-                acquired = _read_core_reply(reader, {"acquired", "busy", "error"})
-                if acquired.get("type") != "acquired":
+                sock.close()
+            except OSError:
+                pass
+
+    def _send_locked(
+        self,
+        payload: dict[str, object],
+        expected_types: set[str],
+    ) -> dict[str, object]:
+        self._ensure_connected_locked()
+        assert self.sock is not None
+        assert self.reader is not None
+        self.sock.sendall(_encode(payload))
+        return _read_core_reply(self.reader, expected_types)
+
+    def snapshot(self) -> dict[str, object]:
+        with self._lock:
+            for attempt in range(2):
+                try:
+                    reply = self._send_locked(
+                        {"type": "snapshot"},
+                        {"snapshot", "error"},
+                    )
+                    if reply.get("type") == "snapshot":
+                        return {
+                            "type": "litert_status",
+                            "available": True,
+                            "status": reply.get("status", {}),
+                        }
+                    return {
+                        "type": "litert_status",
+                        "available": False,
+                        "status": {},
+                    }
+                except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+                    self._close_locked()
+                    if attempt:
+                        break
+            return {"type": "litert_status", "available": False, "status": {}}
+
+    def warm_kv2(self) -> dict[str, object]:
+        with self._lock:
+            acquired = False
+            try:
+                reply = self._send_locked(
+                    {"type": "acquire", "client": "web-litert-control"},
+                    {"acquired", "busy", "error"},
+                )
+                if reply.get("type") != "acquired":
                     return {
                         "type": "litert_kv2_warm",
                         "state": "busy",
-                        "error": acquired.get("text") or acquired.get("error") or "LiteRT занят",
+                        "error": reply.get("text")
+                        or reply.get("error")
+                        or "LiteRT занят",
                     }
+                acquired = True
 
-                sock.sendall(_encode({"type": "warm_kv2"}))
-                reply = _read_core_reply(reader, {"kv2_warm", "busy", "error"})
-                try:
-                    sock.sendall(_encode({"type": "release"}))
-                except OSError:
-                    pass
+                reply = self._send_locked(
+                    {"type": "warm_kv2"},
+                    {"kv2_warm", "busy", "error"},
+                )
+                if reply.get("type") == "kv2_warm":
+                    return {
+                        "type": "litert_kv2_warm",
+                        "state": str(reply.get("state", "queued")),
+                    }
+                return {
+                    "type": "litert_kv2_warm",
+                    "state": "error",
+                    "error": reply.get("text")
+                    or reply.get("error")
+                    or "Не удалось запустить прогрев LiteRT KV2",
+                }
+            except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                self._close_locked()
+                return {
+                    "type": "litert_kv2_warm",
+                    "state": "unavailable",
+                    "error": str(exc),
+                }
             finally:
-                reader.close()
+                if acquired and self.sock is not None:
+                    try:
+                        self._send_locked({"type": "release"}, {"released", "error"})
+                    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+                        self._close_locked()
 
-        if reply.get("type") == "kv2_warm":
-            return {
-                "type": "litert_kv2_warm",
-                "state": str(reply.get("state", "queued")),
-            }
-        return {
-            "type": "litert_kv2_warm",
-            "state": "error",
-            "error": reply.get("text") or reply.get("error") or "Не удалось запустить прогрев LiteRT KV2",
-        }
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
-        return {
-            "type": "litert_kv2_warm",
-            "state": "unavailable",
-            "error": str(exc),
-        }
+    def close(self) -> None:
+        with self._lock:
+            self._close_locked()
 
 
 class _CoreBridge:
@@ -160,6 +221,7 @@ class _CoreBridge:
         self._send_web_lock = threading.Lock()
         self._relay_thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self.litert = _LiteRTBridge()
 
     def connect(self) -> None:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -242,6 +304,7 @@ class _CoreBridge:
             except OSError:
                 pass
 
+        self.litert.close()
         self._relay_thread = None
         self.reader = None
         self.sock = None
@@ -265,14 +328,14 @@ def _handle_websocket(websocket: Any) -> None:
 
             message_type = str(payload.get("type", ""))
             if message_type == "litert_snapshot":
-                bridge.send_web(_litert_snapshot())
+                bridge.send_web(bridge.litert.snapshot())
                 continue
 
             if message_type == "warm_litert_kv2":
                 if CORE_SOCKET == LITERT_CORE_SOCKET:
                     bridge.send_core({"type": "warm_kv2"})
                 else:
-                    bridge.send_web(_warm_litert_kv2())
+                    bridge.send_web(bridge.litert.warm_kv2())
                 continue
 
             bridge.send_core(payload)
