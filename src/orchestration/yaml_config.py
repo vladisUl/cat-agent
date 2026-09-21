@@ -160,6 +160,7 @@ class NotificationsConfig:
     firebase_credentials: str
     firebase_tokens: str
     firebase_title: str
+    firebase_channel_id: str
     ttl: int
 
 
@@ -376,12 +377,19 @@ def _parse_notifications(data: Any) -> NotificationsConfig:
     _check_keys(
         section,
         "notifications",
-        {"firebase_credentials", "firebase_tokens", "firebase_title", "ttl"},
+        {
+            "firebase_credentials",
+            "firebase_tokens",
+            "firebase_title",
+            "firebase_channel_id",
+            "ttl",
+        },
     )
     return NotificationsConfig(
         firebase_credentials=_string(section, "firebase_credentials", "notifications"),
         firebase_tokens=_string(section, "firebase_tokens", "notifications"),
         firebase_title=_string(section, "firebase_title", "notifications"),
+        firebase_channel_id=_string(section, "firebase_channel_id", "notifications"),
         ttl=_int(section, "ttl", "notifications", minimum=0),
     )
 
