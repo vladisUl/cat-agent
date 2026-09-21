@@ -30,6 +30,8 @@ mcp:
   servers:
     - name: demo
       enabled: true
+      manager: true
+      description: Небольшой demo MCP, доступный Гене напрямую и агентам.
       transport: stdio
       command: /opt/litert-lm-venv/bin/python3
       args: [/opt/cat-agent/tests/fixtures/mcp_server.py]
@@ -39,13 +41,20 @@ mcp:
 
     - name: remote
       enabled: false
+      manager: false
+      description: Удалённый специализированный MCP для агентских заданий.
       transport: streamable_http
       url: http://127.0.0.1:8790/mcp
       connect_timeout_seconds: 10
       call_timeout_seconds: 30
 ```
 
-`enabled: false` does not connect or spawn a process. Names must be unique and
+`enabled: false` does not connect or spawn a process. `manager` defaults to `true`
+for backward compatibility. With `manager: true`, full tool schemas are added to
+Manager BASE and the manager may call those leaf tools directly. With
+`manager: false`, Manager BASE contains only the short `mcp:<server>` capability
+and `description`; the full frozen schemas are supplied only to an agent assigned
+that capability. Names must be unique and
 match `[a-z][a-z0-9_-]*`. Tool names must contain only letters, digits, `_`, `-`
 and `.`. Conflicting definitions from one server are rejected, never overwritten.
 
@@ -76,8 +85,17 @@ standard proxy environment; a SOCKS proxy requires its optional SOCKS dependency
 Before building/warming BASE, every enabled server gets one bounded discovery
 attempt (servers are contacted concurrently). The SDK obtains capabilities and
 all pages of `tools/list`. The catalog is then frozen for the lifetime of CORE.
-Manager gets this catalog in BASE; agents get the tools assigned to their task.
-Descriptions and schemas are frozen as well as names.
+Descriptions and schemas are frozen as well as names. Each enabled server also
+produces a generated diagnostic snapshot in `/opt/cat-agent/mcp/<server>.txt`.
+The snapshot is derived from the frozen `tools/list` result and is never an input
+or configuration source.
+
+Manager sees one short capability `mcp:<server>` for every discovered server.
+Only servers configured with `manager: true` additionally put their full leaf
+tool schemas into Manager BASE and grant direct execution. Assigning
+`mcp:<server>` to an agent expands that capability to the full frozen tool set
+for that server and grants only those MCP leaf calls. Existing saved tasks that
+name a full leaf tool such as `mcp:demo:echo` remain valid.
 
 If a server was unreachable at startup, its tools are absent until CORE restart.
 A later connection does not add them. If a discovered server goes down, its tools
@@ -122,10 +140,17 @@ wait, just like other tool calls; the CORE scheduler is not rewritten.
 
 ## TASK and multiple COREs
 
-Full names can be assigned using the existing task syntax:
+Prefer assigning the server capability when an agent may choose among that MCP
+server's tools:
 
 ```text
-/work#task_timer.sh 0 mcp:demo:echo -- "Повтори через инструмент echo текст Проверка MCP"
+/work#task_timer.sh 0 mcp:demo -- "Повтори текст Проверка MCP"
+/work#task_timer.sh 60 mcp:demo -- "Повтори текст Проверка MCP"
+```
+
+A full leaf name is still accepted for narrow or previously saved tasks:
+
+```text
 /work#task_timer.sh 60 mcp:demo:echo -- "Повтори через инструмент echo текст Проверка MCP"
 ```
 
