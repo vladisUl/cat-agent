@@ -87,6 +87,14 @@ class _ProtocolLogFilter(logging.Filter):
                         args[-1],
                     )
 
+            if message == "%s step %d TOOL RESULT operation=mcp command=%s\n%s":
+                if len(args) >= 4:
+                    return self._replace(
+                        record,
+                        f"SYSTEM -> {str(args[0]).upper()} %r",
+                        args[-1],
+                    )
+
             if message == "%s step %d DEFERRED TOOL RESULT command=%s\n%s":
                 if len(args) >= 4:
                     return self._replace(
