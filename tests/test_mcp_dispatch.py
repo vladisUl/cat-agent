@@ -8,6 +8,7 @@ from unittest.mock import patch
 from orchestration.agent import AgentWorker
 from orchestration.assistant_manager import AssistantManagerRuntime
 from orchestration.manager import AutonomousTaskExecution
+from orchestration.mcp_config import McpServerConfig
 from orchestration.model_client import ChatResponse
 from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
@@ -24,8 +25,12 @@ NAME='mcp:test:echo'
 
 
 class FakeMcp:
-    def __init__(self):
+    def __init__(self, *, manager=True):
         self.calls=[]
+        self.configs=(McpServerConfig(
+            'test', True, 'stdio', 'unused',
+            manager=manager, description='Echo service',
+        ),)
         self.response='MCP_RESULT\n{"content":[{"type":"text","text":"real answer"}],"isError":false}'
     def skills(self):
         return (Skill(NAME,'Echo','Call /work#'+NAME+' {JSON}; schema: {"type":"object"}'),)
@@ -142,6 +147,69 @@ class McpDispatchTest(unittest.TestCase):
         with patch('orchestration.assistant_manager.read_picture',return_value=[{'type':'image_url','image_url':{'url':'test'}}]):
             self.assertIsInstance(runtime._execute_work_command('read_pic.sh image.png'),list)
         self.assertEqual(self.mcp.calls,[])
+
+    def test_agent_only_server_stays_small_in_manager_and_expands_for_agent(self):
+        mcp=FakeMcp(manager=False)
+        catalog=ToolCatalog(SkillBase(self.prompts/'prompt_base.txt'),mcp)
+        dispatcher=ToolDispatcher(mcp)
+        manager=FakeModel([])
+        agent=FakeModel(['/work#mcp:test:echo {"text":"x"}','{"result":"real answer"}'])
+        prompts=PromptStore(self.prompts,1)
+        worker=AgentWorker('agent1',agent,prompts,self.root,max_steps=5,max_file_bytes=4096,
+                           command_timeout_seconds=2,tool_dispatcher=dispatcher)
+        runtime=AssistantManagerRuntime(manager,catalog,prompts,AgentPool([worker]),
+            SystemRuntime(TaskStore(self.root/'agent-only-tasks.txt')),max_steps=6,
+            tool_dispatcher=dispatcher)
+
+        base=runtime._base_messages[0]['content']
+        self.assertIn('mcp:test — Echo service [agent-only]',base)
+        self.assertNotIn(NAME,base)
+        self.assertNotIn(NAME,runtime._direct_runtime.skill_names)
+        denied=dispatcher.dispatch('mcp:test:echo {"text":"x"}',runtime._direct_runtime)
+        self.assertIn('not assigned',denied)
+
+        capability=catalog.require(('mcp:test',))
+        self.assertIn(NAME,capability[0].prompt)
+        with patch.object(CommandRuntime,'execute',side_effect=AssertionError('shell reached')):
+            outcome=worker.start('echo',capability)
+        self.assertEqual(outcome.text,'real answer')
+        self.assertEqual(mcp.calls,[(NAME,{'text':'x'})])
+
+    def test_server_capability_can_be_saved_and_resolved_after_reload(self):
+        mcp=FakeMcp(manager=False)
+        catalog=ToolCatalog(SkillBase(self.prompts/'prompt_base.txt'),mcp)
+        dispatcher=ToolDispatcher(mcp)
+        manager=FakeModel([])
+        agent=FakeModel(['/work#mcp:test:echo {"text":"x"}','{"done":true}'])
+        prompts=PromptStore(self.prompts,1)
+        worker=AgentWorker('agent1',agent,prompts,self.root,max_steps=5,max_file_bytes=4096,
+                           command_timeout_seconds=2,tool_dispatcher=dispatcher)
+        runtime=AssistantManagerRuntime(manager,catalog,prompts,AgentPool([worker]),
+            SystemRuntime(TaskStore(self.root/'cap-tasks.txt')),max_steps=6,
+            tool_dispatcher=dispatcher)
+
+        result=runtime._execute_work_command('task_timer.sh 60 mcp:test -- "echo periodically"')
+        self.assertEqual(result,'SYSTEM_OK\nTASK 1 created and started')
+        tasks=TaskStore(self.root/'cap-tasks.txt')
+        task=tasks.list()[0]
+        self.assertEqual(task.skills,('mcp:test',))
+        runtime.system_runtime=SystemRuntime(tasks)
+        execution=runtime.begin_autonomous_task(SystemEvent('timer','test','',0,task_id=task.task_id))
+        self.assertIsInstance(execution,AutonomousTaskExecution)
+        self.assertIsNone(runtime.step_autonomous_task(execution))
+        self.assertIsNotNone(runtime.step_autonomous_task(execution))
+        self.assertEqual(mcp.calls,[(NAME,{'text':'x'})])
+
+    def test_mcp_snapshot_contains_frozen_server_tools(self):
+        mcp=FakeMcp(manager=False)
+        catalog=ToolCatalog(SkillBase(self.prompts/'prompt_base.txt'),mcp)
+        directory=self.root/'mcp'
+        catalog.write_snapshots(directory)
+        text=(directory/'test.txt').read_text(encoding='utf-8')
+        self.assertIn('manager: false',text)
+        self.assertIn('description: Echo service',text)
+        self.assertIn(NAME,text)
+        self.assertIn('schema',text)
 
     def test_fork_shares_catalog_dispatcher_and_base(self):
         runtime,_,_,_=self.runtime([])
