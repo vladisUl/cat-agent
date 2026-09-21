@@ -57,7 +57,10 @@ def parse_mcp_config(raw: object) -> tuple[McpServerConfig, ...]:
         description = item.get("description", "")
         if not isinstance(description, str) or "\n" in description or "\r" in description:
             raise ValueError(f"mcp {name}: description must be a single-line string")
-        values["description"] = description.strip()
+        description = description.strip()
+        if not manager and not description:
+            raise ValueError(f"mcp {name}: description is required when manager=false")
+        values["description"] = description
         if transport == "stdio":
             if not isinstance(item.get("command"), str) or not item["command"].strip():
                 raise ValueError(f"mcp {name}: command is required")
