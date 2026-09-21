@@ -73,7 +73,8 @@ class ManagerRuntime:
         template = self.pool.get("agent1")
         if template is None:
             raise RuntimeError("manager requires agent1 runtime template")
-        self._manager_skills = self.skill_base.require(self.skill_base.names())
+        manager_names = getattr(self.skill_base, "manager_names", self.skill_base.names)()
+        self._manager_skills = self.skill_base.require(manager_names)
         self._manager_workspace = template.workspace
         self._direct_runtime = CommandRuntime(
             template.workspace,
