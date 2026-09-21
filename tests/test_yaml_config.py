@@ -46,6 +46,7 @@ class YamlConfigTest(unittest.TestCase):
         self.assertEqual(config.openai.active.base_url, "http://192.168.0.129:5001/v1")
         self.assertEqual(config.openai.active.model, "koboldcpp/gemma-4-12B-it-Q4_K_M")
         self.assertEqual(config.openai.active.readiness, "openai")
+        self.assertEqual(config.notifications.firebase_channel_id, "101")
 
     def test_active_profile_controls_litert_export(self) -> None:
         source = yaml.safe_load((self.config_path).read_text(encoding="utf-8"))
@@ -110,6 +111,7 @@ class YamlConfigTest(unittest.TestCase):
             "export CAT_AGENT_FIREBASE_CREDENTIALS=/opt/firebase/zigbee.json",
             "export CAT_AGENT_FIREBASE_TOKENS=/opt/firebase/tokens.txt",
             "export CAT_AGENT_FIREBASE_TITLE='Гена'",
+            "export CAT_AGENT_FIREBASE_CHANNEL_ID=101",
             "export CAT_AGENT_FIREBASE_TTL=3600",
         )
         for line in expected:
