@@ -27,11 +27,19 @@ class McpConfigTest(unittest.TestCase):
         self.assertEqual(config[0].args, ("server.py",))
         self.assertEqual(config[1].headers_env, (("Authorization", "MCP_AUTH"),))
         self.assertEqual(config[0].call_timeout_seconds, 30)
+        self.assertTrue(config[0].manager)
+        self.assertEqual(config[0].description, "")
+        explicit = parse_mcp_config({"servers":[dict(
+            self.entry, manager=False, description="Excel work"
+        )]})
+        self.assertFalse(explicit[0].manager)
+        self.assertEqual(explicit[0].description, "Excel work")
 
     def test_invalid_config(self):
         for updates in ({"name":"a:b"}, {"enabled":"false"}, {"transport":"sse"},
                         {"args":"server.py"}, {"command":""}, {"call_timeout_seconds":0},
-                        {"connect_timeout_seconds":float("nan")}, {"unknown":1}):
+                        {"connect_timeout_seconds":float("nan")}, {"manager":"false"},
+                        {"description":123}, {"description":"bad\\nline"}, {"unknown":1}):
             with self.subTest(updates=updates), self.assertRaises(ValueError):
                 parse_mcp_config({"servers":[dict(self.entry, **updates)]})
         with self.assertRaisesRegex(ValueError, "Duplicate"):
