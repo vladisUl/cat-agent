@@ -150,7 +150,8 @@ MCP (необязательно)
 ------------------
 mcp.servers — список MCP-серверов; по умолчанию пустой.
 Каждая запись: name, enabled, transport; также manager=true|false и короткое
-description. manager=true (по умолчанию для совместимости) добавляет полные
+description. Значение description всегда записывается в YAML в двойных кавычках,
+даже если конкретный текст допустим без них. manager=true (по умолчанию для совместимости) добавляет полные
 schemas tools этого MCP в BASE менеджера и разрешает ему прямые вызовы.
 manager=false оставляет в BASE менеджера только capability mcp:<name> и description;
 для manager=false непустой однострочный description обязателен. Полные schemas
