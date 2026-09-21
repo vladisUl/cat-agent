@@ -149,7 +149,11 @@ notifications:
 MCP (необязательно)
 ------------------
 mcp.servers — список MCP-серверов; по умолчанию пустой.
-Каждая запись: name, enabled, transport.
+Каждая запись: name, enabled, transport; также manager=true|false и короткое
+description. manager=true (по умолчанию для совместимости) добавляет полные
+schemas tools этого MCP в BASE менеджера и разрешает ему прямые вызовы.
+manager=false оставляет в BASE менеджера только capability mcp:<name> и description;
+полные schemas получает только агент, которому назначен mcp:<name>.
 transport=stdio: command и args (список строк).
 transport=streamable_http: url (HTTP/HTTPS).
 Таймауты в секундах: connect_timeout_seconds=10, call_timeout_seconds=30.
@@ -157,5 +161,7 @@ reconnect_delay_seconds=5 — задержка повторного подклю
 env для stdio и headers_env для HTTP — отображения имени переменной/заголовка
 в ИМЯ переменной окружения CORE, а не в значение секрета.
 Каталог tools фиксируется при старте CORE, до прогрева BASE.
+Из frozen tools/list автоматически создаётся диагностический снимок
+/opt/cat-agent/mcp/<name>.txt; это не источник конфигурации.
 Reconnect не меняет каталог; изменения tools требуют restart CORE.
 Подробности, примеры и проверка: docs/mcp.md.
