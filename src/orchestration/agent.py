@@ -342,6 +342,13 @@ class AgentWorker:
 
         mcp_result = self.tool_dispatcher.dispatch(directive.command, self._runtime)
         if mcp_result is not None:
+            LOGGER.info(
+                "%s step %d TOOL RESULT operation=mcp command=%s\n%s",
+                self.agent_id,
+                step,
+                directive.command,
+                mcp_result,
+            )
             self._messages.append({"role": "user", "content": mcp_result})
             return self._continue_or_limit(step)
 
