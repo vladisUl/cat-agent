@@ -82,6 +82,8 @@ mcp:
   servers:
     - name: demo
       enabled: true
+      manager: false
+      description: Тестовый MCP-сервер для выполнения demo-инструментов агентом. 
       transport: stdio
       command: /opt/litert-lm-venv/bin/python3
       args:
@@ -89,15 +91,14 @@ mcp:
       connect_timeout_seconds: 10
       call_timeout_seconds: 30
       reconnect_delay_seconds: 5
-
-    - name: fs
+    - name: excel
       enabled: true
+      manager: false
+      description: "Работа с Excel-файлами: чтение, запись, листы, формулы, таблицы, форматирование и диаграммы."
       transport: stdio
-      command: /usr/bin/npx
+      command: /opt/mcp_env/bin/excel-mcp-server
       args:
-        - -y
-        - "@modelcontextprotocol/server-filesystem"
-        - /opt/model
-      connect_timeout_seconds: 30
+        - stdio
+      connect_timeout_seconds: 15
       call_timeout_seconds: 30
       reconnect_delay_seconds: 5
