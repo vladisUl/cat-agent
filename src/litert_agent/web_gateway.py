@@ -21,8 +21,22 @@ WEB_HOST = os.environ.get("CAT_AGENT_WEB_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("CAT_AGENT_HTTP_PORT", "8080"))
 WS_PORT = int(os.environ.get("CAT_AGENT_WS_PORT", "8765"))
 CORE_SOCKET = Path(os.environ.get("CAT_AGENT_CORE_SOCKET", str(DEFAULT_CORE_SOCKET)))
+LITERT_CORE_SOCKET = Path(
+    os.environ.get("CAT_AGENT_LITERT_CORE_SOCKET", "/run/cat-agent/litert.sock")
+)
 
-_ALLOWED_BROWSER_TYPES = {"user", "snapshot", "who", "ping", "acquire", "release", "notification_ack", "warm_kv2"}
+_ALLOWED_BROWSER_TYPES = {
+    "user",
+    "snapshot",
+    "who",
+    "ping",
+    "acquire",
+    "release",
+    "notification_ack",
+    "warm_kv2",
+    "litert_snapshot",
+    "warm_litert_kv2",
+}
 
 
 def _browser_to_core(raw: str | bytes) -> dict[str, object]:
@@ -60,6 +74,82 @@ def _encode(payload: dict[str, object]) -> bytes:
     return (
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
     ).encode("utf-8")
+
+
+def _read_core_reply(reader, expected_types: set[str]) -> dict[str, object]:
+    for _ in range(16):
+        raw = reader.readline()
+        if not raw:
+            raise RuntimeError("CORE closed connection")
+        item = json.loads(raw)
+        if isinstance(item, dict) and str(item.get("type", "")) in expected_types:
+            return item
+    raise RuntimeError("CORE reply not received")
+
+
+def _litert_snapshot() -> dict[str, object]:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(2.0)
+            sock.connect(str(LITERT_CORE_SOCKET))
+            reader = sock.makefile("r", encoding="utf-8", newline="\n")
+            try:
+                sock.sendall(_encode({"type": "snapshot"}))
+                reply = _read_core_reply(reader, {"snapshot", "error"})
+            finally:
+                reader.close()
+        if reply.get("type") == "snapshot":
+            return {
+                "type": "litert_status",
+                "available": True,
+                "status": reply.get("status", {}),
+            }
+        return {"type": "litert_status", "available": False, "status": {}}
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+        return {"type": "litert_status", "available": False, "status": {}}
+
+
+def _warm_litert_kv2() -> dict[str, object]:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(3.0)
+            sock.connect(str(LITERT_CORE_SOCKET))
+            reader = sock.makefile("r", encoding="utf-8", newline="\n")
+            try:
+                sock.sendall(_encode({"type": "acquire", "client": "web-litert-control"}))
+                acquired = _read_core_reply(reader, {"acquired", "busy", "error"})
+                if acquired.get("type") != "acquired":
+                    return {
+                        "type": "litert_kv2_warm",
+                        "state": "busy",
+                        "error": acquired.get("text") or acquired.get("error") or "LiteRT занят",
+                    }
+
+                sock.sendall(_encode({"type": "warm_kv2"}))
+                reply = _read_core_reply(reader, {"kv2_warm", "busy", "error"})
+                try:
+                    sock.sendall(_encode({"type": "release"}))
+                except OSError:
+                    pass
+            finally:
+                reader.close()
+
+        if reply.get("type") == "kv2_warm":
+            return {
+                "type": "litert_kv2_warm",
+                "state": str(reply.get("state", "queued")),
+            }
+        return {
+            "type": "litert_kv2_warm",
+            "state": "error",
+            "error": reply.get("text") or reply.get("error") or "Не удалось запустить прогрев LiteRT KV2",
+        }
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "type": "litert_kv2_warm",
+            "state": "unavailable",
+            "error": str(exc),
+        }
 
 
 class _CoreBridge:
@@ -172,6 +262,19 @@ def _handle_websocket(websocket: Any) -> None:
             except ValueError as exc:
                 bridge.send_web({"type": "error", "error": str(exc)})
                 continue
+
+            message_type = str(payload.get("type", ""))
+            if message_type == "litert_snapshot":
+                bridge.send_web(_litert_snapshot())
+                continue
+
+            if message_type == "warm_litert_kv2":
+                if CORE_SOCKET == LITERT_CORE_SOCKET:
+                    bridge.send_core({"type": "warm_kv2"})
+                else:
+                    bridge.send_web(_warm_litert_kv2())
+                continue
+
             bridge.send_core(payload)
     except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
         try:
