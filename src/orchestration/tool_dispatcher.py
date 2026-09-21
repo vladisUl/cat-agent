@@ -22,8 +22,8 @@ class ToolDispatcher:
                                    object_pairs_hook=self._unique_keys)
             if not isinstance(arguments, dict):
                 raise ValueError("MCP arguments must be a JSON object")
-            if name not in runtime.skill_names:
-                raise ValueError("MCP tool is unknown or not assigned to this agent")
+            if not self._assigned(name, runtime.skill_names):
+                raise ValueError("MCP tool is unknown or not assigned to this runtime")
             if self.mcp_runtime is None:
                 raise ValueError("MCP is not configured")
         except (ValueError, RecursionError) as exc:
@@ -37,6 +37,17 @@ class ToolDispatcher:
             uncertain.add(key)
             runtime._uncertain_commands = uncertain
         return result
+
+    @staticmethod
+    def _assigned(name: str, skill_names) -> bool:
+        if name in skill_names:
+            return True
+        parts = name.split(":", 2)
+        return (
+            len(parts) == 3
+            and parts[0] == "mcp"
+            and f"mcp:{parts[1]}" in skill_names
+        )
 
     @staticmethod
     def _reject_constant(value):
