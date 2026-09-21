@@ -75,6 +75,7 @@ notifications:
   firebase_credentials: /opt/firebase/zigbee.json
   firebase_tokens: /opt/firebase/tokens.txt
   firebase_title: Гена
+  firebase_channel_id: "101"
   ttl: 3600
 
 # Optional MCP clients. Install .[mcp] and configure servers to enable.
