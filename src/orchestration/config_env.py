@@ -40,6 +40,7 @@ def _export_common(config: AppConfig, *, reasoning_effort: str) -> None:
     _export("CAT_AGENT_FIREBASE_CREDENTIALS", notifications.firebase_credentials)
     _export("CAT_AGENT_FIREBASE_TOKENS", notifications.firebase_tokens)
     _export("CAT_AGENT_FIREBASE_TITLE", notifications.firebase_title)
+    _export("CAT_AGENT_FIREBASE_CHANNEL_ID", notifications.firebase_channel_id)
     _export("CAT_AGENT_FIREBASE_TTL", notifications.ttl)
 
 
