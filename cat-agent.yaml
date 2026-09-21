@@ -82,6 +82,8 @@ mcp:
   servers:
     - name: demo
       enabled: true
+      manager: true
+      description: "Тестовый MCP-сервер cat-agent."
       transport: stdio
       command: /opt/litert-lm-venv/bin/python3
       args:
@@ -92,6 +94,8 @@ mcp:
 
     - name: fs
       enabled: true
+      manager: true
+      description: "Доступ к файлам рабочего каталога через MCP."
       transport: stdio
       command: /usr/bin/npx
       args:
