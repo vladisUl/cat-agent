@@ -117,11 +117,12 @@ class ToolCatalog:
         expected: dict[str, str] = {}
         for server, config in self._configs.items():
             tools = self._server_skills.get(server, ())
+            description = config.description.strip() or f"MCP server {server}"
             lines = [
                 "# Generated from MCP tools/list at CORE startup. Do not edit.",
                 f"server: {server}",
                 f"manager: {'true' if config.manager else 'false'}",
-                f"description: {config.description.strip()}",
+                f"description: {description}",
                 f"tools: {len(tools)}",
                 "",
             ]
