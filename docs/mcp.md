@@ -31,7 +31,7 @@ mcp:
     - name: demo
       enabled: true
       manager: true
-      description: Небольшой demo MCP, доступный Гене напрямую и агентам.
+      description: "Небольшой demo MCP, доступный Гене напрямую и агентам."
       transport: stdio
       command: /opt/litert-lm-venv/bin/python3
       args: [/opt/cat-agent/tests/fixtures/mcp_server.py]
@@ -42,12 +42,16 @@ mcp:
     - name: remote
       enabled: false
       manager: false
-      description: Удалённый специализированный MCP для агентских заданий.
+      description: "Удалённый специализированный MCP для агентских заданий."
       transport: streamable_http
       url: http://127.0.0.1:8790/mcp
       connect_timeout_seconds: 10
       call_timeout_seconds: 30
 ```
+
+Write every MCP `description` as a double-quoted YAML string, even when YAML
+would also accept the unquoted form. This keeps all entries uniform and avoids
+plain-scalar failures when descriptions contain `: `, `#`, or YAML-like values.
 
 `enabled: false` does not connect or spawn a process. `manager` defaults to `true`
 for backward compatibility. With `manager: true`, full tool schemas are added to
