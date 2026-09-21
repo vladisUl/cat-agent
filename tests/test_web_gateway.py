@@ -29,6 +29,10 @@ class WebGatewayTest(unittest.TestCase):
         payload = _browser_to_core(json.dumps({"type": "warm_litert_kv2"}))
         self.assertEqual(payload, {"type": "warm_litert_kv2"})
 
+    def test_ollama_usage_message_is_accepted(self) -> None:
+        payload = _browser_to_core(json.dumps({"type": "ollama_usage"}))
+        self.assertEqual(payload, {"type": "ollama_usage"})
+
     def test_unknown_browser_message_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             _browser_to_core(json.dumps({"type": "voice", "text": "обход"}))
