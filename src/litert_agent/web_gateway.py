@@ -5,7 +5,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import hmac
 from http import HTTPStatus
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 import os
 from pathlib import Path
 import socket
@@ -24,6 +26,7 @@ CORE_SOCKET = Path(os.environ.get("CAT_AGENT_CORE_SOCKET", str(DEFAULT_CORE_SOCK
 LITERT_CORE_SOCKET = Path(
     os.environ.get("CAT_AGENT_LITERT_CORE_SOCKET", "/run/cat-agent/litert.sock")
 )
+OLLAMA_USAGE_URL = "https://ollama.com/api/usage"
 
 _ALLOWED_BROWSER_TYPES = {
     "user",
@@ -36,6 +39,7 @@ _ALLOWED_BROWSER_TYPES = {
     "warm_kv2",
     "litert_snapshot",
     "warm_litert_kv2",
+    "ollama_usage",
 }
 
 
@@ -85,6 +89,35 @@ def _read_core_reply(reader, expected_types: set[str]) -> dict[str, object]:
         if isinstance(item, dict) and str(item.get("type", "")) in expected_types:
             return item
     raise RuntimeError("CORE reply not received")
+
+
+def _ollama_usage() -> dict[str, object]:
+    api_key = os.environ.get("OLLAMA_API_KEY", "").strip()
+    if not api_key:
+        return {"type": "ollama_usage", "available": False}
+
+    request = Request(
+        OLLAMA_USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "User-Agent": "cat-agent-web",
+        },
+    )
+    try:
+        with urlopen(request, timeout=5.0) as response:
+            payload = json.load(response)
+        usage = payload.get("limits", {}).get("monthly", {}).get("usage")
+        usage_number = float(usage)
+        if usage_number < 0:
+            raise ValueError("usage must be non-negative")
+        return {
+            "type": "ollama_usage",
+            "available": True,
+            "usage": usage_number,
+        }
+    except (HTTPError, URLError, TimeoutError, ValueError, TypeError, json.JSONDecodeError):
+        return {"type": "ollama_usage", "available": False}
 
 
 class _LiteRTBridge:
@@ -329,6 +362,10 @@ def _handle_websocket(websocket: Any) -> None:
             message_type = str(payload.get("type", ""))
             if message_type == "litert_snapshot":
                 bridge.send_web(bridge.litert.snapshot())
+                continue
+
+            if message_type == "ollama_usage":
+                bridge.send_web(_ollama_usage())
                 continue
 
             if message_type == "warm_litert_kv2":
