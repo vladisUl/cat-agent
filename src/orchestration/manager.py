@@ -111,7 +111,6 @@ class ManagerRuntime:
             self._chat_mode = True
             self._close_chat_after_reply = False
             LOGGER.info("MANAGER USER MESSAGE chat=True direct=False raw=%r", user_text)
-            self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
             self._append_user(user_text)
             return self._drive_manager()
 
@@ -125,7 +124,6 @@ class ManagerRuntime:
                 self._chat_mode,
                 user_text,
             )
-            self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
             self._append_user(user_text)
             return self._drive_manager()
 
@@ -137,7 +135,6 @@ class ManagerRuntime:
                 user_text,
                 model_text,
             )
-            self.prompt_store.write_manager_prompt(model_text)
             self._append_user(model_text)
             return self._drive_direct()
 
@@ -154,7 +151,6 @@ class ManagerRuntime:
                 user_text,
                 model_text,
             )
-            self.prompt_store.write_manager_prompt(model_text)
             self._append_user(model_text)
             return self._drive_direct()
 
@@ -163,7 +159,6 @@ class ManagerRuntime:
             self._chat_mode,
             user_text,
         )
-        self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
         self._append_user(user_text)
         return self._drive_manager()
 
@@ -191,7 +186,6 @@ class ManagerRuntime:
             event.name,
             text,
         )
-        self.prompt_store.write_manager_prompt(text)
         self._append_user(text)
         return self._drive_manager()
 
@@ -792,7 +786,6 @@ class ManagerRuntime:
 
     def _event(self, text: str) -> None:
         LOGGER.info("MANAGER runtime event\n%s", text)
-        self.prompt_store.write_manager_prompt(text)
         self._append_user(text)
 
     def _append_user(self, text: str) -> None:

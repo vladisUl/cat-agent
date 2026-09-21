@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from orchestration.prompt_store import PromptStore
 from orchestration.skills import Skill
@@ -96,6 +97,21 @@ class PromptStoreTest(unittest.TestCase):
             self.assertEqual(bootstrap["skills"][0]["name"], "shell")
             self.assertEqual(bootstrap["skills"][0]["instructions"], "Use shell.")
             self.assertNotIn("context", bootstrap["skills"][0])
+
+
+    def test_agent_prompt_is_not_rewritten_when_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            prompt_dir = Path(temp)
+            store = PromptStore(prompt_dir, agent_count=1)
+            path = prompt_dir / "prompt_agent_1.txt"
+            path.write_text("stable prompt\n", encoding="utf-8")
+
+            with patch.object(Path, "write_text", autospec=True) as write_text:
+                store.write_agent_prompt("agent1", "stable prompt")
+                write_text.assert_not_called()
+
+                store.write_agent_prompt("agent1", "changed prompt")
+                write_text.assert_called_once()
 
 
 if __name__ == "__main__":

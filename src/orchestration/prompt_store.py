@@ -107,7 +107,10 @@ class PromptStore:
     def write_agent_prompt(self, agent_id: str, text: str) -> Path:
         index = self._agent_index(agent_id)
         path = self.prompt_dir / f"prompt_agent_{index}.txt"
-        path.write_text(text.rstrip() + "\n", encoding="utf-8")
+        desired = text.rstrip() + "\n"
+        if path.is_file() and path.read_text(encoding="utf-8") == desired:
+            return path
+        path.write_text(desired, encoding="utf-8")
         return path
 
     def _skill_context(self, skill_name: str) -> str:

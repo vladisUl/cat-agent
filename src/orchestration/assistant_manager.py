@@ -108,7 +108,6 @@ class AssistantManagerRuntime(ManagerRuntime):
             self._chat_mode,
             user_text,
         )
-        self.prompt_store.write_manager_prompt(f"[USER]\n{user_text}\n[/USER]")
         self._append_user(user_text)
         return (yield from self._drive_manager_steps())
 

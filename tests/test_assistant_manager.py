@@ -264,6 +264,22 @@ class AssistantManagerTest(unittest.TestCase):
             self.assertEqual(len(client.reset_calls), 0)
             self.assertEqual(runtime.messages, before)
 
+
+    def test_manager_prompt_file_remains_startup_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            runtime, _client = self._runtime(root, ["REPLY\nнормально"])
+            path = root / "prompts" / "prompt_manager.txt"
+            startup = path.read_text(encoding="utf-8")
+
+            self.assertEqual(startup.strip(), runtime.messages[0]["content"].strip())
+
+            runtime.user_message("как дела")
+            self.assertEqual(path.read_text(encoding="utf-8"), startup)
+
+            runtime._event("SYSTEM_QUERY_RESULT TASK 1\nЯ здесь")
+            self.assertEqual(path.read_text(encoding="utf-8"), startup)
+
     def test_invalid_negative_period_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             runtime, _client = self._runtime(Path(temp), ["REPLY\nunused"])
