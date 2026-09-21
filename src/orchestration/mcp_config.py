@@ -22,6 +22,8 @@ class McpServerConfig:
     reconnect_delay_seconds: float = 5.0
     env: tuple[tuple[str, str], ...] = ()
     headers_env: tuple[tuple[str, str], ...] = ()
+    manager: bool = True
+    description: str = ""
 
 
 def parse_mcp_config(raw: object) -> tuple[McpServerConfig, ...]:
@@ -48,6 +50,14 @@ def parse_mcp_config(raw: object) -> tuple[McpServerConfig, ...]:
         if transport not in {"stdio", "streamable_http"}:
             raise ValueError(f"mcp {name}: transport must be stdio or streamable_http")
         values = dict(item)
+        manager = item.get("manager", True)
+        if not isinstance(manager, bool):
+            raise ValueError(f"mcp {name}: manager must be boolean")
+        values["manager"] = manager
+        description = item.get("description", "")
+        if not isinstance(description, str) or "\n" in description or "\r" in description:
+            raise ValueError(f"mcp {name}: description must be a single-line string")
+        values["description"] = description.strip()
         if transport == "stdio":
             if not isinstance(item.get("command"), str) or not item["command"].strip():
                 raise ValueError(f"mcp {name}: command is required")
