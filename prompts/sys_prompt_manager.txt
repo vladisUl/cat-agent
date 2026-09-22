@@ -128,11 +128,12 @@ name: read_pic
 description:
 Чтение графического файла (*.png, *.jpg)
 prompt:
-Для чтения графического файла используется bash команда
-read_pic.sh <name>
-name - имя и расширение файла
+Для чтения графического файла используется команда
+read_pic.sh </path/name>
+/path/name — логический путь внутри RAM-каталога данных /opt/model/data.
 example:
-/work#read_pic.sh test.png
+/work#read_pic.sh /test.png
+/work#read_pic.sh /camera/test.png
 [/TOOL]
 
 Список топиков и полей mqtt:
