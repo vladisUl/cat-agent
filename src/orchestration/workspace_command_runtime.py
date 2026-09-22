@@ -49,24 +49,51 @@ class CommandRuntime(RestrictedCommandRuntime):
         return result
 
     def _execute_once(self, command: str) -> CommandResult:
+        internal = self.execute_internal_command(command, require_assignment=True)
+        if internal is not None:
+            return internal
+
         enabled = frozenset(name.strip() for name in os.getenv("CAT_AGENT_ENABLED_SKILLS", "shell,mqtt").split(","))
         stripped = command.strip()
         mqtt_command = stripped.split(maxsplit=1)[0] if stripped else ""
-        if mqtt_command in {"mqtt_sub.sh", "mqtt_pub.sh", "mosquitto_sub", "mosquitto_pub"} and "mqtt" not in enabled:
+        if mqtt_command in {"mosquitto_sub", "mosquitto_pub"} and "mqtt" not in enabled:
             return self._error(command, "policy", 126, "mqtt disabled by runtime policy", "skill_disabled")
-        if "mqtt" in self.skill_names and (
-            stripped == "mqtt_sub.sh" or stripped.startswith("mqtt_sub.sh ")
-        ):
-            return self._mqtt_sub_value(command)
-        if "mqtt" in self.skill_names and (
-            stripped == "mqtt_pub.sh" or stripped.startswith("mqtt_pub.sh ")
-        ):
-            return self._mqtt_pub_value(command)
         if "shell" in self.skill_names:
             if "shell" not in enabled or os.getenv("CAT_AGENT_ALLOW_SHELL", "1").lower() not in {"1", "true", "yes", "on"}:
                 return self._error(command, "policy", 126, "shell disabled by runtime policy", "shell_disabled")
             return self._bash(command)
         return super().execute(command)
+
+    def execute_internal_command(
+        self,
+        command: str,
+        *,
+        require_assignment: bool = True,
+    ) -> CommandResult | None:
+        """Execute a cat-agent pseudo-command, or return None for ordinary commands."""
+        enabled = frozenset(
+            name.strip()
+            for name in os.getenv("CAT_AGENT_ENABLED_SKILLS", "shell,mqtt").split(",")
+        )
+        stripped = command.strip()
+        name = stripped.split(maxsplit=1)[0] if stripped else ""
+        if name not in {"mqtt_sub.sh", "mqtt_pub.sh"}:
+            return None
+
+        if "mqtt" not in enabled:
+            return self._error(
+                command,
+                "policy",
+                126,
+                "mqtt disabled by runtime policy",
+                "skill_disabled",
+            )
+        if require_assignment and "mqtt" not in self.skill_names:
+            return None
+
+        if name == "mqtt_sub.sh":
+            return self._mqtt_sub_value(command)
+        return self._mqtt_pub_value(command)
 
     def format_result(self, result: CommandResult) -> str:
         if result.operation == "mqtt_sub" and result.ok and result.stdout.strip():
