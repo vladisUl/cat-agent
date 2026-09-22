@@ -1,5 +1,6 @@
 from __future__ import annotations
 from .image_tool import read_picture
+from .skill_script import run_skill_script
 
 from dataclasses import dataclass
 from enum import Enum
@@ -355,6 +356,18 @@ class AgentWorker:
         picture = read_picture(directive.command, self._runtime, self.client)
         if picture is not None:
             self._messages.append({"role": "user", "content": picture})
+            return self._continue_or_limit(step)
+
+        script_result = run_skill_script(directive.command, self._runtime, self.client)
+        if script_result is not None:
+            LOGGER.info(
+                "%s step %d TOOL RESULT operation=skill-script command=%s\n%s",
+                self.agent_id,
+                step,
+                directive.command,
+                "[image attached]" if isinstance(script_result, list) else script_result,
+            )
+            self._messages.append({"role": "user", "content": script_result})
             return self._continue_or_limit(step)
 
         result = self._runtime.execute(directive.command)
