@@ -61,6 +61,7 @@ def run_skill_script(command: str, runtime, client):
         return f"SYSTEM_ERROR\n{script_name}: cannot read skill script: {exc}"
 
     image_result = None
+    last_internal_result: str | None = None
     executed = 0
     for line_number, raw in enumerate(text.splitlines(), 1):
         stripped = raw.strip()
@@ -91,6 +92,25 @@ def run_skill_script(command: str, runtime, client):
             LOGGER.info("skill-script %s line=%d internal=read_pic.sh", script_name, line_number)
             continue
 
+        internal = runtime.execute_internal_command(
+            stripped,
+            require_assignment=False,
+        )
+        if internal is not None:
+            LOGGER.info(
+                "skill-script %s line=%d internal=%s exit=%d",
+                script_name,
+                line_number,
+                tokens[0],
+                internal.exit_code,
+            )
+            if not internal.ok:
+                rendered = runtime.format_result(internal)
+                return f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n{rendered}"
+            last_internal_result = runtime.format_result(internal)
+            executed += 1
+            continue
+
         result = _execute_external(stripped, tokens, runtime)
         LOGGER.info(
             "skill-script %s line=%d command=%s exit=%d",
@@ -105,12 +125,15 @@ def run_skill_script(command: str, runtime, client):
                 runtime._uncertain_commands = uncertain
             rendered = runtime.format_result(result)
             return f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n{rendered}"
+        last_internal_result = None
         executed += 1
 
     if executed == 0:
         return f"SYSTEM_ERROR\n{script_name}: skill script is empty"
     if image_result is not None:
         return image_result
+    if last_internal_result is not None:
+        return last_internal_result
     return f"SYSTEM_OK\n{script_name}: completed"
 
 
