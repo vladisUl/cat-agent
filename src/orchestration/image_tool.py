@@ -5,8 +5,10 @@ import base64
 import os
 import shlex
 
+from .data_paths import resolve_data_path
 
-def read_picture(command, runtime, client):
+
+def read_picture(command, runtime, client, *, require_assignment: bool = True):
     """Return message content for this tool, or None for an ordinary command."""
     if command.strip().split(maxsplit=1)[:1] != ["read_pic.sh"]:
         return None
@@ -16,14 +18,12 @@ def read_picture(command, runtime, client):
             raise ValueError("usage: read_pic.sh NAME.png|NAME.jpg")
         if getattr(client, "supports_images", False) is not True:
             raise ValueError("read_pic is supported only by LiteRT-LM and OpenAI backends")
-        if "read_pic" not in runtime.skill_names:
+        if require_assignment and "read_pic" not in runtime.skill_names:
             raise ValueError("read_pic is not assigned to this agent")
         enabled = {name.strip() for name in os.getenv("CAT_AGENT_ENABLED_SKILLS", "shell,mqtt,read_pic").split(",")}
         if "read_pic" not in enabled:
             raise ValueError("read_pic disabled by runtime policy")
-        path = (runtime.cwd / argv[1]).resolve(strict=True)
-        if not path.is_relative_to(runtime.root) or not path.is_file():
-            raise ValueError("image must be a regular file inside the workspace")
+        path = resolve_data_path(runtime, argv[1], must_exist=True)
         if path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
             raise ValueError("only PNG and JPEG images are supported")
         limit = int(os.getenv("CAT_AGENT_MAX_IMAGE_BYTES", str(20 * 1024 * 1024)))
