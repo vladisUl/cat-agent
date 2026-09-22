@@ -15,7 +15,7 @@ def read_picture(command, runtime, client, *, require_assignment: bool = True):
     try:
         argv = shlex.split(command)
         if len(argv) != 2:
-            raise ValueError("usage: read_pic.sh NAME.png|NAME.jpg")
+            raise ValueError("usage: read_pic.sh /PATH/NAME.png|jpg")
         if getattr(client, "supports_images", False) is not True:
             raise ValueError("read_pic is supported only by LiteRT-LM and OpenAI backends")
         if require_assignment and "read_pic" not in runtime.skill_names:
