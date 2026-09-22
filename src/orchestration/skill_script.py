@@ -20,9 +20,11 @@ SKILL_SILENT = object()
 def run_skill_script(command: str, runtime, client):
     """Execute an assigned <skill>.sh scenario from the workspace root.
 
-    Returns None when command isn't an assigned skill script. The scenario is
-    our own line-oriented format, not bash. Ordinary lines invoke executable
-    files from the workspace root; read_pic.sh is an internal opcode.
+    Returns None when command isn't an assigned skill script. SKILL_SILENT
+    means the assigned scenario completed successfully without a result.
+    Otherwise the result is the last external command's stdout or an image
+    payload from read_pic.sh. The scenario is our own line-oriented format,
+    not bash.
     """
     try:
         argv = shlex.split(command, posix=True)
