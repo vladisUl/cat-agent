@@ -31,7 +31,13 @@ browser/page.png  -> /opt/model/data/browser/page.png
 
 The external process runs with cwd set to the workspace root.
 
-`read_pic.sh` is an internal opcode. It never reaches Linux. It accepts the
+The textual result of the whole scenario is the stripped stdout of the last
+external command. Earlier stdout is diagnostic only. An empty stdout from the
+last external command means successful silent completion; runtime does not
+invent `SYSTEM_OK`. Printing `OK` explicitly is recommended when the skill
+should acknowledge completion.
+
+`read_pic.sh` is an internal opcode and a special result type. It never reaches Linux. It accepts the
 same logical DATA path with or without the leading slash and attaches the
 PNG/JPEG to the current model context using the existing multimodal adapter.
 
