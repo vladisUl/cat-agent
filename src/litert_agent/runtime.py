@@ -122,6 +122,7 @@ def build_bundle(settings: Settings) -> LiteRTRuntimeBundle:
         settings.prompt_dir / "prompt_base.txt",
         settings.mcp_servers,
         snapshot_dir=settings.prompt_dir.parent / "mcp",
+        skills_dir=settings.prompt_dir.parent / "skills",
     )
     try:
         dispatcher = ToolDispatcher(getattr(skill_base, "mcp_runtime", None))
