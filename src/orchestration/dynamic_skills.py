@@ -8,6 +8,14 @@ from .skills import Skill, SkillBaseError
 
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+_RESERVED_NAMES = {
+    "mqtt_pub",
+    "mqtt_sub",
+    "query_timer",
+    "read_pic",
+    "task_timer",
+    "timer",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +52,8 @@ def load_dynamic_skills(directory: Path | None) -> tuple[DynamicSkill, ...]:
         name = path.stem
         if not _NAME_RE.fullmatch(name):
             raise SkillBaseError(f"Invalid dynamic skill filename: {path.name!r}")
+        if name in _RESERVED_NAMES:
+            raise SkillBaseError(f"Reserved dynamic skill name: {name}")
         if path.is_symlink() or not path.is_file():
             raise SkillBaseError(f"Dynamic skill must be a regular file: {path}")
 
