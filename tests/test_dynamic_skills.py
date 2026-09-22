@@ -55,7 +55,7 @@ class DynamicSkillsTest(unittest.TestCase):
                 encoding="utf-8",
             )
             spec = load_dynamic_skills(skills)
-            catalog = ToolCatalog(SkillBase(prompt), spec)
+            catalog = ToolCatalog(SkillBase(prompt), dynamic_skills=spec)
 
             self.assertIn("background", catalog.names())
             self.assertNotIn("background", catalog.manager_names())
