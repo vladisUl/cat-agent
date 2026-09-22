@@ -20,18 +20,20 @@ regular file, is not a symlink, and has execute permission. The file extension
 has no special meaning: binaries, shell scripts and executable Python scripts
 with a shebang are handled identically.
 
-Arguments beginning with `/` are logical DATA paths. Runtime maps them under
-`<workspace>/data` before starting the external program:
+File arguments may be written with or without a leading `/`. Both forms are
+logical DATA paths and map under `<workspace>/data` before the external
+program starts:
 
 ```text
+browser/page.png  -> /opt/model/data/browser/page.png
 /browser/page.png -> /opt/model/data/browser/page.png
 ```
 
 The external process runs with cwd set to the workspace root.
 
-`read_pic.sh` is an internal opcode. It never reaches Linux. It attaches the
-PNG/JPEG named by its logical DATA path to the current model context using the
-existing multimodal adapter.
+`read_pic.sh` is an internal opcode. It never reaches Linux. It accepts the
+same logical DATA path with or without the leading slash and attaches the
+PNG/JPEG to the current model context using the existing multimodal adapter.
 
 Blank lines and full-line comments beginning with `#` are ignored. Current
 version executes lines sequentially. Control flow is intentionally not defined
