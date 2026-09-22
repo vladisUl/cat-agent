@@ -18,14 +18,14 @@ def data_root(runtime) -> Path:
 
 
 def resolve_data_path(runtime, value: str, *, must_exist: bool = False) -> Path:
-    """Resolve /foo/bar as <workspace>/data/foo/bar.
+    """Resolve foo/bar or /foo/bar as <workspace>/data/foo/bar.
 
-    The leading slash is a logical DATA-root marker, not the Linux filesystem
-    root. Parent traversal and symlink escape are rejected.
+    A leading slash is an optional logical DATA-root marker, not the Linux
+    filesystem root. Parent traversal and symlink escape are rejected.
     """
-    if not isinstance(value, str) or not value.startswith("/"):
-        raise ValueError("data path must start with /")
-    logical = value[1:]
+    if not isinstance(value, str):
+        raise ValueError("data path must be a string")
+    logical = value[1:] if value.startswith("/") else value
     if not logical:
         raise ValueError("data path must name a file")
     relative = Path(logical)
