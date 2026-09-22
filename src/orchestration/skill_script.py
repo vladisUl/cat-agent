@@ -4,7 +4,6 @@ import logging
 import os
 from pathlib import Path
 import shlex
-import subprocess
 
 from .command_runtime import CommandResult
 from .data_paths import resolve_data_path
@@ -38,6 +37,14 @@ def run_skill_script(command: str, runtime, client):
     ):
         return None
 
+    uncertain = getattr(runtime, "_uncertain_commands", set())
+    if command in uncertain:
+        return (
+            "SYSTEM_ERROR\n"
+            f"{script_name}: previous attempt timed out with uncertain side effects; "
+            "automatic retry refused"
+        )
+
     path = runtime.root / script_name
     if path.is_symlink():
         return f"SYSTEM_ERROR\n{script_name}: symlink is not permitted"
@@ -60,7 +67,7 @@ def run_skill_script(command: str, runtime, client):
         if not stripped or stripped.startswith("#"):
             continue
         try:
-            tokens = shlex.split(stripped, comments=True, posix=True)
+            tokens = shlex.split(stripped, posix=True)
         except ValueError as exc:
             return f"SYSTEM_ERROR\n{script_name}:{line_number}: parse error: {exc}"
         if not tokens:
@@ -93,6 +100,9 @@ def run_skill_script(command: str, runtime, client):
             result.exit_code,
         )
         if not result.ok:
+            if result.exit_code == 124:
+                uncertain.add(command)
+                runtime._uncertain_commands = uncertain
             rendered = runtime.format_result(result)
             return f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n{rendered}"
         executed += 1
@@ -137,8 +147,6 @@ def _execute_external(command: str, tokens: list[str], runtime) -> CommandResult
         )
     except FileNotFoundError:
         return _error(runtime, command, name, 127, f"{name}: command not found", "command_not_found")
-    except subprocess.TimeoutExpired:
-        return _error(runtime, command, name, 124, f"{name}: command timed out", "timeout")
     except OSError as exc:
         return _error(runtime, command, name, 126, f"{name}: {exc}", "exec_error")
 
@@ -149,7 +157,14 @@ def _execute_external(command: str, tokens: list[str], runtime) -> CommandResult
         stderr=completed.stderr,
         cwd=runtime.root,
         operation=name,
-        metadata={"executable": str(executable)},
+        metadata={
+            "executable": str(executable),
+            **(
+                {"error_code": "timeout", "outcome": "uncertain"}
+                if completed.returncode == 124
+                else {}
+            ),
+        },
     )
 
 
