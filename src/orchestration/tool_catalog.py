@@ -11,8 +11,9 @@ class ToolCatalog:
     def __init__(
         self,
         base: SkillBase,
-        dynamic_skills: tuple[DynamicSkill, ...] = (),
         mcp_runtime=None,
+        *,
+        dynamic_skills: tuple[DynamicSkill, ...] = (),
     ) -> None:
         self.path = base.path
         self.mcp_runtime = mcp_runtime
@@ -202,13 +203,17 @@ def build_tool_catalog(
             _sync_snapshot_dir(snapshot_dir, {})
         if not dynamic_skills:
             return base
-        return ToolCatalog(base, dynamic_skills)
+        return ToolCatalog(base, dynamic_skills=dynamic_skills)
 
     from .mcp_runtime import McpRuntime
     runtime = McpRuntime(enabled)
     runtime.start()
     try:
-        catalog = ToolCatalog(base, dynamic_skills, runtime)
+        catalog = ToolCatalog(
+            base,
+            runtime,
+            dynamic_skills=dynamic_skills,
+        )
         if snapshot_dir is not None:
             catalog.write_snapshots(snapshot_dir)
         return catalog
