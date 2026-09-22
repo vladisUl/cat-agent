@@ -37,5 +37,19 @@ Scenario lines are dispatched in order:
 External command file arguments are resolved under `<workspace>/data`.
 The DATA directory is intended to be tmpfs and may contain subdirectories.
 
+A skill may exist only for side effects: creating or changing files, sending
+commands to peripherals, publishing MQTT data, and similar work. Those actions
+are logged but do not themselves create a user-visible result.
+
+The textual result of a scenario is the stripped stdout of its **last external
+command**. It is deliberately not the last non-empty stdout: if the last
+external command succeeds with empty stdout, the skill completes silently.
+If there are no external commands producing a textual result, it also completes
+silently. Authors should print at least `OK` from the final external command
+when an explicit acknowledgement is desired.
+
+`read_pic.sh` is the current special result type: when used successfully, the
+scenario returns the attached image instead of a textual stdout result.
+
 Adding or changing a file under `skills/` requires a CORE restart so the
 frozen startup catalog and model base remain stable.
