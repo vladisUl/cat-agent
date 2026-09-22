@@ -82,7 +82,11 @@ from orchestration.tool_catalog import build_tool_catalog
 from orchestration.assistant_manager import AssistantManagerRuntime
 from orchestration.agent import AgentWorker
 from openai_agent.runtime import build_bundle
-catalog = build_tool_catalog(Path('prompts/prompt_base.txt'), ())
+catalog = build_tool_catalog(
+    Path('prompts/prompt_base.txt'),
+    (),
+    skills_dir=Path('skills'),
+)
 assert catalog.names() == ('shell', 'mqtt', 'read_pic', 'prognoz')
 '''
         result = subprocess.run([sys.executable, '-c', script], cwd=ROOT, capture_output=True, text=True,
