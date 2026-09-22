@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from copy import copy
 from .image_tool import read_picture
+from .skill_script import run_skill_script
 from .workspace_command_runtime import CommandRuntime
 import math
 import shlex
@@ -391,6 +392,9 @@ class AssistantManagerRuntime(ManagerRuntime):
         picture = read_picture(command, self._direct_runtime, self.client)
         if picture is not None:
             return picture
+        script_result = run_skill_script(command, self._direct_runtime, self.client)
+        if script_result is not None:
+            return script_result
         try:
             argv = shlex.split(command, posix=True)
         except ValueError as exc:
