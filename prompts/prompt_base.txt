@@ -57,3 +57,14 @@ example:
 /work#read_pic.sh /test.png
 /work#read_pic.sh /camera/test.png
 [/TOOL]
+
+[TOOL prognoz]
+name: prognoz
+description:
+Прогноз погоды по изображению сайта Gismeteo.
+prompt:
+Для получения прогноза погоды используй внутренний сценарий:
+/work#prognoz.sh
+
+После выполнения проанализируй прикреплённое изображение и ответь пользователю по данным на нём.
+[/TOOL]
