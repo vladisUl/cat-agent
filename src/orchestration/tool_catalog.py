@@ -3,15 +3,30 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .dynamic_skills import DynamicSkill, load_dynamic_skills
 from .skills import Skill, SkillBase, SkillBaseError
 
 
 class ToolCatalog:
-    def __init__(self, base: SkillBase, mcp_runtime=None) -> None:
+    def __init__(
+        self,
+        base: SkillBase,
+        dynamic_skills: tuple[DynamicSkill, ...] = (),
+        mcp_runtime=None,
+    ) -> None:
         self.path = base.path
         self.mcp_runtime = mcp_runtime
         self._base_names = base.names()
         self._skills = {name: base.get(name) for name in self._base_names}
+        self._dynamic_skills = tuple(dynamic_skills)
+        self._dynamic_names: list[str] = []
+
+        for spec in self._dynamic_skills:
+            if spec.name in self._skills:
+                raise SkillBaseError(f"Duplicate tool: {spec.name}")
+            self._skills[spec.name] = spec.as_skill()
+            self._dynamic_names.append(spec.name)
+
         self._mcp_skills = () if mcp_runtime is None else mcp_runtime.skills()
         self._configs = {
             config.name: config
@@ -49,6 +64,9 @@ class ToolCatalog:
             self._skills[name] = capability
 
         manager_names = list(self._base_names)
+        manager_names.extend(
+            spec.name for spec in self._dynamic_skills if spec.manager
+        )
         for server, config in self._configs.items():
             if config.manager:
                 manager_names.extend(
@@ -85,6 +103,10 @@ class ToolCatalog:
             f"{self._skills[name].name} — {self._skills[name].description}"
             for name in self._base_names
         ]
+        lines.extend(
+            f"{spec.name} — {spec.description}"
+            for spec in self._dynamic_skills
+        )
         for server, capability in self._capabilities.items():
             lines.append(f"{capability.name} — {capability.description}")
             if self._configs[server].manager:
@@ -92,6 +114,20 @@ class ToolCatalog:
                     f"{skill.name} — {skill.description}"
                     for skill in self._server_skills.get(server, ())
                 )
+        return "\n".join(lines)
+
+    def dynamic_prompt(self) -> str:
+        if not self._dynamic_skills:
+            return ""
+        lines = [
+            "DYNAMIC SKILLS доступны для ЗАДАНИЙ по имени skill.",
+            "Skills с manager=true доступны MANAGER также для прямого вызова.",
+        ]
+        for spec in self._dynamic_skills:
+            mode = "direct+agent" if spec.manager else "agent-only"
+            lines.append(f"{spec.name} — {spec.description} [{mode}]")
+            if spec.manager:
+                lines.append(f"Использование: {spec.code}")
         return "\n".join(lines)
 
     def mcp_prompt(self) -> str:
@@ -150,18 +186,29 @@ def _sync_snapshot_dir(directory: Path, expected: dict[str, str]) -> None:
         path.write_text(text, encoding="utf-8")
 
 
-def build_tool_catalog(path, configs, *, snapshot_dir: Path | None = None):
+def build_tool_catalog(
+    path,
+    configs,
+    *,
+    snapshot_dir: Path | None = None,
+    skills_dir: Path | None = None,
+):
     base = SkillBase(path)
+    dynamic_skills = load_dynamic_skills(skills_dir)
     enabled = tuple(c for c in configs if c.enabled)
+
     if not enabled:
         if snapshot_dir is not None:
             _sync_snapshot_dir(snapshot_dir, {})
-        return base
+        if not dynamic_skills:
+            return base
+        return ToolCatalog(base, dynamic_skills)
+
     from .mcp_runtime import McpRuntime
     runtime = McpRuntime(enabled)
     runtime.start()
     try:
-        catalog = ToolCatalog(base, runtime)
+        catalog = ToolCatalog(base, dynamic_skills, runtime)
         if snapshot_dir is not None:
             catalog.write_snapshots(snapshot_dir)
         return catalog
