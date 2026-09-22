@@ -66,7 +66,7 @@ class SkillScriptTest(unittest.TestCase):
             )
             command.chmod(0o755)
             (root / "demo.sh").write_text(
-                "record_path /skill/test.png\n",
+                "record_path skill/test.png\n",
                 encoding="utf-8",
             )
 
