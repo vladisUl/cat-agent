@@ -105,6 +105,9 @@ def run_skill_script(command: str, runtime, client):
                 internal.exit_code,
             )
             if not internal.ok:
+                if internal.exit_code == 124:
+                    uncertain.add(command)
+                    runtime._uncertain_commands = uncertain
                 rendered = runtime.format_result(internal)
                 return f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n{rendered}"
             last_internal_result = runtime.format_result(internal)
