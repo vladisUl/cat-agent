@@ -84,6 +84,18 @@ class DynamicSkillsTest(unittest.TestCase):
             self.assertIn("prognoz — прогноз [direct+agent]", catalog.dynamic_prompt())
             self.assertIn("Использование: /work#prognoz.sh", catalog.dynamic_prompt())
 
+    def test_rejects_reserved_command_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            skills = Path(temp)
+            (skills / "timer.txt").write_text(
+                "code: /work#timer.sh\n"
+                "description: collision\n"
+                "manager: true\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(SkillBaseError, "Reserved"):
+                load_dynamic_skills(skills)
+
     def test_rejects_bad_code_and_manager_value(self) -> None:
         cases = (
             (
