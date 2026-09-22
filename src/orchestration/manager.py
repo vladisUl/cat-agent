@@ -95,6 +95,9 @@ class ManagerRuntime:
             + "\n\n"
             + bootstrap.strip()
         )
+        dynamic_prompt = getattr(skill_base, "dynamic_prompt", lambda: "")()
+        if dynamic_prompt:
+            system_context = system_context.rstrip() + "\n\n" + dynamic_prompt
         mcp_prompt = getattr(skill_base, "mcp_prompt", lambda: "")()
         if mcp_prompt:
             system_context = system_context.rstrip() + "\n\n" + mcp_prompt
