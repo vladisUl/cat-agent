@@ -1,6 +1,6 @@
 from __future__ import annotations
 from .image_tool import read_picture
-from .skill_script import run_skill_script
+from .skill_script import SKILL_SILENT, run_skill_script
 
 from dataclasses import dataclass
 from enum import Enum
@@ -359,6 +359,15 @@ class AgentWorker:
             return self._continue_or_limit(step)
 
         script_result = run_skill_script(directive.command, self._runtime, self.client)
+        if script_result is SKILL_SILENT:
+            LOGGER.info(
+                "%s COMPLETE silent skill-script command=%s steps=%d",
+                self.agent_id,
+                directive.command,
+                step,
+            )
+            self._release(preserve_session=True)
+            return AgentOutcome(self.agent_id, "OK", "", step)
         if script_result is not None:
             LOGGER.info(
                 "%s step %d TOOL RESULT operation=skill-script command=%s\n%s",
