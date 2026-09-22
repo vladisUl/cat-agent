@@ -1,4 +1,4 @@
-"""Immutable per-CORE union of prompt tools and startup-discovered MCP tools."""
+"""Immutable per-CORE union of base tools, dynamic skills and MCP tools."""
 from __future__ import annotations
 
 from pathlib import Path
