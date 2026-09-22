@@ -21,10 +21,12 @@ class ImageToolTest(unittest.TestCase):
     def test_bytes_are_embedded_and_immutable_after_file_change(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            path = root / "my cat.png"
+            data = root / "data"
+            data.mkdir()
+            path = data / "my cat.png"
             path.write_bytes(PNG)
             runtime = SimpleNamespace(cwd=root, root=root, skill_names={"read_pic"})
-            result = read_picture('read_pic.sh "my cat.png"', runtime, SimpleNamespace(supports_images=True))
+            result = read_picture('read_pic.sh "/my cat.png"', runtime, SimpleNamespace(supports_images=True))
             path.write_bytes(b"changed")
             url = result[1]["image_url"]["url"]
             self.assertEqual(base64.b64decode(url.split(",", 1)[1]), PNG)
@@ -32,17 +34,19 @@ class ImageToolTest(unittest.TestCase):
     def test_errors_and_unsupported_backend(self):
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as outside:
             root = Path(temp)
-            (root / "cat.png").write_bytes(PNG)
+            data = root / "data"
+            data.mkdir()
+            (data / "cat.png").write_bytes(PNG)
             (Path(outside) / "cat.png").write_bytes(PNG)
-            (root / "link.png").symlink_to(Path(outside) / "cat.png")
+            (data / "link.png").symlink_to(Path(outside) / "cat.png")
             runtime = SimpleNamespace(cwd=root, root=root, skill_names={"read_pic"})
             client = SimpleNamespace(supports_images=True)
-            for command in ('read_pic.sh', 'read_pic.sh missing.png', 'read_pic.sh link.png', 'read_pic.sh cat.png ; echo bad'):
+            for command in ('read_pic.sh', 'read_pic.sh /missing.png', 'read_pic.sh /link.png', 'read_pic.sh /cat.png ; echo bad', 'read_pic.sh ../cat.png', 'read_pic.sh cat.png'):
                 with self.subTest(command=command):
                     self.assertIn("SYSTEM_ERROR", read_picture(command, runtime, client))
-            self.assertIn("supported only", read_picture("read_pic.sh cat.png", runtime, SimpleNamespace()))
+            self.assertIn("supported only", read_picture("read_pic.sh /cat.png", runtime, SimpleNamespace()))
             with patch.dict("os.environ", {"CAT_AGENT_MAX_IMAGE_BYTES": "4"}):
-                self.assertIn("exceeds", read_picture("read_pic.sh cat.png", runtime, client))
+                self.assertIn("exceeds", read_picture("read_pic.sh /cat.png", runtime, client))
             with patch.dict("os.environ", {"CAT_AGENT_ENABLED_SKILLS": "shell,mqtt"}):
                 self.assertIn("disabled", read_picture("read_pic.sh cat.png", runtime, client))
             runtime.skill_names = {"mqtt"}
@@ -52,12 +56,13 @@ class ImageToolTest(unittest.TestCase):
     def test_manager_reads_image_and_retains_it_for_followup(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [
-                "REPLY\nЧат создан", "/work#read_pic.sh cat.png", "REPLY\nКот", "REPLY\nЦветы",
+                "REPLY\nЧат создан", "/work#read_pic.sh /cat.png", "REPLY\nКот", "REPLY\nЦветы",
             ])
             client.supports_images = True
-            (runtime._direct_runtime.root / "cat.png").write_bytes(PNG)
+            (runtime._direct_runtime.root / "data").mkdir()
+            (runtime._direct_runtime.root / "data" / "cat.png").write_bytes(PNG)
             runtime.user_message("Чат")
-            self.assertEqual(runtime.user_message("Что на cat.png?").text, "Кот")
+            self.assertEqual(runtime.user_message("Что на /cat.png?").text, "Кот")
             self.assertEqual(runtime.user_message("А рядом?").text, "Цветы")
             images = [m for m in client.calls[-1] if isinstance(m["content"], list)]
             self.assertEqual(len(images), 1)
@@ -69,7 +74,8 @@ class ImageToolTest(unittest.TestCase):
                 "/work#read_pic.sh cat.png", '{"result":"Кот"}',
             ])
             client.supports_images = True
-            (runtime._direct_runtime.root / "cat.png").write_bytes(PNG)
+            (runtime._direct_runtime.root / "data").mkdir(exist_ok=True)
+            (runtime._direct_runtime.root / "data" / "cat.png").write_bytes(PNG)
             worker = runtime.pool.acquire()
             worker.begin("Что на cat.png?", runtime.skill_base.require(("read_pic",)), method="query")
             self.assertIsNone(worker.step())
