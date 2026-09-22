@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from orchestration.skill_script import run_skill_script
+from orchestration.skill_script import SKILL_SILENT, run_skill_script
 from orchestration.workspace_command_runtime import CommandRuntime
 
 
@@ -77,11 +77,57 @@ class SkillScriptTest(unittest.TestCase):
                 SimpleNamespace(supports_images=True),
             )
 
-            self.assertEqual(result, "SYSTEM_OK\ndemo.sh: completed")
+            self.assertIs(result, SKILL_SILENT)
             self.assertEqual(
                 (root / "received.txt").read_text(encoding="utf-8"),
                 str(root.resolve() / "data" / "skill" / "test.png"),
             )
+
+    def test_last_external_stdout_is_skill_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "data").mkdir()
+
+            first = root / "first"
+            first.write_text("#!/bin/sh\nprintf 'FIRST\\n'\n", encoding="utf-8")
+            first.chmod(0o755)
+
+            second = root / "second"
+            second.write_text("#!/bin/sh\nprintf 'SECOND\\n'\n", encoding="utf-8")
+            second.chmod(0o755)
+
+            (root / "demo.sh").write_text("first\nsecond\n", encoding="utf-8")
+
+            result = run_skill_script(
+                "demo.sh",
+                self.runtime(root, "demo"),
+                SimpleNamespace(supports_images=True),
+            )
+
+            self.assertEqual(result, "SECOND")
+
+    def test_empty_stdout_of_last_external_command_means_silent_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "data").mkdir()
+
+            first = root / "first"
+            first.write_text("#!/bin/sh\nprintf 'FIRST\\n'\n", encoding="utf-8")
+            first.chmod(0o755)
+
+            second = root / "second"
+            second.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            second.chmod(0o755)
+
+            (root / "demo.sh").write_text("first\nsecond\n", encoding="utf-8")
+
+            result = run_skill_script(
+                "demo.sh",
+                self.runtime(root, "demo"),
+                SimpleNamespace(supports_images=True),
+            )
+
+            self.assertIs(result, SKILL_SILENT)
 
     def test_external_command_must_exist_and_be_executable(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -141,7 +187,7 @@ class SkillScriptTest(unittest.TestCase):
                     SimpleNamespace(supports_images=True),
                 )
 
-            self.assertEqual(result, "21.5")
+            self.assertIs(result, SKILL_SILENT)
 
     def test_parent_traversal_in_logical_data_path_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
