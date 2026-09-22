@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from orchestration.skill_script import run_skill_script
 from orchestration.workspace_command_runtime import CommandRuntime
@@ -116,6 +117,31 @@ class SkillScriptTest(unittest.TestCase):
             )
 
             self.assertIsNone(result)
+
+
+    def test_internal_mqtt_command_is_available_inside_dynamic_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "data").mkdir()
+            (root / "demo.sh").write_text(
+                "mqtt_sub.sh zigbee2mqtt/temp temperature\n",
+                encoding="utf-8",
+            )
+            completed = __import__("subprocess").CompletedProcess(
+                args=[], returncode=0, stdout="21.5\n", stderr=""
+            )
+
+            with patch(
+                "orchestration.workspace_command_runtime.run_process",
+                return_value=completed,
+            ):
+                result = run_skill_script(
+                    "demo.sh",
+                    self.runtime(root, "demo"),
+                    SimpleNamespace(supports_images=True),
+                )
+
+            self.assertEqual(result, "21.5")
 
     def test_parent_traversal_in_logical_data_path_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
