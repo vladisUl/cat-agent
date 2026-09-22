@@ -51,11 +51,11 @@ description:
 Чтение графического файла (*.png, *.jpg)
 prompt:
 Для чтения графического файла используется команда
-read_pic.sh </path/name>
-/path/name — логический путь внутри RAM-каталога данных /opt/model/data.
+read_pic.sh <path/name>
+path/name или /path/name — логический путь внутри RAM-каталога данных /opt/model/data.
 example:
-/work#read_pic.sh /test.png
-/work#read_pic.sh /camera/test.png
+/work#read_pic.sh test.png
+/work#read_pic.sh camera/test.png
 [/TOOL]
 
 [TOOL prognoz]
