@@ -131,7 +131,9 @@ def _execute_external(command: str, tokens: list[str], runtime) -> CommandResult
 
     try:
         resolved_args = [
-            str(resolve_data_path(runtime, token)) if token.startswith("/") else token
+            token
+            if token.startswith("-")
+            else str(resolve_data_path(runtime, token))
             for token in tokens[1:]
         ]
     except ValueError as exc:
