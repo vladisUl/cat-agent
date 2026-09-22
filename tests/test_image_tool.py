@@ -71,13 +71,13 @@ class ImageToolTest(unittest.TestCase):
     def test_worker_receives_image_in_its_own_context(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [
-                "/work#read_pic.sh cat.png", '{"result":"Кот"}',
+                "/work#read_pic.sh /cat.png", '{"result":"Кот"}',
             ])
             client.supports_images = True
             (runtime._direct_runtime.root / "data").mkdir(exist_ok=True)
             (runtime._direct_runtime.root / "data" / "cat.png").write_bytes(PNG)
             worker = runtime.pool.acquire()
-            worker.begin("Что на cat.png?", runtime.skill_base.require(("read_pic",)), method="query")
+            worker.begin("Что на /cat.png?", runtime.skill_base.require(("read_pic",)), method="query")
             self.assertIsNone(worker.step())
             outcome = worker.step()
             self.assertEqual(outcome.text, "Кот")
