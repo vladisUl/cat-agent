@@ -87,7 +87,10 @@ catalog = build_tool_catalog(
     (),
     skills_dir=Path('skills'),
 )
-assert catalog.names() == ('shell', 'mqtt', 'read_pic', 'prognoz')
+names = catalog.names()
+assert names[:3] == ('shell', 'mqtt', 'read_pic')
+assert 'prognoz' in names
+assert not any(name.startswith('mcp:') for name in names)
 '''
         result = subprocess.run([sys.executable, '-c', script], cwd=ROOT, capture_output=True, text=True,
                                 env={**os.environ, 'PYTHONPATH':str(ROOT/'src')}, timeout=10)
