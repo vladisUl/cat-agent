@@ -14,6 +14,9 @@ from .process_runner import run_process
 LOGGER = logging.getLogger(__name__)
 
 
+SKILL_SILENT = object()
+
+
 def run_skill_script(command: str, runtime, client):
     """Execute an assigned <skill>.sh scenario from the workspace root.
 
@@ -61,7 +64,7 @@ def run_skill_script(command: str, runtime, client):
         return f"SYSTEM_ERROR\n{script_name}: cannot read skill script: {exc}"
 
     image_result = None
-    last_internal_result: str | None = None
+    last_shell_stdout: str | None = None
     executed = 0
     for line_number, raw in enumerate(text.splitlines(), 1):
         stripped = raw.strip()
@@ -110,7 +113,6 @@ def run_skill_script(command: str, runtime, client):
                     runtime._uncertain_commands = uncertain
                 rendered = runtime.format_result(internal)
                 return f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n{rendered}"
-            last_internal_result = runtime.format_result(internal)
             executed += 1
             continue
 
@@ -128,16 +130,16 @@ def run_skill_script(command: str, runtime, client):
                 runtime._uncertain_commands = uncertain
             rendered = runtime.format_result(result)
             return f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n{rendered}"
-        last_internal_result = None
+        last_shell_stdout = result.stdout.strip()
         executed += 1
 
     if executed == 0:
         return f"SYSTEM_ERROR\n{script_name}: skill script is empty"
     if image_result is not None:
         return image_result
-    if last_internal_result is not None:
-        return last_internal_result
-    return f"SYSTEM_OK\n{script_name}: completed"
+    if last_shell_stdout:
+        return last_shell_stdout
+    return SKILL_SILENT
 
 
 def _execute_external(command: str, tokens: list[str], runtime) -> CommandResult:
