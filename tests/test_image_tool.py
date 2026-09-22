@@ -41,9 +41,10 @@ class ImageToolTest(unittest.TestCase):
             (data / "link.png").symlink_to(Path(outside) / "cat.png")
             runtime = SimpleNamespace(cwd=root, root=root, skill_names={"read_pic"})
             client = SimpleNamespace(supports_images=True)
-            for command in ('read_pic.sh', 'read_pic.sh /missing.png', 'read_pic.sh /link.png', 'read_pic.sh /cat.png ; echo bad', 'read_pic.sh ../cat.png', 'read_pic.sh cat.png'):
+            for command in ('read_pic.sh', 'read_pic.sh /missing.png', 'read_pic.sh /link.png', 'read_pic.sh /cat.png ; echo bad', 'read_pic.sh ../cat.png'):
                 with self.subTest(command=command):
                     self.assertIn("SYSTEM_ERROR", read_picture(command, runtime, client))
+            self.assertIsInstance(read_picture("read_pic.sh cat.png", runtime, client), list)
             self.assertIn("supported only", read_picture("read_pic.sh /cat.png", runtime, SimpleNamespace()))
             with patch.dict("os.environ", {"CAT_AGENT_MAX_IMAGE_BYTES": "4"}):
                 self.assertIn("exceeds", read_picture("read_pic.sh /cat.png", runtime, client))
