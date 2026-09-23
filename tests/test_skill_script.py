@@ -106,6 +106,79 @@ class SkillScriptTest(unittest.TestCase):
 
             self.assertEqual(result, "SECOND")
 
+    def test_skill_invocation_tail_is_opaque_stdin_for_first_step(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "data").mkdir()
+
+            command = root / "echo_stdin"
+            command.write_text("#!/bin/sh\ncat\n", encoding="utf-8")
+            command.chmod(0o755)
+            (root / "demo.sh").write_text("echo_stdin\n", encoding="utf-8")
+
+            result = run_skill_script(
+                'demo.sh "привет" -f output.txt',
+                self.runtime(root, "demo"),
+                SimpleNamespace(supports_images=True),
+            )
+
+            self.assertEqual(result, '"привет" -f output.txt')
+
+    def test_stdout_is_stdin_for_next_external_step(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "data").mkdir()
+
+            first = root / "first"
+            first.write_text(
+                "#!/bin/sh\nIFS= read -r value\nprintf 'generated-%s\\n' \"$value\"\n",
+                encoding="utf-8",
+            )
+            first.chmod(0o755)
+
+            second = root / "second"
+            second.write_text("#!/bin/sh\ncat\n", encoding="utf-8")
+            second.chmod(0o755)
+
+            (root / "demo.sh").write_text("first\nsecond\n", encoding="utf-8")
+
+            result = run_skill_script(
+                "demo.sh 7day",
+                self.runtime(root, "demo"),
+                SimpleNamespace(supports_images=True),
+            )
+
+            self.assertEqual(result, "generated-7day")
+
+    def test_stdout_can_supply_bare_read_pic_argument(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "data" / "camera").mkdir(parents=True)
+            (root / "seed.png").write_bytes(PNG)
+
+            command = root / "make_picture"
+            command.write_text(
+                "#!/bin/sh\ncp seed.png data/camera/test.png\nprintf 'camera/test.png\\n'\n",
+                encoding="utf-8",
+            )
+            command.chmod(0o755)
+
+            (root / "camera.sh").write_text(
+                "make_picture\n"
+                "read_pic.sh\n",
+                encoding="utf-8",
+            )
+
+            result = run_skill_script(
+                "camera.sh",
+                self.runtime(root, "camera"),
+                SimpleNamespace(supports_images=True),
+            )
+
+            self.assertIsInstance(result, list)
+            assert isinstance(result, list)
+            self.assertEqual(result[1]["type"], "image_url")
+
     def test_empty_stdout_of_last_external_command_means_silent_success(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -187,7 +260,65 @@ class SkillScriptTest(unittest.TestCase):
                     SimpleNamespace(supports_images=True),
                 )
 
-            self.assertIs(result, SKILL_SILENT)
+            self.assertEqual(result, "21.5")
+
+    def test_bare_internal_mqtt_command_consumes_previous_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "data").mkdir()
+
+            command = root / "mqtt_args"
+            command.write_text(
+                "#!/bin/sh\nprintf 'zigbee2mqtt/temp temperature\\n'\n",
+                encoding="utf-8",
+            )
+            command.chmod(0o755)
+            (root / "demo.sh").write_text(
+                "mqtt_args\n"
+                "mqtt_sub.sh\n",
+                encoding="utf-8",
+            )
+            completed = __import__("subprocess").CompletedProcess(
+                args=[], returncode=0, stdout="22.0\n", stderr=""
+            )
+
+            with patch(
+                "orchestration.workspace_command_runtime.run_process",
+                return_value=completed,
+            ) as mocked:
+                result = run_skill_script(
+                    "demo.sh",
+                    self.runtime(root, "demo"),
+                    SimpleNamespace(supports_images=True),
+                )
+
+            self.assertEqual(result, "22.0")
+            command_line = mocked.call_args.args[0][-1]
+            self.assertIn("zigbee2mqtt/temp", command_line)
+            self.assertIn(".temperature", command_line)
+
+    def test_read_pic_non_text_result_must_be_final(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "data").mkdir()
+            (root / "data" / "cat.png").write_bytes(PNG)
+
+            command = root / "after"
+            command.write_text("#!/bin/sh\nprintf 'after\\n'\n", encoding="utf-8")
+            command.chmod(0o755)
+            (root / "demo.sh").write_text(
+                "read_pic.sh cat.png\n"
+                "after\n",
+                encoding="utf-8",
+            )
+
+            result = run_skill_script(
+                "demo.sh",
+                self.runtime(root, "demo"),
+                SimpleNamespace(supports_images=True),
+            )
+
+            self.assertIn("must be the final step", result)
 
     def test_parent_traversal_in_logical_data_path_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
