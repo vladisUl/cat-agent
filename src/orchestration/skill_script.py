@@ -141,7 +141,7 @@ def run_skill_script(command: str, runtime, client):
                     f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n"
                     f"{rendered}"
                 )
-            stream = runtime.format_result(internal).strip()
+            stream = runtime.format_result(internal)
             continue
 
         result = _execute_external(
@@ -166,10 +166,11 @@ def run_skill_script(command: str, runtime, client):
                 f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n"
                 f"{rendered}"
             )
-        stream = result.stdout.strip()
+        stream = result.stdout
 
-    if stream:
-        return stream
+    final_text = stream.strip()
+    if final_text:
+        return final_text
     return SKILL_SILENT
 
 
