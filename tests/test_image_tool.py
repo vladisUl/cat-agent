@@ -45,6 +45,24 @@ class ImageToolTest(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertIn("SYSTEM_ERROR", read_picture(command, runtime, client))
             self.assertIsInstance(read_picture("read_pic.sh cat.png", runtime, client), list)
+            self.assertIsInstance(
+                read_picture(
+                    "read_pic.sh",
+                    runtime,
+                    client,
+                    input_text="cat.png",
+                ),
+                list,
+            )
+            self.assertIsInstance(
+                read_picture(
+                    "read_pic.sh cat.png",
+                    runtime,
+                    client,
+                    input_text="ignored.png",
+                ),
+                list,
+            )
             self.assertIn("supported only", read_picture("read_pic.sh /cat.png", runtime, SimpleNamespace()))
             with patch.dict("os.environ", {"CAT_AGENT_MAX_IMAGE_BYTES": "4"}):
                 self.assertIn("exceeds", read_picture("read_pic.sh /cat.png", runtime, client))
