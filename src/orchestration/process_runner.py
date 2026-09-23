@@ -60,8 +60,9 @@ def run_process(argv, *, cwd, timeout, output_limit, input_text=None):
                                 key.fileobj.fileno(),
                                 stdin_data[stdin_offset:],
                             )
+                        except BlockingIOError:
+                            continue
                         except (BrokenPipeError, OSError):
-                            written = 0
                             try:
                                 selector.unregister(key.fileobj)
                             except KeyError:
