@@ -28,7 +28,12 @@ def read_picture(
         if len(argv) == 2:
             logical_path = argv[1]
         elif len(argv) == 1 and input_text is not None and input_text.strip():
-            logical_path = input_text.strip()
+            pipeline_argv = shlex.split(input_text, posix=True)
+            if len(pipeline_argv) != 1:
+                raise ValueError(
+                    "pipeline input for read_pic.sh must contain exactly one path"
+                )
+            logical_path = pipeline_argv[0]
         else:
             raise ValueError("usage: read_pic.sh PATH/NAME.png|jpg")
         if getattr(client, "supports_images", False) is not True:
