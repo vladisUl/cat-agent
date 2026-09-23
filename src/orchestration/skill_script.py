@@ -22,18 +22,19 @@ def run_skill_script(command: str, runtime, client):
 
     Returns None when command isn't an assigned skill script. SKILL_SILENT
     means the assigned scenario completed successfully without a result.
-    Otherwise the result is the last external command's stdout or an image
-    payload from read_pic.sh. The scenario is our own line-oriented format,
-    not bash.
+
+    Text after the scenario name is opaque pipeline input. The first step gets
+    it on stdin; every following text-producing step gets the previous step's
+    output. A final read_pic.sh returns its normal multimodal payload.
     """
-    try:
-        argv = shlex.split(command, posix=True)
-    except ValueError:
-        return None
-    if len(argv) != 1:
+    stripped_command = command.strip()
+    if not stripped_command:
         return None
 
-    script_name = argv[0]
+    parts = stripped_command.split(maxsplit=1)
+    script_name = parts[0]
+    input_text = parts[1] if len(parts) == 2 else ""
+
     script_path = Path(script_name)
     if (
         script_path.name != script_name
@@ -58,24 +59,33 @@ def run_skill_script(command: str, runtime, client):
     if not path.is_file():
         return f"SYSTEM_ERROR\n{script_name}: skill script is not a regular file"
     if path.stat().st_size > runtime.max_file_bytes:
-        return f"SYSTEM_ERROR\n{script_name}: skill script exceeds {runtime.max_file_bytes} bytes"
+        return (
+            f"SYSTEM_ERROR\n{script_name}: skill script exceeds "
+            f"{runtime.max_file_bytes} bytes"
+        )
 
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return f"SYSTEM_ERROR\n{script_name}: cannot read skill script: {exc}"
 
-    image_result = None
-    last_shell_stdout: str | None = None
-    executed = 0
-    for line_number, raw in enumerate(text.splitlines(), 1):
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
+    steps = [
+        (line_number, raw.strip())
+        for line_number, raw in enumerate(text.splitlines(), 1)
+        if raw.strip() and not raw.strip().startswith("#")
+    ]
+    if not steps:
+        return f"SYSTEM_ERROR\n{script_name}: skill script is empty"
+
+    stream = input_text
+
+    for step_index, (line_number, stripped) in enumerate(steps):
         try:
             tokens = shlex.split(stripped, posix=True)
         except ValueError as exc:
-            return f"SYSTEM_ERROR\n{script_name}:{line_number}: parse error: {exc}"
+            return (
+                f"SYSTEM_ERROR\n{script_name}:{line_number}: parse error: {exc}"
+            )
         if not tokens:
             continue
 
@@ -85,21 +95,34 @@ def run_skill_script(command: str, runtime, client):
                 runtime,
                 client,
                 require_assignment=False,
+                input_text=stream,
             )
             if picture is None:
-                return f"SYSTEM_ERROR\n{script_name}:{line_number}: invalid read_pic.sh command"
+                return (
+                    f"SYSTEM_ERROR\n{script_name}:{line_number}: "
+                    "invalid read_pic.sh command"
+                )
             if isinstance(picture, str) and picture.startswith("SYSTEM_ERROR\n"):
-                return f"SYSTEM_ERROR\n{script_name}:{line_number}: {picture.splitlines()[-1]}"
-            if image_result is not None:
-                return f"SYSTEM_ERROR\n{script_name}:{line_number}: only one read_pic.sh is supported"
-            image_result = picture
-            executed += 1
-            LOGGER.info("skill-script %s line=%d internal=read_pic.sh", script_name, line_number)
-            continue
+                return (
+                    f"SYSTEM_ERROR\n{script_name}:{line_number}: "
+                    f"{picture.splitlines()[-1]}"
+                )
+            if step_index != len(steps) - 1:
+                return (
+                    f"SYSTEM_ERROR\n{script_name}:{line_number}: "
+                    "read_pic.sh produces a non-text result and must be the final step"
+                )
+            LOGGER.info(
+                "skill-script %s line=%d internal=read_pic.sh",
+                script_name,
+                line_number,
+            )
+            return picture
 
         internal = runtime.execute_internal_command(
             stripped,
             require_assignment=False,
+            input_text=stream,
         )
         if internal is not None:
             LOGGER.info(
@@ -114,11 +137,19 @@ def run_skill_script(command: str, runtime, client):
                     uncertain.add(command)
                     runtime._uncertain_commands = uncertain
                 rendered = runtime.format_result(internal)
-                return f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n{rendered}"
-            executed += 1
+                return (
+                    f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n"
+                    f"{rendered}"
+                )
+            stream = runtime.format_result(internal).strip()
             continue
 
-        result = _execute_external(stripped, tokens, runtime)
+        result = _execute_external(
+            stripped,
+            tokens,
+            runtime,
+            input_text=stream,
+        )
         LOGGER.info(
             "skill-script %s line=%d command=%s exit=%d",
             script_name,
@@ -131,33 +162,72 @@ def run_skill_script(command: str, runtime, client):
                 uncertain.add(command)
                 runtime._uncertain_commands = uncertain
             rendered = runtime.format_result(result)
-            return f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n{rendered}"
-        last_shell_stdout = result.stdout.strip()
-        executed += 1
+            return (
+                f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n"
+                f"{rendered}"
+            )
+        stream = result.stdout.strip()
 
-    if executed == 0:
-        return f"SYSTEM_ERROR\n{script_name}: skill script is empty"
-    if image_result is not None:
-        return image_result
-    if last_shell_stdout:
-        return last_shell_stdout
+    if stream:
+        return stream
     return SKILL_SILENT
 
 
-def _execute_external(command: str, tokens: list[str], runtime) -> CommandResult:
+def _execute_external(
+    command: str,
+    tokens: list[str],
+    runtime,
+    *,
+    input_text: str,
+) -> CommandResult:
     name = tokens[0]
     if Path(name).name != name or "/" in name:
-        return _error(runtime, command, name, 126, "command name must be a file in workspace root", "invalid_command")
+        return _error(
+            runtime,
+            command,
+            name,
+            126,
+            "command name must be a file in workspace root",
+            "invalid_command",
+        )
 
     executable = runtime.root / name
     if executable.is_symlink():
-        return _error(runtime, command, name, 126, f"{name}: symlink is not permitted", "symlink")
+        return _error(
+            runtime,
+            command,
+            name,
+            126,
+            f"{name}: symlink is not permitted",
+            "symlink",
+        )
     if not executable.exists():
-        return _error(runtime, command, name, 127, f"{name}: command not found", "command_not_found")
+        return _error(
+            runtime,
+            command,
+            name,
+            127,
+            f"{name}: command not found",
+            "command_not_found",
+        )
     if not executable.is_file():
-        return _error(runtime, command, name, 126, f"{name}: not a regular file", "not_file")
+        return _error(
+            runtime,
+            command,
+            name,
+            126,
+            f"{name}: not a regular file",
+            "not_file",
+        )
     if not os.access(executable, os.X_OK):
-        return _error(runtime, command, name, 126, f"{name}: file is not executable", "not_executable")
+        return _error(
+            runtime,
+            command,
+            name,
+            126,
+            f"{name}: file is not executable",
+            "not_executable",
+        )
 
     try:
         resolved_args = [
@@ -167,7 +237,14 @@ def _execute_external(command: str, tokens: list[str], runtime) -> CommandResult
             for token in tokens[1:]
         ]
     except ValueError as exc:
-        return _error(runtime, command, name, 126, str(exc), "invalid_data_path")
+        return _error(
+            runtime,
+            command,
+            name,
+            126,
+            str(exc),
+            "invalid_data_path",
+        )
 
     argv = [str(executable), *resolved_args]
     try:
@@ -176,11 +253,26 @@ def _execute_external(command: str, tokens: list[str], runtime) -> CommandResult
             cwd=runtime.root,
             timeout=runtime.timeout_seconds,
             output_limit=runtime.max_file_bytes,
+            input_text=input_text,
         )
     except FileNotFoundError:
-        return _error(runtime, command, name, 127, f"{name}: command not found", "command_not_found")
+        return _error(
+            runtime,
+            command,
+            name,
+            127,
+            f"{name}: command not found",
+            "command_not_found",
+        )
     except OSError as exc:
-        return _error(runtime, command, name, 126, f"{name}: {exc}", "exec_error")
+        return _error(
+            runtime,
+            command,
+            name,
+            126,
+            f"{name}: {exc}",
+            "exec_error",
+        )
 
     return CommandResult(
         command=command,
