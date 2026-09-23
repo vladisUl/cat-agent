@@ -56,6 +56,15 @@ class ImageToolTest(unittest.TestCase):
             )
             self.assertIsInstance(
                 read_picture(
+                    "read_pic.sh",
+                    runtime,
+                    client,
+                    input_text='"cat.png"',
+                ),
+                list,
+            )
+            self.assertIsInstance(
+                read_picture(
                     "read_pic.sh cat.png",
                     runtime,
                     client,
