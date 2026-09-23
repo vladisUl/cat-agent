@@ -219,29 +219,38 @@ Scenario lines execute sequentially:
 
 The runtime rejects symlinked executables and DATA path traversal.
 
-### Skill results
+### Skill input and results
 
-A skill may exist purely for side effects: create or modify files, control
-peripherals, publish MQTT data, capture an image, and so on. Those operations
-are logged independently from the value returned to the model.
-
-For a normal textual skill, the result is exactly the stripped `stdout` of
-the **last external command**.
+A dynamic skill command may carry arbitrary single-line input after the
+scenario name:
 
 ```text
-first command prints "A"
-second command prints "B"
-=> skill result is "B"
+/work#my_skill.sh 3
+/work#my_skill.sh -f file.txt
+/work#my_skill.sh -j test.json
+/work#my_skill.sh "привет" -f output.txt
 ```
 
-It is deliberately not the last non-empty output. If the last external command
-succeeds with empty stdout, the whole skill completes successfully and
-silently. The runtime does not invent an acknowledgement. A skill that should
-explicitly confirm completion should make its final external command print a
-small result such as `OK`.
+cat-agent does not interpret that tail. It becomes stdin of the first scenario
+step. From there the scenario behaves as a text pipeline: stdout of one external
+step becomes stdin of the next. A step may pass data through, transform it or
+replace it, for example by printing the name of a file it just created.
 
-`read_pic.sh` is the current special result type and returns an image to the
-model context instead of a textual stdout result.
+Internal tools reuse their normal runtime implementations inside the same
+pipeline. A bare `read_pic.sh` consumes the previous text output as its image
+path; `read_pic.sh file.png` uses the explicit path instead.
+
+A skill may also exist purely for side effects: create or modify files, control
+peripherals, publish MQTT data, and so on. Those operations are logged
+independently from the value returned to the model.
+
+The final textual pipeline output is stripped and returned as the skill result.
+If it is empty, the skill completes successfully and silently; runtime does not
+invent an acknowledgement. A final step may explicitly print `OK` when an
+acknowledgement is desired.
+
+`read_pic.sh` produces a multimodal result rather than text and therefore must
+be the final scenario step.
 
 More detail:
 
