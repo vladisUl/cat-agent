@@ -69,8 +69,13 @@ class CommandRuntime(RestrictedCommandRuntime):
         command: str,
         *,
         require_assignment: bool = True,
+        input_text: str | None = None,
     ) -> CommandResult | None:
-        """Execute a cat-agent pseudo-command, or return None for ordinary commands."""
+        """Execute a cat-agent pseudo-command, or return None for ordinary commands.
+
+        Explicit arguments in command take priority. A bare internal command may
+        consume input_text supplied by a skill pipeline.
+        """
         enabled = frozenset(
             name.strip()
             for name in os.getenv("CAT_AGENT_ENABLED_SKILLS", "shell,mqtt").split(",")
@@ -79,6 +84,18 @@ class CommandRuntime(RestrictedCommandRuntime):
         name = stripped.split(maxsplit=1)[0] if stripped else ""
         if name not in {"mqtt_sub.sh", "mqtt_pub.sh"}:
             return None
+
+        effective_command = command
+        try:
+            tokens = shlex.split(stripped, posix=True)
+        except ValueError:
+            tokens = ()
+        if (
+            len(tokens) == 1
+            and input_text is not None
+            and input_text.strip()
+        ):
+            effective_command = f"{name} {input_text.strip()}"
 
         if "mqtt" not in enabled:
             return self._error(
@@ -92,8 +109,8 @@ class CommandRuntime(RestrictedCommandRuntime):
             return None
 
         if name == "mqtt_sub.sh":
-            return self._mqtt_sub_value(command)
-        return self._mqtt_pub_value(command)
+            return self._mqtt_sub_value(effective_command)
+        return self._mqtt_pub_value(effective_command)
 
     def format_result(self, result: CommandResult) -> str:
         if result.operation == "mqtt_sub" and result.ok and result.stdout.strip():
