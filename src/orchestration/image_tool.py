@@ -8,13 +8,28 @@ import shlex
 from .data_paths import resolve_data_path
 
 
-def read_picture(command, runtime, client, *, require_assignment: bool = True):
-    """Return message content for this tool, or None for an ordinary command."""
+def read_picture(
+    command,
+    runtime,
+    client,
+    *,
+    require_assignment: bool = True,
+    input_text: str | None = None,
+):
+    """Return message content for this tool, or None for an ordinary command.
+
+    An explicit PATH argument wins. Inside a skill pipeline, a bare read_pic.sh
+    may receive PATH from the previous step through input_text.
+    """
     if command.strip().split(maxsplit=1)[:1] != ["read_pic.sh"]:
         return None
     try:
         argv = shlex.split(command)
-        if len(argv) != 2:
+        if len(argv) == 2:
+            logical_path = argv[1]
+        elif len(argv) == 1 and input_text is not None and input_text.strip():
+            logical_path = input_text.strip()
+        else:
             raise ValueError("usage: read_pic.sh PATH/NAME.png|jpg")
         if getattr(client, "supports_images", False) is not True:
             raise ValueError("read_pic is supported only by LiteRT-LM and OpenAI backends")
@@ -23,7 +38,7 @@ def read_picture(command, runtime, client, *, require_assignment: bool = True):
         enabled = {name.strip() for name in os.getenv("CAT_AGENT_ENABLED_SKILLS", "shell,mqtt,read_pic").split(",")}
         if "read_pic" not in enabled:
             raise ValueError("read_pic disabled by runtime policy")
-        path = resolve_data_path(runtime, argv[1], must_exist=True)
+        path = resolve_data_path(runtime, logical_path, must_exist=True)
         if path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
             raise ValueError("only PNG and JPEG images are supported")
         limit = int(os.getenv("CAT_AGENT_MAX_IMAGE_BYTES", str(20 * 1024 * 1024)))
