@@ -76,7 +76,10 @@ def run_process(argv, *, cwd, timeout, output_limit, input_text=None):
                             key.fileobj.close()
                         continue
 
-                    data = os.read(key.fileobj.fileno(), 65536)
+                    try:
+                        data = os.read(key.fileobj.fileno(), 65536)
+                    except BlockingIOError:
+                        continue
                     if not data:
                         selector.unregister(key.fileobj)
                         key.fileobj.close()
