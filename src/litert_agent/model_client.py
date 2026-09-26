@@ -75,13 +75,13 @@ class LiteRTChatClient:
         self._event_handler: ModelEventHandler | None = None
         self._inference_timing = InferenceTiming("idle", None, None, None, None, None)
 
-    def fork(self, label):
+    def fork(self, label, *, inherit_base: bool = True):
         client = LiteRTChatClient(
             self.engine, max_output_tokens=self.max_output_tokens,
             temperature=self._temperature, top_p=self._top_p,
             reasoning_effort=self.reasoning_effort, label=label, allow_prefix_reset=True,
         )
-        if self._base_messages:
+        if inherit_base and self._base_messages:
             client.prepare_prefix(self._base_messages)
         return client
 
