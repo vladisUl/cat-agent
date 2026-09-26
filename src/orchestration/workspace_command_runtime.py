@@ -37,6 +37,23 @@ class CommandRuntime(RestrictedCommandRuntime):
     _MQTT_PORT = MQTT_PORT
     _MQTT_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+    def __init__(
+        self,
+        workspace,
+        skill_names,
+        *,
+        max_file_bytes: int,
+        timeout_seconds: int,
+        cyclic_processor=None,
+    ) -> None:
+        super().__init__(
+            workspace,
+            skill_names,
+            max_file_bytes=max_file_bytes,
+            timeout_seconds=timeout_seconds,
+        )
+        self._cyclic_processor = cyclic_processor
+
     @measured("command_seconds")
     def execute(self, command: str) -> CommandResult:
         uncertain = getattr(self, "_uncertain_commands", set())
@@ -76,14 +93,8 @@ class CommandRuntime(RestrictedCommandRuntime):
         Explicit arguments in command take priority. A bare internal command may
         consume input_text supplied by a skill pipeline.
         """
-        enabled = frozenset(
-            name.strip()
-            for name in os.getenv("CAT_AGENT_ENABLED_SKILLS", "shell,mqtt").split(",")
-        )
         stripped = command.strip()
         name = stripped.split(maxsplit=1)[0] if stripped else ""
-        if name not in {"mqtt_sub.sh", "mqtt_pub.sh"}:
-            return None
 
         effective_command = command
         try:
@@ -97,6 +108,26 @@ class CommandRuntime(RestrictedCommandRuntime):
         ):
             effective_command = f"{name} {input_text.strip()}"
 
+        if name == "cyclic_process":
+            if require_assignment and "cyclic_process" not in self.skill_names:
+                return None
+            if self._cyclic_processor is None:
+                return self._error(
+                    command,
+                    "cyclic_process",
+                    126,
+                    "cyclic_process: unavailable in this runtime",
+                    "unavailable",
+                )
+            return self._cyclic_processor(effective_command, self)
+
+        if name not in {"mqtt_sub.sh", "mqtt_pub.sh"}:
+            return None
+
+        enabled = frozenset(
+            name.strip()
+            for name in os.getenv("CAT_AGENT_ENABLED_SKILLS", "shell,mqtt").split(",")
+        )
         if "mqtt" not in enabled:
             return self._error(
                 command,
@@ -113,6 +144,8 @@ class CommandRuntime(RestrictedCommandRuntime):
         return self._mqtt_pub_value(effective_command)
 
     def format_result(self, result: CommandResult) -> str:
+        if result.operation == "cyclic_process" and result.ok and result.stdout.strip():
+            return result.stdout.strip()
         if result.operation == "mqtt_sub" and result.ok and result.stdout.strip():
             return result.stdout.strip()
         if result.operation == "mqtt_pub" and result.ok:
