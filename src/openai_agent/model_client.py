@@ -63,7 +63,8 @@ class OpenAICompatibleChatClient:
         self._event_handler: ModelEventHandler | None = None
         self._inference_timing = InferenceTiming("idle", None, None, None, None, None)
 
-    def fork(self, label):
+    def fork(self, label, *, inherit_base: bool = True):
+        del inherit_base
         return OpenAICompatibleChatClient(
             api_base_url=self.api_base_url, model=self.model,
             timeout_seconds=self.timeout_seconds, retries=self.retries,
