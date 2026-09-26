@@ -33,6 +33,7 @@ class AssistantManagerRuntime(ManagerRuntime):
 
     def __init__(self, *args, event_store: EventStore | None = None, **kwargs) -> None:
         self.event_store = event_store or EventStore()
+        self._active_request_text = ""
         super().__init__(*args, **kwargs)
         self.mqtt_catalog = MqttTopicCatalog(self.prompt_store.prompt_dir / "mqtt.txt")
 
@@ -47,6 +48,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         context.messages = [dict(item) for item in self._base_messages]
         context._chat_mode = False
         context._close_chat_after_reply = False
+        context._active_request_text = ""
         context._direct_runtime = CommandRuntime(
             self._direct_runtime.root, tuple(self._direct_runtime.skill_names),
             max_file_bytes=self._direct_runtime.max_file_bytes,
@@ -96,6 +98,7 @@ class AssistantManagerRuntime(ManagerRuntime):
     def user_message_steps(self, text: str) -> ManagerTurn:
         self._direct_runtime._uncertain_commands = set()
         user_text = text.strip()
+        self._active_request_text = user_text
         folded = user_text.casefold().rstrip(".!?…")
 
         if folded in {"чат", "начало чата"}:
@@ -392,7 +395,12 @@ class AssistantManagerRuntime(ManagerRuntime):
         picture = read_picture(command, self._direct_runtime, self.client)
         if picture is not None:
             return picture
-        script_result = run_skill_script(command, self._direct_runtime, self.client)
+        script_result = run_skill_script(
+            command,
+            self._direct_runtime,
+            self.client,
+            task_text=self._active_request_text,
+        )
         if script_result is SKILL_SILENT:
             return None
         if script_result is not None:
