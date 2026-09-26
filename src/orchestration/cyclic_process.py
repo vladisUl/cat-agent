@@ -104,14 +104,17 @@ def execute_cyclic_process(
         )
 
     fork = getattr(client, "fork", None)
-    child = None
-    owned_child = False
+    if not callable(fork):
+        return fail(
+            "cyclic_process: model client does not support isolated contexts",
+            "unsupported_client",
+        )
+
     try:
-        if callable(fork):
+        try:
+            child = fork("cyclic-process", inherit_base=False)
+        except TypeError:
             child = fork("cyclic-process")
-            owned_child = child is not client
-        else:
-            child = client
     except Exception as exc:
         LOGGER.exception("cyclic_process client fork failed")
         return fail(
@@ -177,13 +180,12 @@ def execute_cyclic_process(
         )
     finally:
         temp_path.unlink(missing_ok=True)
-        if owned_child:
-            close = getattr(child, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except Exception:
-                    LOGGER.exception("cyclic_process child close failed")
+        close = getattr(child, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                LOGGER.exception("cyclic_process child close failed")
 
     LOGGER.info(
         "CYCLIC_PROCESS complete parts=%d output=%s",
