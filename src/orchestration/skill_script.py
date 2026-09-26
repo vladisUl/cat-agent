@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 
 from .command_runtime import CommandResult
+from .cyclic_process import execute_cyclic_process
 from .data_paths import resolve_data_path
 from .image_tool import read_picture
 from .process_runner import run_process
@@ -17,7 +18,13 @@ LOGGER = logging.getLogger(__name__)
 SKILL_SILENT = object()
 
 
-def run_skill_script(command: str, runtime, client):
+def run_skill_script(
+    command: str,
+    runtime,
+    client,
+    *,
+    task_text: str = "",
+):
     """Execute an assigned <skill>.sh scenario from the workspace root.
 
     Returns None when command isn't an assigned skill script. SKILL_SILENT
@@ -87,6 +94,31 @@ def run_skill_script(command: str, runtime, client):
                 f"SYSTEM_ERROR\n{script_name}:{line_number}: parse error: {exc}"
             )
         if not tokens:
+            continue
+
+        if tokens[0] == "cyclic_process":
+            effective = stripped
+            if len(tokens) == 1 and stream.strip():
+                effective = f"{stripped} {stream.strip()}"
+            result = execute_cyclic_process(
+                effective,
+                runtime,
+                client,
+                task_text=task_text,
+            )
+            LOGGER.info(
+                "skill-script %s line=%d internal=cyclic_process exit=%d",
+                script_name,
+                line_number,
+                result.exit_code,
+            )
+            if not result.ok:
+                rendered = runtime.format_result(result)
+                return (
+                    f"SYSTEM_ERROR\n{script_name}:{line_number} failed\n"
+                    f"{rendered}"
+                )
+            stream = result.stdout
             continue
 
         if tokens[0] == "read_pic.sh":
