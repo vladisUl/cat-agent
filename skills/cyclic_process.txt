@@ -1,3 +1,3 @@
 code: /work#cyclic_process.sh
 description: циклически обработать части DATA-файла на свежем контексте каждой итерации; вызов PREFIX -n COUNT читает PREFIX_1..PREFIX_N и записывает результаты в PREFIX_out.txt
-manager: false
+manager: true
