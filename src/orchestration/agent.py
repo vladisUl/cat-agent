@@ -5,8 +5,13 @@ from .skill_script import SKILL_SILENT, run_skill_script
 from dataclasses import dataclass
 from enum import Enum
 import logging
+import os
 from pathlib import Path
+import shlex
+import tempfile
 
+from .command_runtime import CommandResult
+from .data_paths import resolve_data_path
 from .workspace_command_runtime import CommandRuntime, unwrap_work_command
 from .model_client import ModelClientError, OpenAIChatClient
 from .prompt_store import PromptStore
@@ -62,6 +67,7 @@ class AgentWorker:
         self._repeated: dict[tuple[str, int, str, str], int] = {}
         self._deferred_command: str | None = None
         self._deferred_result: str | None = None
+        self._task: str | None = None
 
     def begin(
         self,
@@ -78,6 +84,7 @@ class AgentWorker:
             raise ValueError(f"invalid task method: {method!r}")
         self._skills = skills
         self._method = method
+        self._task = task.strip()
         self._deferred_command = None
         self._deferred_result = None
 
@@ -108,6 +115,7 @@ class AgentWorker:
             tuple(skill.name for skill in skills),
             max_file_bytes=self.max_file_bytes,
             timeout_seconds=self.command_timeout_seconds,
+            cyclic_processor=self._cyclic_process_command,
         )
         self._steps_used = 0
         self._repeated = {}
@@ -440,6 +448,199 @@ class AgentWorker:
             used if used else step,
         )
 
+    def _cyclic_process_command(
+        self,
+        command: str,
+        runtime: CommandRuntime,
+    ) -> CommandResult:
+        def fail(message: str, code: str = "invalid_arguments") -> CommandResult:
+            return CommandResult(
+                command=command,
+                exit_code=2,
+                stdout="",
+                stderr=message,
+                cwd=runtime.root,
+                operation="cyclic_process",
+                metadata={"error_code": code},
+            )
+
+        try:
+            tokens = shlex.split(command, posix=True)
+        except ValueError as exc:
+            return fail(f"cyclic_process: {exc}", "parse_error")
+
+        usage = "cyclic_process: usage: cyclic_process PREFIX -n COUNT"
+        if len(tokens) != 4 or tokens[0] != "cyclic_process" or tokens[2] != "-n":
+            return fail(usage)
+
+        prefix = tokens[1]
+        try:
+            count = int(tokens[3], 10)
+        except ValueError:
+            return fail("cyclic_process: COUNT must be a positive integer")
+        if count <= 0:
+            return fail("cyclic_process: COUNT must be a positive integer")
+        if not self._task:
+            return fail("cyclic_process: no active agent task", "no_active_task")
+
+        logical_prefix = prefix[1:] if prefix.startswith("/") else prefix
+        if not logical_prefix:
+            return fail("cyclic_process: PREFIX must not be empty")
+
+        prefix_path = Path(logical_prefix)
+        suffix = prefix_path.suffix
+        stem = prefix_path.stem
+        parent = prefix_path.parent
+        part_names = [
+            (parent / f"{stem}_{index}{suffix}").as_posix()
+            for index in range(1, count + 1)
+        ]
+        output_name = (parent / f"{stem}_out.txt").as_posix()
+
+        part_paths: list[Path] = []
+        try:
+            for name in part_names:
+                path = resolve_data_path(runtime, name, must_exist=True)
+                size = path.stat().st_size
+                if size > runtime.max_file_bytes:
+                    return fail(
+                        f"cyclic_process: {name} is {size} bytes; "
+                        f"limit is {runtime.max_file_bytes}",
+                        "file_too_large",
+                    )
+                part_paths.append(path)
+            output_path = resolve_data_path(runtime, output_name)
+        except (OSError, ValueError) as exc:
+            return fail(f"cyclic_process: {exc}", "invalid_data_path")
+
+        if output_path.exists() and not output_path.is_file():
+            return fail(
+                f"cyclic_process: output is not a regular file: {output_name}",
+                "invalid_output",
+            )
+
+        fork = getattr(self.client, "fork", None)
+        if not callable(fork):
+            return fail(
+                "cyclic_process: model client does not support isolated contexts",
+                "unsupported_client",
+            )
+
+        try:
+            child_client = fork(f"{self.agent_id}-cyclic")
+        except Exception as exc:
+            LOGGER.exception("%s cyclic_process client fork failed", self.agent_id)
+            return fail(
+                f"cyclic_process: cannot create isolated context: {exc}",
+                "fork_failed",
+            )
+
+        child = AgentWorker(
+            self.agent_id,
+            child_client,
+            self.prompt_store,
+            self.workspace,
+            max_steps=self.max_steps,
+            max_file_bytes=self.max_file_bytes,
+            command_timeout_seconds=self.command_timeout_seconds,
+            tool_dispatcher=self.tool_dispatcher,
+        )
+        child_skills = tuple(
+            skill for skill in self._skills if skill.name != "cyclic_process"
+        )
+
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            dir=output_path.parent,
+        )
+        temp_path = Path(temp_name)
+
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as output:
+                for index, (name, path) in enumerate(
+                    zip(part_names, part_paths),
+                    start=1,
+                ):
+                    fragment = path.read_text(encoding="utf-8", errors="replace")
+                    fragment_task = (
+                        f"{self._task}\n\n"
+                        "[CYCLIC_PROCESS]\n"
+                        f"Изолированная итерация {index}/{count}. "
+                        "Выполни исходное задание только для текущего фрагмента. "
+                        "Циклом уже управляет система: не вызывай cyclic_process "
+                        "и не пытайся обрабатывать другие части.\n"
+                        f"Источник: {name}\n"
+                        "----- BEGIN FRAGMENT -----\n"
+                        f"{fragment}\n"
+                        "----- END FRAGMENT -----"
+                    )
+                    LOGGER.info(
+                        "%s CYCLIC_PROCESS iteration=%d/%d source=%s",
+                        self.agent_id,
+                        index,
+                        count,
+                        name,
+                    )
+                    outcome = child.start(
+                        fragment_task,
+                        child_skills,
+                        method="query",
+                    )
+                    if outcome.status == "NEED":
+                        if child.state is not AgentState.FREE:
+                            child.sleep_to_base()
+                        raise RuntimeError(
+                            f"iteration {index}/{count} needs context: {outcome.text}"
+                        )
+                    if outcome.status != "OK":
+                        raise RuntimeError(
+                            f"iteration {index}/{count} failed: "
+                            f"{outcome.text or outcome.status}"
+                        )
+                    result = outcome.text.strip()
+                    if result:
+                        output.write(result)
+                        output.write("\n")
+
+            os.replace(temp_path, output_path)
+        except Exception as exc:
+            LOGGER.exception("%s cyclic_process failed", self.agent_id)
+            if child.state is not AgentState.FREE:
+                child.sleep_to_base()
+            return fail(f"cyclic_process: {exc}", "iteration_failed")
+        finally:
+            temp_path.unlink(missing_ok=True)
+            close = getattr(child_client, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    LOGGER.exception(
+                        "%s cyclic_process child client close failed",
+                        self.agent_id,
+                    )
+
+        LOGGER.info(
+            "%s CYCLIC_PROCESS complete parts=%d output=%s",
+            self.agent_id,
+            count,
+            output_name,
+        )
+        return CommandResult(
+            command=command,
+            exit_code=0,
+            stdout=output_name + "\n",
+            stderr="",
+            cwd=runtime.root,
+            operation="cyclic_process",
+            metadata={
+                "prefix": prefix,
+                "count": count,
+                "output": output_name,
+            },
+        )
+
     def _release(self, *, preserve_session: bool) -> None:
         self.state = AgentState.FREE
         if preserve_session and self._messages is not None:
@@ -464,3 +665,4 @@ class AgentWorker:
         self._repeated = {}
         self._deferred_command = None
         self._deferred_result = None
+        self._task = None
