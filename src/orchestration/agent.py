@@ -501,13 +501,6 @@ class AgentWorker:
         try:
             for name in part_names:
                 path = resolve_data_path(runtime, name, must_exist=True)
-                size = path.stat().st_size
-                if size > runtime.max_file_bytes:
-                    return fail(
-                        f"cyclic_process: {name} is {size} bytes; "
-                        f"limit is {runtime.max_file_bytes}",
-                        "file_too_large",
-                    )
                 part_paths.append(path)
             output_path = resolve_data_path(runtime, output_name)
         except (OSError, ValueError) as exc:
