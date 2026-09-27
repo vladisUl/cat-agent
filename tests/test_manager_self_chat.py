@@ -11,7 +11,7 @@ from orchestration.manager import ManagerRuntime
 from orchestration.model_client import ChatResponse
 from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
-from orchestration.skills import SkillBase
+from orchestration.tool_catalog import build_tool_catalog
 from orchestration.system_events import SystemRuntime
 from orchestration.tasks import TaskStore
 
@@ -37,7 +37,10 @@ class ManagerSelfChatTest(unittest.TestCase):
         replies: list[str],
     ) -> tuple[ManagerRuntime, FakeClient, AgentWorker]:
         prompt_dir = root / "prompts"
-        shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+        project_root = Path(__file__).resolve().parents[1]
+        shutil.copytree(project_root / "prompts", prompt_dir)
+        tools_dir = root / "tools"
+        shutil.copytree(project_root / "tools", tools_dir)
         workspace = root / "workspace"
         workspace.mkdir()
 
@@ -53,9 +56,10 @@ class ManagerSelfChatTest(unittest.TestCase):
             max_file_bytes=4096,
             command_timeout_seconds=2,
         )
+        catalog = build_tool_catalog(tools_dir, ())
         manager = ManagerRuntime(
             client,  # type: ignore[arg-type]
-            SkillBase(prompt_dir / "prompt_base.txt"),
+            catalog,
             store,
             AgentPool([worker]),
             SystemRuntime(TaskStore(root / "task.txt")),
@@ -63,18 +67,30 @@ class ManagerSelfChatTest(unittest.TestCase):
         )
         return manager, client, worker
 
-    def test_manager_base_contains_tools_and_agent_execution_protocol(self) -> None:
+    def test_manager_base_contains_canonical_tools(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            manager, _client, _worker = self._runtime(Path(temp), ["REPLY\nunused"])
+            root = Path(temp)
+            manager, _client, _worker = self._runtime(root, ["REPLY\nunused"])
             base = manager.messages[0]["content"]
-            self.assertIn("[MANAGER_TOOLS]", base)
-            self.assertIn('"name": "shell"', base)
-            self.assertIn('"name": "mqtt"', base)
+
+            for name in (
+                "cyclic_process",
+                "file_divide",
+                "mqtt",
+                "prognoz",
+                "read_pic",
+                "shell",
+            ):
+                raw = (root / "tools" / f"{name}.md").read_text(
+                    encoding="utf-8"
+                ).strip()
+                self.assertIn(raw, base)
+                self.assertEqual(base.count(raw), 1)
+
             self.assertIn("zigbee2mqtt/temp_ulica", base)
-            self.assertNotIn("broker_host:", base)
-            self.assertNotIn("broker_port:", base)
-            self.assertIn("[AGENT_EXECUTION_PROTOCOL]", base)
-            self.assertIn("Ты ИИ-агент-исполнитель.", base)
+            self.assertNotIn("DYNAMIC SKILLS", base)
+            self.assertNotIn("[MANAGER_TOOLS]", base)
+            self.assertNotIn("[AGENT_EXECUTION_PROTOCOL]", base)
 
     def test_manager_direct_strips_sam_and_uses_agent_task_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
