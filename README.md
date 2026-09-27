@@ -267,13 +267,15 @@ MCP support is optional:
 Enabled stdio and Streamable HTTP servers are discovered before the model BASE
 is finalized. The resulting catalog is frozen until CORE restart.
 
-MCP tools join the same runtime catalog:
+MCP tools join the same runtime catalog. MANAGER always receives one compact
+`mcp:<server>` TOOL capability for every discovered MCP server so it knows what
+can be delegated to an AGENT.
 
-- `manager: true` — MANAGER receives canonical TOOL blocks for the discovered
-  leaf tools and may call them directly;
-- `manager: false` — MCP details are not inserted into MANAGER's model BASE.
-  The runtime capability `mcp:<server>` remains assignable to an AGENT, which
-  then receives the frozen leaf TOOL blocks.
+- `manager: true` — MANAGER additionally receives canonical TOOL blocks for the
+  discovered leaf tools and may call those leaf tools directly;
+- `manager: false` — MANAGER receives only the compact `mcp:<server>`
+  capability and description. Leaf tools and schemas are supplied only to an
+  AGENT assigned that capability.
 
 Tool results pass through a common normalizer. It preserves `isError` and
 content blocks while avoiding a second semantically duplicate
