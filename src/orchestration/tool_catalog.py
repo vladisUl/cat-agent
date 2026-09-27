@@ -66,9 +66,6 @@ def _mcp_capability_prompt(name: str, description: str) -> str:
         f"**[TOOL {name}]**\n\n"
         f"**name:** {name}\n\n"
         f"**description:** {description}\n\n"
-        "Этот tool используется только при выборе tools для ЗАДАНИЯ AGENT. "
-        "MANAGER не вызывает его через /work#. "
-        "При назначении AGENT получает полный frozen набор tools этого MCP-сервера.\n\n"
         "**[/TOOL]**"
     )
 
