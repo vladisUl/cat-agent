@@ -1,32 +1,136 @@
-"""Immutable per-CORE union of base tools, dynamic skills and MCP tools."""
+"""Frozen per-CORE catalog of local TOOL files and discovered MCP tools."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+import re
 
-from .dynamic_skills import DynamicSkill, load_dynamic_skills
-from .skills import Skill, SkillBase, SkillBaseError
+from .skills import Skill, SkillBaseError
+
+
+_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+
+
+@dataclass(frozen=True, slots=True)
+class LocalTool:
+    name: str
+    manager: bool
+    text: str
+    description: str
+
+    def as_skill(self) -> Skill:
+        return Skill(
+            name=self.name,
+            description=self.description,
+            prompt=self.text,
+        )
+
+
+def _plain_markdown(line: str) -> str:
+    return line.strip().replace("**", "").strip()
+
+
+def _field(text: str, name: str) -> str | None:
+    prefix = name.casefold() + ":"
+    for raw in text.splitlines():
+        plain = _plain_markdown(raw)
+        if plain.casefold().startswith(prefix):
+            return plain[len(prefix):].strip()
+    return None
+
+
+def _description(text: str, fallback: str) -> str:
+    lines = text.splitlines()
+    for index, raw in enumerate(lines):
+        plain = _plain_markdown(raw)
+        if not plain.casefold().startswith("description:"):
+            continue
+        value = plain.split(":", 1)[1].strip()
+        if value:
+            return value
+        for candidate in lines[index + 1:]:
+            candidate_plain = _plain_markdown(candidate)
+            if not candidate_plain:
+                continue
+            if candidate_plain.startswith("[") or candidate_plain.startswith(chr(96) * 3):
+                continue
+            if re.match(r"^[A-Za-zА-Яа-я_ -]+:\s*", candidate_plain):
+                break
+            return candidate_plain.lstrip("* ").strip() or fallback
+        break
+    return fallback
+
+
+def load_tool_files(directory: Path) -> tuple[LocalTool, ...]:
+    if not directory.exists():
+        raise SkillBaseError(f"Tools directory does not exist: {directory}")
+    if not directory.is_dir():
+        raise SkillBaseError(f"Tools path is not a directory: {directory}")
+
+    result: list[LocalTool] = []
+    names: set[str] = set()
+
+    for path in sorted(directory.glob("*.md"), key=lambda item: item.name.casefold()):
+        if path.is_symlink() or not path.is_file():
+            raise SkillBaseError(f"Tool definition must be a regular file: {path}")
+
+        filename_name = path.stem
+        if not _NAME_RE.fullmatch(filename_name):
+            raise SkillBaseError(f"Invalid tool filename: {path.name!r}")
+
+        text = path.read_text(encoding="utf-8").strip()
+        nonempty = [line for line in text.splitlines() if line.strip()]
+        if len(nonempty) < 2:
+            raise SkillBaseError(f"Tool definition is incomplete: {path.name}")
+
+        opening = _plain_markdown(nonempty[0])
+        closing = _plain_markdown(nonempty[-1])
+        expected_opening = f"[TOOL {filename_name}]"
+        if opening != expected_opening:
+            raise SkillBaseError(
+                f"Tool header mismatch in {path.name}: expected {expected_opening!r}, got {opening!r}"
+            )
+        if closing != "[/TOOL]":
+            raise SkillBaseError(f"Tool {filename_name!r} has no [/TOOL] closing tag")
+
+        declared_name = _field(text, "name")
+        if declared_name != filename_name:
+            raise SkillBaseError(
+                f"Tool filename/name mismatch: filename={filename_name!r}, name={declared_name!r}"
+            )
+
+        manager_raw = _field(text, "manager")
+        if manager_raw is None or manager_raw.casefold() not in {"true", "false"}:
+            raise SkillBaseError(
+                f"Tool {filename_name!r} manager must be true or false"
+            )
+
+        if filename_name in names:
+            raise SkillBaseError(f"Duplicate tool: {filename_name}")
+        names.add(filename_name)
+        result.append(
+            LocalTool(
+                name=filename_name,
+                manager=manager_raw.casefold() == "true",
+                text=text,
+                description=_description(text, filename_name),
+            )
+        )
+
+    if not result:
+        raise SkillBaseError(f"No TOOL definitions found in {directory}")
+    return tuple(result)
 
 
 class ToolCatalog:
     def __init__(
         self,
-        base: SkillBase,
+        local_tools: tuple[LocalTool, ...],
         mcp_runtime=None,
-        *,
-        dynamic_skills: tuple[DynamicSkill, ...] = (),
     ) -> None:
-        self.path = base.path
         self.mcp_runtime = mcp_runtime
-        self._base_names = base.names()
-        self._skills = {name: base.get(name) for name in self._base_names}
-        self._dynamic_skills = tuple(dynamic_skills)
-        self._dynamic_names: list[str] = []
-
-        for spec in self._dynamic_skills:
-            if spec.name in self._skills:
-                raise SkillBaseError(f"Duplicate tool: {spec.name}")
-            self._skills[spec.name] = spec.as_skill()
-            self._dynamic_names.append(spec.name)
+        self._local_tools = tuple(local_tools)
+        self._tools = {spec.name: spec.as_skill() for spec in self._local_tools}
 
         self._mcp_skills = () if mcp_runtime is None else mcp_runtime.skills()
         self._configs = {
@@ -35,125 +139,68 @@ class ToolCatalog:
         }
 
         grouped: dict[str, list[Skill]] = {}
-        for skill in self._mcp_skills:
-            if skill.name in self._skills:
-                raise SkillBaseError(f"Duplicate tool: {skill.name}")
-            parts = skill.name.split(":", 2)
+        for tool in self._mcp_skills:
+            if tool.name in self._tools:
+                raise SkillBaseError(f"Duplicate tool: {tool.name}")
+            parts = tool.name.split(":", 2)
             if len(parts) != 3 or parts[0] != "mcp":
-                raise SkillBaseError(f"Invalid MCP tool name: {skill.name}")
-            self._skills[skill.name] = skill
-            grouped.setdefault(parts[1], []).append(skill)
+                raise SkillBaseError(f"Invalid MCP tool name: {tool.name}")
+            self._tools[tool.name] = tool
+            grouped.setdefault(parts[1], []).append(tool)
 
-        self._server_skills = {
+        self._server_tools = {
             server: tuple(items) for server, items in grouped.items()
         }
         self._capabilities: dict[str, Skill] = {}
         for server, config in self._configs.items():
-            tools = self._server_skills.get(server, ())
+            tools = self._server_tools.get(server, ())
             if not tools:
                 continue
             name = f"mcp:{server}"
-            if name in self._skills:
+            if name in self._tools:
                 raise SkillBaseError(f"Duplicate tool: {name}")
             description = config.description.strip() or f"MCP server {server}"
             capability = Skill(
                 name=name,
                 description=description,
-                prompt=self._capability_prompt(name, tools),
+                prompt="\n\n".join(tool.prompt for tool in tools),
             )
             self._capabilities[server] = capability
-            self._skills[name] = capability
+            self._tools[name] = capability
 
-        manager_names = list(self._base_names)
-        manager_names.extend(
-            spec.name for spec in self._dynamic_skills if spec.manager
-        )
+        manager_names = [spec.name for spec in self._local_tools if spec.manager]
         for server, config in self._configs.items():
             if config.manager:
                 manager_names.extend(
-                    skill.name for skill in self._server_skills.get(server, ())
+                    tool.name for tool in self._server_tools.get(server, ())
                 )
         self._manager_names = tuple(manager_names)
 
-    @staticmethod
-    def _capability_prompt(name: str, tools: tuple[Skill, ...]) -> str:
-        return (
-            f"Capability {name}. Доступные MCP tools:\n"
-            + "\n".join(skill.prompt for skill in tools)
-        )
-
     def names(self) -> tuple[str, ...]:
-        """All assignable tools/capabilities, including legacy MCP leaf names."""
-        return tuple(self._skills)
+        return tuple(self._tools)
 
     def manager_names(self) -> tuple[str, ...]:
-        """Tools the manager may execute directly."""
         return self._manager_names
 
     def get(self, name: str) -> Skill:
         try:
-            return self._skills[name]
+            return self._tools[name]
         except KeyError as exc:
-            raise SkillBaseError(f"Unknown skill: {name}") from exc
+            raise SkillBaseError(f"Unknown tool: {name}") from exc
 
     def require(self, names: tuple[str, ...]) -> tuple[Skill, ...]:
         return tuple(self.get(name) for name in names)
 
     def catalog_text(self) -> str:
-        lines = [
-            f"{self._skills[name].name} — {self._skills[name].description}"
-            for name in self._base_names
-        ]
-        lines.extend(
-            f"{spec.name} — {spec.description}"
-            for spec in self._dynamic_skills
+        return "\n".join(
+            f"{name} — {self._tools[name].description}"
+            for name in self._tools
         )
-        for server, capability in self._capabilities.items():
-            lines.append(f"{capability.name} — {capability.description}")
-            if self._configs[server].manager:
-                lines.extend(
-                    f"{skill.name} — {skill.description}"
-                    for skill in self._server_skills.get(server, ())
-                )
-        return "\n".join(lines)
-
-    def dynamic_prompt(self) -> str:
-        if not self._dynamic_skills:
-            return ""
-        lines = [
-            "DYNAMIC SKILLS доступны для ЗАДАНИЙ по имени skill.",
-            "Skills с manager=true доступны MANAGER также для прямого вызова.",
-        ]
-        for spec in self._dynamic_skills:
-            mode = "direct+agent" if spec.manager else "agent-only"
-            lines.append(f"{spec.name} — {spec.description} [{mode}]")
-            if spec.manager:
-                lines.append(f"Использование: {spec.code}")
-        return "\n".join(lines)
-
-    def mcp_prompt(self) -> str:
-        if not self._capabilities:
-            return ""
-        lines = [
-            "MCP capabilities доступны для ЗАДАНИЙ как mcp:<server>.",
-            "При передаче mcp:<server> AGENT получает полный frozen набор tools этого сервера.",
-            "Полные схемы ниже доступны Гене напрямую только для серверов manager=true.",
-            "После прямой MCP-команды жди фактический результат runtime; при outcome_unknown не повторяй действие.",
-        ]
-        for server, capability in self._capabilities.items():
-            config = self._configs[server]
-            mode = "direct+agent" if config.manager else "agent-only"
-            lines.append(f"{capability.name} — {capability.description} [{mode}]")
-            if config.manager:
-                lines.extend(
-                    skill.prompt for skill in self._server_skills.get(server, ())
-                )
-        return "\n".join(lines)
 
     def write_snapshots(self, directory: Path) -> None:
         expected: dict[str, str] = {}
         for server, config in self._configs.items():
-            tools = self._server_skills.get(server, ())
+            tools = self._server_tools.get(server, ())
             description = config.description.strip() or f"MCP server {server}"
             lines = [
                 "# Generated from MCP tools/list at CORE startup. Do not edit.",
@@ -163,10 +210,7 @@ class ToolCatalog:
                 f"tools: {len(tools)}",
                 "",
             ]
-            if tools:
-                lines.append(self._capability_prompt(f"mcp:{server}", tools))
-            else:
-                lines.append("No tools were discovered for this server in the frozen CORE catalog.")
+            lines.extend(tool.prompt for tool in tools)
             expected[f"{server}.txt"] = "\n".join(lines).rstrip() + "\n"
         _sync_snapshot_dir(directory, expected)
 
@@ -188,32 +232,25 @@ def _sync_snapshot_dir(directory: Path, expected: dict[str, str]) -> None:
 
 
 def build_tool_catalog(
-    path,
+    tools_dir: Path,
     configs,
     *,
     snapshot_dir: Path | None = None,
-    skills_dir: Path | None = None,
 ):
-    base = SkillBase(path)
-    dynamic_skills = load_dynamic_skills(skills_dir)
-    enabled = tuple(c for c in configs if c.enabled)
+    local_tools = load_tool_files(tools_dir)
+    enabled = tuple(config for config in configs if config.enabled)
 
     if not enabled:
         if snapshot_dir is not None:
             _sync_snapshot_dir(snapshot_dir, {})
-        if not dynamic_skills:
-            return base
-        return ToolCatalog(base, dynamic_skills=dynamic_skills)
+        return ToolCatalog(local_tools)
 
     from .mcp_runtime import McpRuntime
+
     runtime = McpRuntime(enabled)
     runtime.start()
     try:
-        catalog = ToolCatalog(
-            base,
-            runtime,
-            dynamic_skills=dynamic_skills,
-        )
+        catalog = ToolCatalog(local_tools, runtime)
         if snapshot_dir is not None:
             catalog.write_snapshots(snapshot_dir)
         return catalog
