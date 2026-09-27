@@ -116,7 +116,7 @@ class OneShotQueryTest(unittest.TestCase):
             self.assertEqual(
                 result,
                 "SYSTEM_ERROR\nusage: task_timer.sh|query_timer.sh "
-                "PERIOD SKILLS -- TEXT",
+                "PERIOD TOOLS -- TEXT",
             )
 
     def test_result_text_is_returned_unchanged(self) -> None:
