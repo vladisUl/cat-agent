@@ -7,6 +7,9 @@ from .skills import Skill
 
 
 class PromptStore:
+    MANAGER_TOOLS_MARKER = "**СПИСОК TOOLS:**"
+    MQTT_MARKER = "**Список топиков и полей mqtt:**"
+
     def __init__(self, prompt_dir: Path, agent_count: int) -> None:
         self.prompt_dir = prompt_dir
         self.agent_count = agent_count
@@ -14,27 +17,40 @@ class PromptStore:
 
     def validate(self) -> None:
         required = [
-            self.prompt_dir / "sys_prompt_manager.txt",
-            self.prompt_dir / "prompt_base.txt",
+            self.prompt_dir / "sys_prompt_manager.md",
+            self.prompt_dir / "mqtt.md",
         ]
         required.extend(
-            self.prompt_dir / f"sys_prompt_agent_{index}.txt"
+            self.prompt_dir / f"sys_prompt_agent_{index}.md"
             for index in range(1, self.agent_count + 1)
         )
         missing = [str(path) for path in required if not path.is_file()]
         if missing:
             raise FileNotFoundError("Missing prompt files: " + ", ".join(missing))
 
-    def manager_system_prompt(self) -> str:
-        system_prompt = self._read("sys_prompt_manager.txt")
-        mqtt_context = self._skill_context("mqtt")
-        if not mqtt_context:
-            return system_prompt
-        return f"{system_prompt.rstrip()}\n{mqtt_context}"
+        manager = self._read("sys_prompt_manager.md")
+        self._require_single_marker(manager, self.MANAGER_TOOLS_MARKER)
+        self._require_single_marker(manager, self.MQTT_MARKER)
+
+    def manager_system_prompt(self, tools: tuple[Skill, ...]) -> str:
+        text = self._read("sys_prompt_manager.md")
+        tool_text = self._tool_text(tools)
+        text = self._insert_after_marker(
+            text,
+            self.MANAGER_TOOLS_MARKER,
+            tool_text,
+        )
+        mqtt = self._read("mqtt.md")
+        text = self._insert_after_marker(
+            text,
+            self.MQTT_MARKER,
+            mqtt,
+        )
+        return text.strip()
 
     def agent_system_prompt(self, agent_id: str) -> str:
         index = self._agent_index(agent_id)
-        return self._read(f"sys_prompt_agent_{index}.txt")
+        return self._read(f"sys_prompt_agent_{index}.md")
 
     def write_manager_prompt(self, text: str) -> Path:
         path = self.prompt_dir / "prompt_manager.txt"
@@ -43,34 +59,31 @@ class PromptStore:
 
     def build_agent_bootstrap(
         self,
-        skills: tuple[Skill, ...],
+        tools: tuple[Skill, ...],
         workspace: Path,
     ) -> str:
-        skill_items: list[dict[str, str]] = []
-        for skill in skills:
-            item = {
-                "name": skill.name,
-                "instructions": skill.prompt.strip(),
-            }
-            context = self._skill_context(skill.name)
-            if context:
-                item["context"] = context
-            skill_items.append(item)
-
-        payload = {
-            "workspace": str(workspace),
-            "skills": skill_items,
-        }
-        return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+        sections = [
+            f"**WORKSPACE:** {workspace}",
+            "**СПИСОК TOOLS:**",
+            self._tool_text(tools),
+        ]
+        if any(tool.name == "mqtt" for tool in tools):
+            sections.extend(
+                [
+                    self.MQTT_MARKER,
+                    self._read("mqtt.md"),
+                ]
+            )
+        return "\n\n".join(section for section in sections if section).strip() + "\n"
 
     def build_agent_system_context(
         self,
         agent_id: str,
-        skills: tuple[Skill, ...],
+        tools: tuple[Skill, ...],
         workspace: Path,
     ) -> str:
         system_prompt = self.agent_system_prompt(agent_id).strip()
-        bootstrap = self.build_agent_bootstrap(skills, workspace).strip()
+        bootstrap = self.build_agent_bootstrap(tools, workspace).strip()
         return f"{system_prompt}\n\n{bootstrap}"
 
     @staticmethod
@@ -93,12 +106,12 @@ class PromptStore:
         self,
         agent_id: str,
         task: str,
-        skills: tuple[Skill, ...],
+        tools: tuple[Skill, ...],
         workspace: Path,
         *,
         method: str | None = None,
     ) -> str:
-        system_context = self.build_agent_system_context(agent_id, skills, workspace)
+        system_context = self.build_agent_system_context(agent_id, tools, workspace)
         task_prompt = self.build_agent_task(task, method)
         text = system_context.rstrip() + "\n\n" + task_prompt
         self.write_agent_prompt(agent_id, text)
@@ -113,13 +126,31 @@ class PromptStore:
         path.write_text(desired, encoding="utf-8")
         return path
 
-    def _skill_context(self, skill_name: str) -> str:
-        if skill_name.startswith("mcp:"):
-            return ""
-        path = self.prompt_dir / f"{skill_name}.txt"
-        if not path.is_file():
-            return ""
-        return path.read_text(encoding="utf-8").strip()
+    @staticmethod
+    def _tool_text(tools: tuple[Skill, ...]) -> str:
+        return "\n\n".join(
+            tool.prompt.strip()
+            for tool in tools
+            if tool.prompt.strip()
+        )
+
+    @staticmethod
+    def _require_single_marker(text: str, marker: str) -> None:
+        count = text.count(marker)
+        if count != 1:
+            raise ValueError(
+                f"Prompt marker {marker!r} must appear exactly once, found {count}"
+            )
+
+    @classmethod
+    def _insert_after_marker(cls, text: str, marker: str, payload: str) -> str:
+        cls._require_single_marker(text, marker)
+        before, after = text.split(marker, 1)
+        payload = payload.strip()
+        insertion = marker
+        if payload:
+            insertion += "\n\n" + payload
+        return before + insertion + after
 
     def _read(self, name: str) -> str:
         return (self.prompt_dir / name).read_text(encoding="utf-8").strip()
