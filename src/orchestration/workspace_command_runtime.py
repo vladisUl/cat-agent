@@ -28,7 +28,7 @@ def unwrap_work_command(text: str) -> str | None:
 class CommandRuntime(RestrictedCommandRuntime):
     """Use a real bash process when the agent has the shell skill.
 
-    Commands still start in the configured workspace and keep the runtime timeout,
+    Commands start in the workspace DATA directory and keep the runtime timeout,
     but bash syntax itself is not restricted. Runtimes without the shell skill
     continue to use the restricted command implementation from command_runtime.py.
     """
