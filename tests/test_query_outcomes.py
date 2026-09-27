@@ -12,7 +12,7 @@ from orchestration.manager import AutonomousTaskExecution
 from orchestration.model_client import ChatResponse
 from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
-from orchestration.skills import SkillBase
+from orchestration.tool_catalog import build_tool_catalog
 from orchestration.system_events import SystemRuntime, TaskActivation
 from orchestration.tasks import TaskStore
 
@@ -38,7 +38,10 @@ class QueryOutcomeTest(unittest.TestCase):
         replies: list[str],
     ) -> AssistantManagerRuntime:
         prompt_dir = root / "prompts"
-        shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+        project_root = Path(__file__).resolve().parents[1]
+        shutil.copytree(project_root / "prompts", prompt_dir)
+        tools_dir = root / "tools"
+        shutil.copytree(project_root / "tools", tools_dir)
         workspace = root / "workspace"
         workspace.mkdir()
 
@@ -54,9 +57,10 @@ class QueryOutcomeTest(unittest.TestCase):
             max_file_bytes=4096,
             command_timeout_seconds=2,
         )
+        catalog = build_tool_catalog(tools_dir, ())
         return AssistantManagerRuntime(
             client,  # type: ignore[arg-type]
-            SkillBase(prompt_dir / "prompt_base.txt"),
+            catalog,
             store,
             AgentPool([worker]),
             SystemRuntime(TaskStore(root / "task.txt")),
