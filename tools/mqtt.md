@@ -3,23 +3,23 @@
 **name:** mqtt
 
 **code:**
-\`\`\`code
+```code
 mqtt_sub.sh <topic> <field>
 mqtt_pub.sh <topic> <payload>
-\`\`\`
+```
 
 **description:**
 Доступ к данным, датчикам и устройствам через MQTT.
 
 Для чтения:
-\`\`\`code
+```code
 /work#mqtt_sub.sh <topic> <field>
-\`\`\`
+```
 
 Для публикации:
-\`\`\`code
+```code
 /work#mqtt_pub.sh <topic> <payload>
-\`\`\`
+```
 
 * topic — MQTT topic; перечень доступных topic находится ниже
 * field — поле из payload
@@ -31,10 +31,10 @@ mqtt_pub.sh <topic> <payload>
 * если запрошенного параметра в доступных полях нет, не подменять его другим
 
 **example:**
-\`\`\`code
+```code
 /work#mqtt_sub.sh zigbee2mqtt/temp_ulica humidity
 /work#mqtt_pub.sh zigbee2mqtt/rozetka state=ON
-\`\`\`
+```
 
 **manager:** true
 
