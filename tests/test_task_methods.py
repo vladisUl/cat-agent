@@ -11,7 +11,7 @@ from orchestration.manager import AutonomousTaskCompletion, AutonomousTaskExecut
 from orchestration.model_client import ChatResponse
 from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
-from orchestration.skills import SkillBase
+from orchestration.tool_catalog import build_tool_catalog
 from orchestration.system_events import SystemEvent, SystemRuntime
 from orchestration.tasks import TaskStore
 
@@ -33,7 +33,10 @@ class FakeClient:
 class TaskMethodTest(unittest.TestCase):
     def _runtime(self, root: Path, replies: list[str]) -> tuple[ManagerRuntime, SystemRuntime, FakeClient]:
         prompt_dir = root / "prompts"
-        shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+        project_root = Path(__file__).resolve().parents[1]
+        shutil.copytree(project_root / "prompts", prompt_dir)
+        tools_dir = root / "tools"
+        shutil.copytree(project_root / "tools", tools_dir)
         workspace = root / "workspace"
         workspace.mkdir()
         client = FakeClient(replies)
@@ -49,9 +52,10 @@ class TaskMethodTest(unittest.TestCase):
             command_timeout_seconds=2,
         )
         system = SystemRuntime(TaskStore(root / "task.txt"))
+        catalog = build_tool_catalog(tools_dir, ())
         manager = ManagerRuntime(
             client,  # type: ignore[arg-type]
-            SkillBase(prompt_dir / "prompt_base.txt"),
+            catalog,
             store,
             AgentPool([worker]),
             system,
