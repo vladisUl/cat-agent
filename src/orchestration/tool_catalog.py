@@ -61,13 +61,27 @@ def _description(text: str, fallback: str) -> str:
     return fallback
 
 
-def _mcp_capability_prompt(name: str, description: str) -> str:
-    return (
-        f"**[TOOL {name}]**\n\n"
-        f"**name:** {name}\n\n"
-        f"**description:** {description}\n\n"
-        "**[/TOOL]**"
-    )
+def _mcp_capability_prompt(
+    name: str,
+    description: str,
+    tools: tuple[Skill, ...],
+) -> str:
+    lines = [
+        f"**[TOOL {name}]**",
+        "",
+        f"**name:** {name}",
+        "",
+        f"**description:** {description}",
+        "",
+        "**tools:**",
+    ]
+    for tool in tools:
+        detail = tool.description.strip()
+        lines.append(
+            f"- {tool.name} — {detail}" if detail else f"- {tool.name}"
+        )
+    lines.extend(["", "**[/TOOL]**"])
+    return "\n".join(lines)
 
 
 def load_tool_files(directory: Path) -> tuple[LocalTool, ...]:
@@ -187,7 +201,7 @@ class ToolCatalog:
             self._manager_capabilities[server] = Skill(
                 name=name,
                 description=description,
-                prompt=_mcp_capability_prompt(name, description),
+                prompt=_mcp_capability_prompt(name, description, tools),
             )
 
         manager_names = [spec.name for spec in self._local_tools if spec.manager]
@@ -245,7 +259,7 @@ class ToolCatalog:
                 "",
             ]
             lines.extend(tool.prompt for tool in tools)
-            expected[f"{server}.txt"] = "\n".join(lines).rstrip() + "\n"
+            expected[f"{server}.md"] = "\n".join(lines).rstrip() + "\n"
         _sync_snapshot_dir(directory, expected)
 
     def close(self) -> None:
@@ -255,9 +269,10 @@ class ToolCatalog:
 
 def _sync_snapshot_dir(directory: Path, expected: dict[str, str]) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    for path in directory.glob("*.txt"):
-        if path.name not in expected:
-            path.unlink()
+    for pattern in ("*.md", "*.txt"):
+        for path in directory.glob(pattern):
+            if path.name not in expected:
+                path.unlink()
     for name, text in expected.items():
         path = directory / name
         if path.is_file() and path.read_text(encoding="utf-8") == text:
