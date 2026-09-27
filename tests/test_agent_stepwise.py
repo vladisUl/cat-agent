@@ -59,6 +59,11 @@ class AgentStepwiseTest(unittest.TestCase):
             self.assertIsNone(first)
             self.assertEqual(worker.state, AgentState.RUNNING)
             self.assertEqual(len(client.calls), 1)
+            self.assertTrue((workspace / "data").is_dir())
+            self.assertIn(
+                f"**WORKSPACE:** {(workspace / 'data').resolve()}",
+                client.calls[0][0]["content"],
+            )
 
             second = worker.step()
             assert second is not None
