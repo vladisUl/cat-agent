@@ -33,7 +33,7 @@ mqtt_pub.sh <topic> <payload>
 **example:**
 ```code
 /work#mqtt_sub.sh zigbee2mqtt/temp_ulica humidity
-/work#mqtt_pub.sh zigbee2mqtt/rozetka state=ON
+/work#mqtt_pub.sh zigbee2mqtt/rozetka_komnata state=ON
 ```
 
 **manager:** true
