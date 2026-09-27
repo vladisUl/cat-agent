@@ -11,7 +11,7 @@ from orchestration.manager import ManagerRuntime
 from orchestration.model_client import ChatResponse
 from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
-from orchestration.skills import SkillBase
+from orchestration.tool_catalog import build_tool_catalog
 
 
 class FakeClient:
@@ -34,7 +34,10 @@ class IntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             prompt_dir = root / "prompts"
-            shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+            project_root = Path(__file__).resolve().parents[1]
+            shutil.copytree(project_root / "prompts", prompt_dir)
+            tools_dir = root / "tools"
+            shutil.copytree(project_root / "tools", tools_dir)
             workspace = root / "workspace"
             workspace.mkdir()
             (workspace / "alpha.txt").write_text("alpha\n", encoding="utf-8")
@@ -58,9 +61,10 @@ class IntegrationTest(unittest.TestCase):
                 max_file_bytes=1024,
                 command_timeout_seconds=2,
             )
+            catalog = build_tool_catalog(tools_dir, ())
             manager = ManagerRuntime(
                 client,  # type: ignore[arg-type]
-                SkillBase(prompt_dir / "prompt_base.txt"),
+                catalog,
                 store,
                 AgentPool([worker]),
                 max_steps=6,
@@ -70,7 +74,8 @@ class IntegrationTest(unittest.TestCase):
             self.assertIn("alpha.txt", turn.text)
 
             built = (prompt_dir / "prompt_agent_1.txt").read_text(encoding="utf-8")
-            self.assertIn('"name": "shell"', built)
+            shell_raw = (tools_dir / "shell.md").read_text(encoding="utf-8").strip()
+            self.assertIn(shell_raw, built)
             self.assertIn("Посмотри список файлов", built)
 
             first_agent_call = client.calls[1]
@@ -93,7 +98,10 @@ class IntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             prompt_dir = root / "prompts"
-            shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+            project_root = Path(__file__).resolve().parents[1]
+            shutil.copytree(project_root / "prompts", prompt_dir)
+            tools_dir = root / "tools"
+            shutil.copytree(project_root / "tools", tools_dir)
             workspace = root / "workspace"
             workspace.mkdir()
 
@@ -114,7 +122,8 @@ class IntegrationTest(unittest.TestCase):
                 max_file_bytes=1024,
                 command_timeout_seconds=2,
             )
-            mqtt = SkillBase(prompt_dir / "prompt_base.txt").require(("mqtt",))
+            catalog = build_tool_catalog(tools_dir, ())
+            mqtt = catalog.require(("mqtt",))
 
             first = worker.start("Посмотри температуру на улице.", mqtt)
             self.assertEqual(first.status, "OK")
@@ -137,7 +146,10 @@ class IntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             prompt_dir = root / "prompts"
-            shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+            project_root = Path(__file__).resolve().parents[1]
+            shutil.copytree(project_root / "prompts", prompt_dir)
+            tools_dir = root / "tools"
+            shutil.copytree(project_root / "tools", tools_dir)
             workspace = root / "workspace"
             workspace.mkdir()
 
@@ -158,9 +170,10 @@ class IntegrationTest(unittest.TestCase):
                 max_file_bytes=1024,
                 command_timeout_seconds=2,
             )
+            catalog = build_tool_catalog(tools_dir, ())
             manager = ManagerRuntime(
                 client,  # type: ignore[arg-type]
-                SkillBase(prompt_dir / "prompt_base.txt"),
+                catalog,
                 store,
                 AgentPool([worker]),
                 max_steps=4,
@@ -183,7 +196,10 @@ class IntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             prompt_dir = root / "prompts"
-            shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+            project_root = Path(__file__).resolve().parents[1]
+            shutil.copytree(project_root / "prompts", prompt_dir)
+            tools_dir = root / "tools"
+            shutil.copytree(project_root / "tools", tools_dir)
             workspace = root / "workspace"
             workspace.mkdir()
             (workspace / "answer.txt").write_text("42\n", encoding="utf-8")
@@ -210,9 +226,10 @@ class IntegrationTest(unittest.TestCase):
                 max_file_bytes=1024,
                 command_timeout_seconds=2,
             )
+            catalog = build_tool_catalog(tools_dir, ())
             manager = ManagerRuntime(
                 client,  # type: ignore[arg-type]
-                SkillBase(prompt_dir / "prompt_base.txt"),
+                catalog,
                 store,
                 AgentPool([worker]),
                 max_steps=8,
