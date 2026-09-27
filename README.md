@@ -236,7 +236,9 @@ Subdirectories are supported. `..` traversal and symlink escape outside DATA
 are rejected.
 
 Executable programs themselves remain in `/opt/model`; DATA is for runtime
-artifacts, not executable code.
+artifacts, not executable code. Ordinary command runtimes start with
+`/opt/model/data` as their current working directory, so relative file names
+such as `otchet.txt` resolve there by default.
 
 ## Image input
 
