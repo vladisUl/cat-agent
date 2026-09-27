@@ -3,9 +3,9 @@
 **name:** file_divide
 
 **code:**
-\`\`\`code
+```code
 /work#file_divide.sh
-\`\`\`
+```
 
 **description:** разделить текстовый DATA-файл на части без разрыва строк.
 
@@ -15,10 +15,10 @@
 * **-n COUNT** — количество частей
 
 **example:**
-\`\`\`code
+```code
 /work#file_divide.sh mylog -s 10000
 /work#file_divide.sh mydoc.txt -n 25
-\`\`\`
+```
 
 stdout содержит логические имена созданных частей FILE_1, FILE_2 ...
 
