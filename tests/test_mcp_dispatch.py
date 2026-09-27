@@ -158,6 +158,54 @@ class McpDispatchTest(unittest.TestCase):
             self.assertIsInstance(runtime._execute_work_command('read_pic.sh image.png'),list)
         self.assertEqual(self.mcp.calls,[])
 
+    def test_agent_only_server_summary_lists_all_leaf_descriptions(self):
+        class MultiMcp(FakeMcp):
+            def skills(self):
+                return (
+                    Skill(
+                        'mcp:test:read_sheet',
+                        'Read worksheet cells',
+                        '**[TOOL mcp:test:read_sheet]**\ninputSchema: READ\n**[/TOOL]**',
+                    ),
+                    Skill(
+                        'mcp:test:write_sheet',
+                        'Write worksheet cells',
+                        '**[TOOL mcp:test:write_sheet]**\ninputSchema: WRITE\n**[/TOOL]**',
+                    ),
+                    Skill(
+                        'mcp:test:create_chart',
+                        'Create a chart',
+                        '**[TOOL mcp:test:create_chart]**\ninputSchema: CHART\n**[/TOOL]**',
+                    ),
+                )
+
+        mcp=MultiMcp(manager=False)
+        catalog=ToolCatalog(load_tool_files(self.tools),mcp)
+        dispatcher=ToolDispatcher(mcp)
+        manager=FakeModel([])
+        agent=FakeModel([])
+        prompts=PromptStore(self.prompts,1)
+        worker=AgentWorker('agent1',agent,prompts,self.root,max_steps=5,max_file_bytes=4096,
+                           command_timeout_seconds=2,tool_dispatcher=dispatcher)
+        runtime=AssistantManagerRuntime(manager,catalog,prompts,AgentPool([worker]),
+            SystemRuntime(TaskStore(self.root/'summary-tasks.txt')),max_steps=6,
+            tool_dispatcher=dispatcher)
+
+        base=runtime._base_messages[0]['content']
+        self.assertIn('- mcp:test:read_sheet — Read worksheet cells',base)
+        self.assertIn('- mcp:test:write_sheet — Write worksheet cells',base)
+        self.assertIn('- mcp:test:create_chart — Create a chart',base)
+        self.assertNotIn('**[TOOL mcp:test:read_sheet]**',base)
+        self.assertNotIn('inputSchema: READ',base)
+        self.assertNotIn('inputSchema: WRITE',base)
+        self.assertNotIn('inputSchema: CHART',base)
+
+        capability=catalog.require(('mcp:test',))[0].prompt
+        self.assertIn('**[TOOL mcp:test:read_sheet]**',capability)
+        self.assertIn('inputSchema: READ',capability)
+        self.assertIn('inputSchema: WRITE',capability)
+        self.assertIn('inputSchema: CHART',capability)
+
     def test_agent_only_server_stays_small_in_manager_and_expands_for_agent(self):
         mcp=FakeMcp(manager=False)
         catalog=ToolCatalog(load_tool_files(self.tools),mcp)
