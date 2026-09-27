@@ -24,6 +24,7 @@ class MarkdownToolCatalogTest(unittest.TestCase):
                 "file_divide",
                 "mqtt",
                 "prognoz",
+                "read_partly",
                 "read_pic",
                 "shell",
             ),
