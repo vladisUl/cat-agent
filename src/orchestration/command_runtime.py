@@ -49,7 +49,20 @@ class CommandRuntime:
     ) -> None:
         workspace.mkdir(parents=True, exist_ok=True)
         self.root = workspace.resolve(strict=True)
-        self.cwd = self.root
+
+        data = self.root / "data"
+        if data.is_symlink():
+            raise ValueError(f"data directory must not be a symlink: {data}")
+        data.mkdir(parents=True, exist_ok=True)
+        self.data = data.resolve(strict=True)
+        try:
+            self.data.relative_to(self.root)
+        except ValueError as exc:
+            raise ValueError(f"data directory escapes workspace: {data}") from exc
+        if not self.data.is_dir():
+            raise ValueError(f"data path is not a directory: {data}")
+
+        self.cwd = self.data
         self.skill_names = frozenset(skill_names)
         self.max_file_bytes = max_file_bytes
         self.timeout_seconds = timeout_seconds
