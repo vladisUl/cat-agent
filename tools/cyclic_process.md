@@ -15,10 +15,10 @@
 **description:** циклически обработать части файла
 
 параметры
-* **PREFIX** префикс к файлами данных (пример myfile_1.dat myfile_2.dat ...)
+* **FILE** имя файла, из которого образованы части (пример: FILE=myfile.dat для myfile_1.dat myfile_2.dat ...)
 * **-n COUNT** количество файлов для чтения
 
-Результаты в PREFIX_out.txt
+Результаты в <имя FILE без расширения>_out.txt
 
 **manager:** true
 
