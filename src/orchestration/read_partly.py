@@ -5,6 +5,7 @@ import math
 import shlex
 
 from .data_paths import resolve_data_path
+from .fragment_processing import finish_steps, fork_child, managed_child, fragment_step
 
 
 LOGGER = logging.getLogger(__name__)
@@ -17,7 +18,14 @@ _PART_SYSTEM_PROMPT = """Ты читаешь один фрагмент боль�
 Верни только результат обработки текущего фрагмента, без служебных пояснений."""
 
 
-def read_partly(
+def read_partly(command, runtime, client, *, task_text, require_assignment=True):
+    return finish_steps(read_partly_steps(
+        command, runtime, client, task_text=task_text,
+        require_assignment=require_assignment,
+    ))
+
+
+def read_partly_steps(
     command: str,
     runtime,
     client,
@@ -64,19 +72,12 @@ def read_partly(
         )
         parts = _split_lines(text, count)
 
-        fork = getattr(client, "fork", None)
-        if not callable(fork):
-            raise ValueError("model client does not support isolated contexts")
-
-        try:
-            child = fork("read-partly", inherit_base=False)
-        except TypeError:
-            child = fork("read-partly")
+        child = fork_child(client, "read-partly")
 
         base_messages = [{"role": "system", "content": _PART_SYSTEM_PROMPT}]
         results: list[str] = []
 
-        try:
+        with managed_child(child):
             for index, fragment in enumerate(parts, start=1):
                 prompt = (
                     f"ЗАДАНИЕ:\n{task}\n\n"
@@ -96,21 +97,12 @@ def read_partly(
                     len(parts),
                     path.name,
                 )
-                response = child.chat(messages)
-                result = response.content.strip()
+                result = yield from fragment_step(
+                    child, messages, base_messages, tool="read_partly",
+                    index=index, total=len(parts), source=path.name,
+                )
                 if result:
                     results.append(result)
-
-                reset = getattr(child, "reset_to_base", None)
-                if callable(reset):
-                    reset(base_messages)
-        finally:
-            close = getattr(child, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except Exception:
-                    LOGGER.exception("read_partly child close failed")
 
         combined = "\n".join(results)
         LOGGER.info(

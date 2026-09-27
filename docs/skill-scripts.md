@@ -128,3 +128,56 @@ through `..` or symlinks.
 Blank lines and full-line comments beginning with `#` are ignored. Current
 version executes lines sequentially. Control flow is intentionally not defined
 yet.
+
+## Fragment processing and cancellation
+
+`read_partly.sh` and the `cyclic_process` scenario primitive yield to CORE after
+each child model response and BASE reset. The manager and agent both use this
+cooperative path. A higher-priority request can run before the next fragment;
+TASK validity is checked again at the boundary. A model call already in progress
+finishes before cancellation is applied. This does not introduce parallel model
+inference or automatic replay of a cancelled TASK.
+
+Closing a suspended operation closes its child model context. `cyclic_process`
+removes its temporary output; an existing final output is replaced only after
+successful completion of all fragments. The child is also closed if temporary
+file creation fails.
+
+File loading, splitting, and output formats are unchanged: `read_partly` reads
+and splits the whole source in RAM and returns the joined fragment responses;
+`cyclic_process` returns the output filename.
+
+CORE status/snapshot includes `fragment_runs` for active and suspended requests:
+`request_id`, `label`, `tool`, `index`, `total`, `source`, `phase` and
+`cancel_pending`. Phases are `running` and `between_fragments`.
+`cancel_pending` indicates a locally requested cancellation or CORE shutdown;
+remote TASK STOP/DELETE is detected at the next boundary, not during inference.
+
+Read this diagnostic without acquiring the human session (choose either socket):
+
+```bash
+/opt/litert-lm-venv/bin/python3 - /run/cat-agent/litert.sock <<'PY'
+import json
+import socket
+import sys
+
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(5)
+    client.connect(sys.argv[1])
+    client.sendall(b'{"type":"snapshot"}\n')
+    with client.makefile('r', encoding='utf-8') as stream:
+        for line in stream:
+            message = json.loads(line)
+            if message.get('type') == 'snapshot':
+                status = message['status']
+                print(json.dumps({key: status.get(key) for key in
+                                  ('manager_kv', 'fragment_runs')},
+                                 ensure_ascii=False, indent=2))
+                break
+PY
+```
+
+After a failed KV1 reset, the next new interactive request rebuilds its BASE.
+Successful recovery logs `CORE manager KV1 recovered`. If rebuilding fails,
+KV1 remains unavailable, KV2 may serve the request, and recovery is retried on
+a later new request. Previously executed turns are never replayed.

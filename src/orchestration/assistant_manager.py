@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from copy import copy
 from .image_tool import read_picture
-from .read_partly import read_partly
-from .skill_script import SKILL_SILENT, run_skill_script
+from .read_partly import read_partly_steps
+from .skill_script import SKILL_SILENT, skill_script_steps
 from .workspace_command_runtime import CommandRuntime
 import math
 import shlex
@@ -355,7 +355,7 @@ class AssistantManagerRuntime(ManagerRuntime):
 
     def _execute_work_steps(self, command):
         if self.tool_dispatcher.is_mcp(command):
-            return self._execute_work_command(command)
+            return (yield from self._execute_work_command_steps(command))
         try:
             argv = shlex.split(command, posix=True)
             if argv and argv[0] in {"task_timer.sh", "query_timer.sh"} and float(argv[1]) == 0:
@@ -387,16 +387,19 @@ class AssistantManagerRuntime(ManagerRuntime):
                         worker.sleep_to_base()
         except (ValueError, IndexError, SkillBaseError) as exc:
             return f"SYSTEM_ERROR\n{exc}"
-        return self._execute_work_command(command)
+        return (yield from self._execute_work_command_steps(command))
 
     def _execute_work_command(self, command: str) -> str | None:
+        return self._finish_steps(self._execute_work_command_steps(command))
+
+    def _execute_work_command_steps(self, command):
         mcp_result = self.tool_dispatcher.dispatch(command, self._direct_runtime)
         if mcp_result is not None:
             return mcp_result
         picture = read_picture(command, self._direct_runtime, self.client)
         if picture is not None:
             return picture
-        partly = read_partly(
+        partly = yield from read_partly_steps(
             command,
             self._direct_runtime,
             self.client,
@@ -404,7 +407,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         )
         if partly is not None:
             return partly
-        script_result = run_skill_script(
+        script_result = yield from skill_script_steps(
             command,
             self._direct_runtime,
             self.client,

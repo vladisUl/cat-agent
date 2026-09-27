@@ -37,6 +37,15 @@ class McpResultTest(unittest.TestCase):
             actual=normalize_mcp_result(result(texts,{'temp':20}))
             self.assertEqual(actual['structuredContent'],{'temp':20})
 
+    def test_object_conflicts_with_non_object_at_same_path(self):
+        for other in (None, False, 0, "text", [], [1]):
+            with self.subTest(other=other):
+                structured = {"a": {"x": 1}}
+                source = result([json.dumps(structured), json.dumps({"a": other})], structured)
+                actual = normalize_mcp_result(source)
+                self.assertEqual(actual['structuredContent'], structured)
+                self.assertEqual(actual['content'], source.content)
+
     def test_sdk_result_wrapper_is_deduplicated_for_text_and_json(self):
         for text,value in [('кот','кот'),('42',42),('false',False),('null',None),
                            ('[1,2]',[1,2]),('{"a":1}',{'a':1})]:

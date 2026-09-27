@@ -8,6 +8,7 @@ import tempfile
 
 from .command_runtime import CommandResult
 from .data_paths import resolve_data_path
+from .fragment_processing import finish_steps, fork_child, managed_child, fragment_step
 
 
 LOGGER = logging.getLogger(__name__)
@@ -20,7 +21,13 @@ _CYCLIC_SYSTEM_PROMPT = """Ты обработчик одного фрагмен
 Ответь только результатом обработки текущего фрагмента, без служебных пояснений."""
 
 
-def execute_cyclic_process(
+def execute_cyclic_process(command, runtime, client, *, task_text):
+    return finish_steps(cyclic_process_steps(
+        command, runtime, client, task_text=task_text,
+    ))
+
+
+def cyclic_process_steps(
     command: str,
     runtime,
     client,
@@ -110,10 +117,7 @@ def execute_cyclic_process(
         )
 
     try:
-        try:
-            child = fork("cyclic-process", inherit_base=False)
-        except TypeError:
-            child = fork("cyclic-process")
+        child = fork_child(client, "cyclic-process")
     except Exception as exc:
         LOGGER.exception("cyclic_process client fork failed")
         return fail(
@@ -125,66 +129,64 @@ def execute_cyclic_process(
         {"role": "system", "content": _CYCLIC_SYSTEM_PROMPT},
     ]
 
-    fd, temp_name = tempfile.mkstemp(
-        prefix=f".{output_path.name}.",
-        suffix=".tmp",
-        dir=output_path.parent,
-    )
-    temp_path = Path(temp_name)
+    with managed_child(child):
+        temp_path = None
+        fd = None
+        try:
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f".{output_path.name}.", suffix=".tmp", dir=output_path.parent,
+            )
+            temp_path = Path(temp_name)
+            with os.fdopen(fd, "w", encoding="utf-8") as output:
+                fd = None  # ownership transferred to the file object
+                for index, (name, path) in enumerate(
+                    zip(part_names, part_paths),
+                    start=1,
+                ):
+                    fragment = path.read_text(
+                        encoding="utf-8",
+                        errors="replace",
+                    )
+                    prompt = (
+                        f"ЗАДАНИЕ:\n{task}\n\n"
+                        f"ФРАГМЕНТ {index}/{count}: {name}\n"
+                        "----- BEGIN FRAGMENT -----\n"
+                        f"{fragment}\n"
+                        "----- END FRAGMENT -----"
+                    )
+                    messages = [
+                        *base_messages,
+                        {"role": "user", "content": prompt},
+                    ]
 
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as output:
-            for index, (name, path) in enumerate(
-                zip(part_names, part_paths),
-                start=1,
-            ):
-                fragment = path.read_text(
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                prompt = (
-                    f"ЗАДАНИЕ:\n{task}\n\n"
-                    f"ФРАГМЕНТ {index}/{count}: {name}\n"
-                    "----- BEGIN FRAGMENT -----\n"
-                    f"{fragment}\n"
-                    "----- END FRAGMENT -----"
-                )
-                messages = [
-                    *base_messages,
-                    {"role": "user", "content": prompt},
-                ]
+                    LOGGER.info(
+                        "CYCLIC_PROCESS iteration=%d/%d source=%s",
+                        index,
+                        count,
+                        name,
+                    )
+                    result = yield from fragment_step(
+                        child, messages, base_messages, tool="cyclic_process",
+                        index=index, total=count, source=name,
+                    )
+                    if result:
+                        output.write(result)
+                        output.write("\n")
 
-                LOGGER.info(
-                    "CYCLIC_PROCESS iteration=%d/%d source=%s",
-                    index,
-                    count,
-                    name,
-                )
-                response = child.chat(messages)
-                result = response.content.strip()
-                if result:
-                    output.write(result)
-                    output.write("\n")
-
-                reset = getattr(child, "reset_to_base", None)
-                if callable(reset):
-                    reset(base_messages)
-
-        os.replace(temp_path, output_path)
-    except Exception as exc:
-        LOGGER.exception("cyclic_process failed")
-        return fail(
-            f"cyclic_process: {exc}",
-            "iteration_failed",
-        )
-    finally:
-        temp_path.unlink(missing_ok=True)
-        close = getattr(child, "close", None)
-        if callable(close):
+            os.replace(temp_path, output_path)
+        except Exception as exc:
+            LOGGER.exception("cyclic_process failed")
+            return fail(f"cyclic_process: {exc}", "iteration_failed")
+        finally:
             try:
-                close()
-            except Exception:
-                LOGGER.exception("cyclic_process child close failed")
+                if fd is not None:
+                    os.close(fd)
+            finally:
+                if temp_path is not None:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except OSError:
+                        LOGGER.exception("cyclic_process temporary file cleanup failed")
 
     LOGGER.info(
         "CYCLIC_PROCESS complete parts=%d output=%s",

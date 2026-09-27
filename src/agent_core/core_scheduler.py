@@ -12,6 +12,7 @@ import uuid
 from orchestration.manager import AutonomousTaskCompletion, ManagerTurn
 from orchestration.system_events import SystemEvent
 from orchestration.tasks import TaskStoreError
+from orchestration.fragment_processing import fragment_observer
 from .types import InferenceTiming
 from .metrics import current_metrics
 
@@ -49,6 +50,7 @@ class _PriorityRequest:
     metrics: dict = field(default_factory=dict)
     task_run: SystemEvent | None = None
     task_started: bool = False
+    fragment_progress: dict | None = None
 
 
 class CoreScheduler:
@@ -221,6 +223,27 @@ class CoreScheduler:
             self._kv2_state = "ready"
         LOGGER.info("CORE manager KV2 ready")
         return context
+
+    def _recover_manager_kv1(self):
+        """Rebuild the canonical manager BASE on the executor, before new work.
+
+        Keep the runtime/client identity shared by the bundle and telemetry.
+        prepare_prefix replaces the failed resident session. No old turn is run.
+        Failure leaves KV1 unavailable; KV2 may still serve the new request.
+        """
+        context = self._manager_slots[0]
+        try:
+            context.client.prepare_prefix(context._base_messages)
+            context.reset_for_new_session()
+        except Exception:
+            LOGGER.exception("CORE manager KV1 recovery failed")
+            return
+        with self._queue_lock:
+            self._manager_slot_ready[0] = True
+            if not any(candidate is context for candidate in self._manager_available):
+                self._manager_available.append(context)
+                self._sort_manager_available_locked()
+        LOGGER.info("CORE manager KV1 recovered")
 
     def _ensure_manager_kv2_for_request(self):
         with self._queue_lock:
@@ -408,6 +431,9 @@ class CoreScheduler:
 
     def _advance(self, item):
         token = current_metrics.set(item.metrics)
+        progress_token = fragment_observer.set(
+            lambda progress: setattr(item, "fragment_progress", progress)
+        )
         try:
             if item.task_run is not None and not item.cancelled:
                 system = self.bundle.system_runtime
@@ -436,6 +462,7 @@ class CoreScheduler:
             self._discard(item)
             return ManagerTurn("error", str(exc))
         finally:
+            fragment_observer.reset(progress_token)
             current_metrics.reset(token)
 
     @staticmethod
@@ -451,6 +478,8 @@ class CoreScheduler:
         if key not in self._contexts:
             fork = getattr(self.bundle.runtime, "fork_context", None)
             if item.kind == "user" and self._manager_pool_enabled:
+                if not self._manager_slot_ready[0]:
+                    self._recover_manager_kv1()
                 context = self._take_manager_context()
                 if context is None and not self._manager_slot_ready[1]:
                     self._ensure_manager_kv2_for_request()
@@ -616,12 +645,20 @@ class CoreScheduler:
             pending = len(self._pending)
             background = any(r.iterator is not None for r in self._pending)
             highest = min((r.priority for r in self._pending), default=None)
+            fragment_runs = [
+                {"request_id": request.request_id, "label": request.label,
+                 **progress,
+                 "cancel_pending": request.cancelled or self._stop.is_set()}
+                for request in [item, *self._pending]
+                if request is not None and (progress := request.fragment_progress) is not None
+            ]
         inference_client = next(
             (candidate for candidate in [client, *getattr(self.bundle, "agent_clients", ())]
              if candidate.inference_timing.phase != "idle"), client,
         )
         return {"state": "BUSY" if item else "IDLE", "label": item.label if item else "",
                 "manager_kv": self.manager_kv_snapshot(),
+                "fragment_runs": fragment_runs,
                 "priority": item.priority if item else None, "request_id": item.request_id if item else None,
                 "request_started_monotonic": self._active_started,
                 "last_request_seconds": self._last_request_seconds, "last_metrics": self._last_metrics,

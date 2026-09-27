@@ -6,7 +6,8 @@ from pathlib import Path
 import shlex
 
 from .command_runtime import CommandResult
-from .cyclic_process import execute_cyclic_process
+from .cyclic_process import cyclic_process_steps
+from .fragment_processing import finish_steps
 from .data_paths import resolve_data_path
 from .image_tool import read_picture
 from .process_runner import run_process
@@ -18,7 +19,11 @@ LOGGER = logging.getLogger(__name__)
 SKILL_SILENT = object()
 
 
-def run_skill_script(
+def run_skill_script(command, runtime, client, *, task_text=""):
+    return finish_steps(skill_script_steps(command, runtime, client, task_text=task_text))
+
+
+def skill_script_steps(
     command: str,
     runtime,
     client,
@@ -100,7 +105,7 @@ def run_skill_script(
             effective = stripped
             if len(tokens) == 1 and stream.strip():
                 effective = f"{stripped} {stream.strip()}"
-            result = execute_cyclic_process(
+            result = yield from cyclic_process_steps(
                 effective,
                 runtime,
                 client,

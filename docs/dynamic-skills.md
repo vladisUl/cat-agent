@@ -1,26 +1,11 @@
 # Dynamic skills
 
-Dynamic skills are startup-discovered capabilities stored in `skills/*.txt`.
-They are frozen for the lifetime of a CORE, like the MCP catalog.
+Local tool definitions now live in `tools/*.md`; see the canonical format in
+[README](../README.md#tools). The former `skills/*.txt` loader has been removed;
+that directory is not a runtime catalog source.
 
-Example `skills/prognoz.txt`:
-
-```text
-code: /work#prognoz.sh
-description: прогноз на 3 дня в городе
-manager: true
-```
-
-The file name defines the skill name: `prognoz.txt` -> `prognoz`.
-For now `code` must be exactly `/work#<skill-name>.sh`.
-
-All dynamic skills are assignable to AGENT tasks. When a dynamic skill is
-delegated, its generated instructions including `code` are included in that
-agent's system context.
-
-`manager: true` also gives MANAGER the direct invocation code.
-`manager: false` exposes only the skill name and description to MANAGER so it
-can delegate the capability without receiving its direct command.
+All local tools can be assigned to AGENT tasks. `manager: true` includes the
+verbatim tool block in MANAGER's prompt. The catalog is frozen at CORE startup.
 
 At execution time an assigned dynamic command such as `/work#prognoz.sh`
 causes runtime to read `<workspace>/prognoz.sh` (normally
@@ -68,5 +53,5 @@ an explicit path (`read_pic.sh file.png`) or, when written bare, consume the
 previous step's output as its path. Because it produces a multimodal result it
 must be the final scenario step.
 
-Adding or changing a file under `skills/` requires a CORE restart so the
+Adding or changing a tool definition under `tools/` requires a CORE restart so the
 frozen startup catalog and model base remain stable.

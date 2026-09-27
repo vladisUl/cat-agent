@@ -241,6 +241,46 @@ class RealManagerSchedulingTest(unittest.TestCase):
             s._close_all_contexts()
             client.close.assert_not_called()
 
+    def test_failed_kv1_reset_rebuilds_base_before_new_request(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
+            s = CoreScheduler(SimpleNamespace(runtime=runtime))
+            self.addCleanup(s._executor.shutdown, wait=True)
+            client.prepare_prefix = Mock()
+            client.reset_to_base = Mock(side_effect=[RuntimeError("reset failed"), None])
+            item = _PriorityRequest("user", "user", "old", 0, 0, session_id="old")
+            self.assertIs(s._context(item), runtime)
+            with self.assertLogs("agent_core.core_scheduler", level="ERROR"):
+                s._close_context("human:old")
+            self.assertFalse(s.manager_kv_snapshot()["kv1"]["ready"])
+            new = _PriorityRequest("user", "user", "new", 0, 0, session_id="new")
+            self.assertIs(s._context(new), runtime)
+            client.prepare_prefix.assert_called_once_with(runtime._base_messages)
+            self.assertTrue(s.manager_kv_snapshot()["kv1"]["ready"])
+            self.assertEqual(client.calls, [])  # no automatic replay of the old turn
+
+    def test_failed_kv1_recovery_uses_kv2_and_retries_on_later_request(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime, client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])
+            child = fixtures.FakeClient([])
+            child.close = Mock()
+            client.fork = Mock(return_value=child)
+            client.prepare_prefix = Mock(side_effect=[RuntimeError("prefill failed"), None])
+            s = CoreScheduler(SimpleNamespace(runtime=runtime))
+            self.addCleanup(s._executor.shutdown, wait=True)
+            self.addCleanup(s._close_all_contexts)
+            s._manager_slot_ready[0] = False
+            s._manager_available.clear()
+            first = _PriorityRequest("user", "user", "first", 0, 0, session_id="first")
+            with self.assertLogs("agent_core.core_scheduler", level="ERROR"):
+                self.assertIs(s._context(first).client, child)
+            self.assertFalse(s._manager_slot_ready[0])
+            second = _PriorityRequest("user", "voice", "next", 0, -10, session_id="next")
+            self.assertIs(s._context(second), runtime)
+            self.assertTrue(s._manager_slot_ready[0])
+            self.assertEqual(client.prepare_prefix.call_count, 2)
+            self.assertEqual(client.calls, [])
+
     def test_failed_kv2_reset_discards_second_slot(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime, _client = fixtures.AssistantManagerTest()._runtime(Path(temp), [])

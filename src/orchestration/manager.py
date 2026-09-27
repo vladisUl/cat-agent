@@ -274,7 +274,7 @@ class ManagerRuntime:
         self,
         execution: AutonomousTaskExecution,
     ) -> AutonomousTaskCompletion | None:
-        """Run exactly one agent TT. None means this activation resumes later."""
+        """Advance an agent model/fragment step; None resumes this activation later."""
         task = execution.activation.task
         worker = execution.worker
         current = self.system_runtime.task_store.get(task.task_id)
@@ -295,7 +295,7 @@ class ManagerRuntime:
 
         if outcome is None:
             LOGGER.info(
-                "SYSTEM TASK %d paused at TT boundary agent=%s",
+                "SYSTEM TASK %d paused at model/fragment boundary agent=%s",
                 task.task_id,
                 worker.agent_id,
             )

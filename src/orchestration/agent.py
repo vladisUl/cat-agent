@@ -1,7 +1,7 @@
 from __future__ import annotations
 from .image_tool import read_picture
-from .read_partly import read_partly
-from .skill_script import SKILL_SILENT, run_skill_script
+from .read_partly import read_partly_steps
+from .skill_script import SKILL_SILENT, skill_script_steps
 
 from dataclasses import dataclass
 from enum import Enum
@@ -64,6 +64,7 @@ class AgentWorker:
         self._deferred_command: str | None = None
         self._deferred_result: str | None = None
         self._task: str | None = None
+        self._step_iterator = None
 
     def begin(
         self,
@@ -212,7 +213,21 @@ class AgentWorker:
         self._deferred_result = result_text
 
     def step(self) -> AgentOutcome | None:
-        """Execute exactly one model TICK->TOCK and stop at the next TT boundary."""
+        """Advance one model step or one fragment; preserve suspended tool state."""
+        if self._step_iterator is None:
+            self._step_iterator = self._step_steps()
+        try:
+            next(self._step_iterator)
+            return None
+        except StopIteration as done:
+            self._step_iterator = None
+            return done.value
+        except BaseException:
+            self._step_iterator = None
+            raise
+
+    def _step_steps(self):
+        """One parent model step, yielding at any nested fragment boundaries."""
         if self.state is not AgentState.RUNNING:
             raise RuntimeError(f"{self.agent_id} is not RUNNING")
         assert self._messages is not None
@@ -362,7 +377,7 @@ class AgentWorker:
             self._messages.append({"role": "user", "content": picture})
             return self._continue_or_limit(step)
 
-        partly = read_partly(
+        partly = yield from read_partly_steps(
             directive.command,
             self._runtime,
             self.client,
@@ -372,7 +387,7 @@ class AgentWorker:
             self._messages.append({"role": "user", "content": partly})
             return self._continue_or_limit(step)
 
-        script_result = run_skill_script(
+        script_result = yield from skill_script_steps(
             directive.command,
             self._runtime,
             self.client,
@@ -460,6 +475,10 @@ class AgentWorker:
         )
 
     def _release(self, *, preserve_session: bool) -> None:
+        pending = self._step_iterator
+        if pending is not None and not pending.gi_running:
+            self._step_iterator = None
+            pending.close()
         self.state = AgentState.FREE
         if preserve_session and self._messages is not None:
             base_messages = [dict(self._messages[0])]

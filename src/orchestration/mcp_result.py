@@ -60,6 +60,10 @@ def _additional(value, candidates):
     if candidates and all(_same(value, other) for other in candidates):
         return _ABSENT
     if isinstance(value, dict) and value:
+        # A null/scalar/list at this path conflicts with the object as a whole.
+        # Do not discard it by filtering candidates before descending.
+        if any(not isinstance(other, dict) for other in candidates):
+            return deepcopy(value)
         objects = [other for other in candidates if isinstance(other, dict)]
         result = {}
         for key, item in value.items():
