@@ -1,23 +1,26 @@
-**[TOOL file_devide]**
+**[TOOL file_divide]**
 
-**name:** file_devide
+**name:** file_divide
 
-**code:** /work#file_divide.sh
+**code:**
+\`\`\`code
+/work#file_divide.sh
+\`\`\`
 
-**example**
-```code
+**description:** разделить текстовый DATA-файл на части без разрыва строк.
+
+**параметры:**
+* **FILE** — логический путь к файлу внутри DATA
+* **-s BYTES** — целевой размер части в байтах; граница переносится вперёд до конца текущей строки
+* **-n COUNT** — количество частей
+
+**example:**
+\`\`\`code
 /work#file_divide.sh mylog -s 10000
 /work#file_divide.sh mydoc.txt -n 25
-```
+\`\`\`
 
-**description:** разделить файл на части.
-
-параметры: 
-* **FILE** файл для обработки
-* **-s COUNT** количество строк в фрагменте
-* **-b BYTES** количество байт в фрагменте
- 
-stdout содержит имена созданных частей <FILE_N>
+stdout содержит логические имена созданных частей FILE_1, FILE_2 ...
 
 **manager:** true
 
