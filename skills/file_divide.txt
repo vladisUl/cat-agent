@@ -1,3 +1,0 @@
-code: /work#file_divide.sh
-description: разделить текстовый DATA-файл на части без разрыва строк: FILE -s BYTES или FILE -n COUNT; stdout содержит имена созданных частей
-manager: true
