@@ -274,8 +274,8 @@ can be delegated to an AGENT.
 - `manager: true` — MANAGER additionally receives canonical TOOL blocks for the
   discovered leaf tools and may call those leaf tools directly;
 - `manager: false` — MANAGER receives only the compact `mcp:<server>`
-  capability and description. Leaf tools and schemas are supplied only to an
-  AGENT assigned that capability.
+  capability with the leaf tool names and descriptions. Leaf execution blocks
+  and schemas are supplied only to an AGENT assigned that capability.
 
 Tool results pass through a common normalizer. It preserves `isError` and
 content blocks while avoiding a second semantically duplicate
