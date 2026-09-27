@@ -83,10 +83,17 @@ class AgentWorker:
         self._deferred_command = None
         self._deferred_result = None
 
+        self._runtime = CommandRuntime(
+            self.workspace,
+            tuple(skill.name for skill in skills),
+            max_file_bytes=self.max_file_bytes,
+            timeout_seconds=self.command_timeout_seconds,
+        )
+
         system_context = self.prompt_store.build_agent_system_context(
             self.agent_id,
             skills,
-            self.workspace,
+            self._runtime.cwd,
         )
         task_prompt = self.prompt_store.build_agent_task(task, method)
         self.prompt_store.write_agent_prompt(
@@ -105,12 +112,6 @@ class AgentWorker:
             ]
             self._session_bootstrap = system_context
 
-        self._runtime = CommandRuntime(
-            self.workspace,
-            tuple(skill.name for skill in skills),
-            max_file_bytes=self.max_file_bytes,
-            timeout_seconds=self.command_timeout_seconds,
-        )
         self._steps_used = 0
         self._repeated = {}
         self.state = AgentState.RUNNING
