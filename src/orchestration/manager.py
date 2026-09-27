@@ -229,7 +229,7 @@ class ManagerRuntime:
 
         if not task.skills:
             LOGGER.error("SYSTEM TASK %d cannot run: no saved skills", task.task_id)
-            return self._autonomous_error_completion(task, "нет сохранённых skills")
+            return self._autonomous_error_completion(task, "нет сохранённых tools")
 
         try:
             skills = self.skill_base.require(task.skills)
@@ -349,7 +349,7 @@ class ManagerRuntime:
 
         if not task.skills:
             LOGGER.error("SYSTEM TASK %d cannot run: no saved skills", task.task_id)
-            return query_error("нет сохранённых skills")
+            return query_error("нет сохранённых tools")
 
         try:
             skills = self.skill_base.require(task.skills)
@@ -692,7 +692,7 @@ class ManagerRuntime:
                 if directive.task_method not in {"task", "query"}:
                     raise ValueError("persistent task method is missing")
                 if not directive.skills:
-                    raise ValueError("persistent task skills are missing")
+                    raise ValueError("persistent task tools are missing")
                 self.skill_base.require(directive.skills)
                 task = self.system_runtime.create_periodic_task(
                     directive.task_description,
@@ -751,7 +751,7 @@ class ManagerRuntime:
             return
 
         LOGGER.info("AGENT assigned id=%s skills=%s", worker.agent_id, ",".join(skill_names))
-        self._event(f"EVENT STARTED {worker.agent_id}\nskills: {','.join(skill_names)}")
+        self._event(f"EVENT STARTED {worker.agent_id}\ntools: {','.join(skill_names)}")
         outcome = worker.start(task, skills)
         self._agent_outcome(outcome.agent_id, outcome.status, outcome.text)
 
