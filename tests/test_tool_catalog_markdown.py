@@ -8,7 +8,34 @@ from orchestration.skills import SkillBaseError
 from orchestration.tool_catalog import ToolCatalog, load_tool_files
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 class MarkdownToolCatalogTest(unittest.TestCase):
+    def test_repository_tools_are_the_canonical_catalog(self) -> None:
+        loaded = load_tool_files(ROOT / "tools")
+        names = tuple(tool.name for tool in loaded)
+
+        self.assertEqual(
+            names,
+            (
+                "cyclic_process",
+                "file_divide",
+                "mqtt",
+                "prognoz",
+                "read_pic",
+                "shell",
+            ),
+        )
+        self.assertTrue(all(tool.manager for tool in loaded))
+        for tool in loaded:
+            self.assertEqual(
+                tool.text,
+                (ROOT / "tools" / f"{tool.name}.md")
+                .read_text(encoding="utf-8")
+                .strip(),
+            )
+
     @staticmethod
     def _write_tool(
         directory: Path,
