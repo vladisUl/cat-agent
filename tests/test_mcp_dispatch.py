@@ -33,7 +33,15 @@ class FakeMcp:
         ),)
         self.response='MCP_RESULT\n{"content":[{"type":"text","text":"real answer"}],"isError":false}'
     def skills(self):
-        return (Skill(NAME,'Echo','Call /work#'+NAME+' {JSON}; schema: {"type":"object"}'),)
+        return (Skill(
+            NAME,
+            'Echo',
+            '**[TOOL '+NAME+']**\n'
+            '**name:** '+NAME+'\n'
+            '**description:** Echo\n'
+            'schema: {"type":"object"}\n'
+            '**[/TOOL]**',
+        ),)
     def call(self, name, arguments):
         self.calls.append((name,arguments))
         return self.response
@@ -80,7 +88,7 @@ class McpDispatchTest(unittest.TestCase):
         runtime,_,_,_=self.runtime([])
         base=runtime._base_messages[0]['content']
         self.assertIn('**[TOOL mcp:test]**',base)
-        self.assertIn(NAME,base)
+        self.assertIn('**[TOOL mcp:test:echo]**',base)
         self.assertNotIn('mcp:test',runtime._direct_runtime.skill_names)
         self.assertIn(NAME,runtime._direct_runtime.skill_names)
 
