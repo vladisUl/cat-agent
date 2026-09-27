@@ -218,6 +218,8 @@ class McpDispatchTest(unittest.TestCase):
         mcp=FakeMcp(manager=False)
         catalog=ToolCatalog(load_tool_files(self.tools),mcp)
         directory=self.root/'mcp'
+        directory.mkdir()
+        (directory/'test.txt').write_text('legacy snapshot', encoding='utf-8')
         catalog.write_snapshots(directory)
         text=(directory/'test.md').read_text(encoding='utf-8')
         self.assertIn('manager: false',text)
