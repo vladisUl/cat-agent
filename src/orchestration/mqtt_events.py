@@ -33,7 +33,7 @@ class MqttFieldRule:
 
 
 class MqttTopicCatalog:
-    """Read discrete MQTT field semantics from mqtt.txt.
+    """Read discrete MQTT field semantics from the MQTT catalog.
 
     A discrete line has the form:
       topic: description; field: type; (value: meaning, value: meaning)
@@ -58,7 +58,7 @@ class MqttTopicCatalog:
             start=1,
         ):
             line = raw.strip()
-            if not line or line == "topics:":
+            if not line or line in {"topics:", "**topics:**"} or line.startswith("```"):
                 continue
             match = _FIELD_RULE_RE.fullmatch(line)
             if match is None:
@@ -102,7 +102,7 @@ class MqttTopicCatalog:
         rule = self._rules.get(key)
         if rule is None:
             raise ValueError(
-                f"MQTT field {key[0]} {key[1]} has no discrete value rule in mqtt.txt"
+                f"MQTT field {key[0]} {key[1]} has no discrete value rule in {self.path.name}"
             )
         return rule
 
