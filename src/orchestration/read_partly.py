@@ -53,10 +53,15 @@ def read_partly(
         if not path.is_file():
             raise ValueError(f"not a regular file: {logical_path}")
 
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text, encoding = _read_text(path)
         if not text:
             return ""
 
+        LOGGER.info(
+            "READ_PARTLY source=%s encoding=%s",
+            path.name,
+            encoding,
+        )
         parts = _split_lines(text, count)
 
         fork = getattr(client, "fork", None)
@@ -118,6 +123,27 @@ def read_partly(
 
     except (OSError, RuntimeError, ValueError) as exc:
         return f"SYSTEM_ERROR\nread_partly.sh: {exc}"
+
+
+def _read_text(path) -> tuple[str, str]:
+    data = path.read_bytes()
+
+    if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        return data.decode("utf-32"), "utf-32"
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16"), "utf-16"
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data.decode("utf-8-sig"), "utf-8-sig"
+
+    try:
+        return data.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        try:
+            return data.decode("cp1251"), "cp1251"
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                "unsupported text encoding; expected UTF-8, UTF-16 or Windows-1251"
+            ) from exc
 
 
 def _split_lines(text: str, count: int) -> list[str]:
