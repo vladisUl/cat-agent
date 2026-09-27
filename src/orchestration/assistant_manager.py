@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from copy import copy
 from .image_tool import read_picture
+from .read_partly import read_partly
 from .skill_script import SKILL_SILENT, run_skill_script
 from .workspace_command_runtime import CommandRuntime
 import math
@@ -395,6 +396,14 @@ class AssistantManagerRuntime(ManagerRuntime):
         picture = read_picture(command, self._direct_runtime, self.client)
         if picture is not None:
             return picture
+        partly = read_partly(
+            command,
+            self._direct_runtime,
+            self.client,
+            task_text=self._active_request_text,
+        )
+        if partly is not None:
+            return partly
         script_result = run_skill_script(
             command,
             self._direct_runtime,
