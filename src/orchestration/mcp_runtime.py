@@ -54,11 +54,21 @@ class McpTool:
         return f"mcp:{self.server}:{self.name}"
 
     def skill(self):
-        definition = {"name": self.qualified_name, "description": self.description,
-                      "inputSchema": json.loads(self.schema_json)}
-        return Skill(self.qualified_name, self.description,
-                     "Call /work#" + self.qualified_name + " {JSON}; wait for runtime result.\n"
-                     + json.dumps(definition, ensure_ascii=False, sort_keys=True))
+        definition = {
+            "name": self.qualified_name,
+            "description": self.description,
+            "inputSchema": json.loads(self.schema_json),
+        }
+        prompt = (
+            f"**[TOOL {self.qualified_name}]**\n\n"
+            f"**name:** {self.qualified_name}\n\n"
+            f"**code:** /work#{self.qualified_name} {{JSON}}\n\n"
+            f"**description:** {self.description}\n\n"
+            "**inputSchema:**\n"
+            + json.dumps(definition["inputSchema"], ensure_ascii=False, sort_keys=True)
+            + "\n\n**[/TOOL]**"
+        )
+        return Skill(self.qualified_name, self.description, prompt)
 
 
 @dataclass
