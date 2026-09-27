@@ -35,10 +35,10 @@ class AssistantManagerRuntime(ManagerRuntime):
         self.event_store = event_store or EventStore()
         self._active_request_text = ""
         super().__init__(*args, **kwargs)
-        self.mqtt_catalog = MqttTopicCatalog(self.prompt_store.prompt_dir / "mqtt.txt")
+        self.mqtt_catalog = MqttTopicCatalog(self.prompt_store.prompt_dir / "mqtt.md")
 
     def _bootstrap_prompt(self) -> str:
-        # sys_prompt_manager.txt is the complete manager BASE.
+        # sys_prompt_manager.md is the complete authored manager BASE.
         return ""
 
     def fork_context(self, label):
