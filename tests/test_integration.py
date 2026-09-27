@@ -73,7 +73,7 @@ class IntegrationTest(unittest.TestCase):
             self.assertEqual(turn.kind, "reply")
             self.assertIn("alpha.txt", turn.text)
 
-            built = (prompt_dir / "prompt_agent_1.txt").read_text(encoding="utf-8")
+            built = (prompt_dir / "prompt_agent_1.md").read_text(encoding="utf-8")
             shell_raw = (tools_dir / "shell.md").read_text(encoding="utf-8").strip()
             self.assertIn(shell_raw, built)
             self.assertIn("Посмотри список файлов", built)
