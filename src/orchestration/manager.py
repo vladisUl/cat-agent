@@ -14,7 +14,7 @@ from .protocol import (
     parse_agent_output,
     parse_manager_output,
 )
-from .skills import SkillBase, SkillBaseError
+from .skills import SkillBaseError
 from .tool_catalog import ToolCatalog
 from .tool_dispatcher import ToolDispatcher
 from .system_events import SystemEvent, SystemRuntime, TaskActivation
@@ -47,7 +47,7 @@ class ManagerRuntime:
     def __init__(
         self,
         client: OpenAIChatClient,
-        skill_base: SkillBase | ToolCatalog,
+        skill_base: ToolCatalog,
         prompt_store: PromptStore,
         pool: AgentPool,
         system_runtime: SystemRuntime | None = None,
@@ -89,18 +89,12 @@ class ManagerRuntime:
         self._agent_execution_protocol = self.prompt_store.agent_system_prompt("agent1").strip()
 
         self.system_runtime.set_task_handler(self._run_task_activation)
-        bootstrap = self._bootstrap_prompt()
-        system_context = (
-            self.prompt_store.manager_system_prompt().strip()
-            + "\n\n"
-            + bootstrap.strip()
-        )
-        dynamic_prompt = getattr(skill_base, "dynamic_prompt", lambda: "")()
-        if dynamic_prompt:
-            system_context = system_context.rstrip() + "\n\n" + dynamic_prompt
-        mcp_prompt = getattr(skill_base, "mcp_prompt", lambda: "")()
-        if mcp_prompt:
-            system_context = system_context.rstrip() + "\n\n" + mcp_prompt
+        bootstrap = self._bootstrap_prompt().strip()
+        system_context = self.prompt_store.manager_system_prompt(
+            self._manager_skills
+        ).strip()
+        if bootstrap:
+            system_context = system_context.rstrip() + "\n\n" + bootstrap
         self.prompt_store.write_manager_prompt(system_context)
         self.messages: list[dict[str, str]] = [
             {"role": "system", "content": system_context},
@@ -826,15 +820,6 @@ class ManagerRuntime:
 
     def _bootstrap_prompt(self) -> str:
         return (
-            "[AVAILABLE_SKILLS]\n"
-            f"{self.skill_base.catalog_text()}\n"
-            "[/AVAILABLE_SKILLS]\n\n"
-            "[MANAGER_TOOLS]\n"
-            f"{self._manager_tools_bootstrap}\n"
-            "[/MANAGER_TOOLS]\n\n"
-            "[AGENT_EXECUTION_PROTOCOL]\n"
-            f"{self._agent_execution_protocol}\n"
-            "[/AGENT_EXECUTION_PROTOCOL]\n\n"
             "[AGENT_CONTAINERS]\n"
             f"{self.pool.status_text()}\n"
             "[/AGENT_CONTAINERS]\n\n"
