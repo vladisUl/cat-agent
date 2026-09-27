@@ -59,7 +59,7 @@ def execute_cyclic_process(
             "cyclic_process: usage: cyclic_process FILE -n COUNT"
         )
 
-    prefix = tokens[1]
+    file_arg = tokens[1]
     try:
         count = int(tokens[3], 10)
     except ValueError:
