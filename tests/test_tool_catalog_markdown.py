@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from orchestration.prompt_store import PromptStore
 from orchestration.skills import SkillBaseError
 from orchestration.tool_catalog import ToolCatalog, load_tool_files
 
@@ -81,6 +82,40 @@ class MarkdownToolCatalogTest(unittest.TestCase):
             self.assertIn("direct", catalog.manager_names())
             self.assertNotIn("agent_only", catalog.manager_names())
             self.assertEqual(catalog.require(("agent_only",))[0].name, "agent_only")
+
+    def test_manager_false_is_not_inserted_into_manager_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tools_dir = root / "tools"
+            tools_dir.mkdir()
+            direct_raw = self._write_tool(tools_dir, "direct", manager=True)
+            hidden_raw = self._write_tool(tools_dir, "agent_only", manager=False)
+            catalog = ToolCatalog(load_tool_files(tools_dir))
+
+            prompts = root / "prompts"
+            prompts.mkdir()
+            (prompts / "sys_prompt_manager.md").write_text(
+                "BASE\n\n**СПИСОК TOOLS:**\n\n"
+                "**Список топиков и полей mqtt:**\n",
+                encoding="utf-8",
+            )
+            (prompts / "sys_prompt_agent_1.md").write_text(
+                "AGENT\n",
+                encoding="utf-8",
+            )
+            (prompts / "mqtt.md").write_text("**topics:**\n", encoding="utf-8")
+            store = PromptStore(prompts, 1)
+            store.validate()
+
+            manager_tools = catalog.require(catalog.manager_names())
+            manager_prompt = store.manager_system_prompt(manager_tools)
+
+            self.assertIn(direct_raw, manager_prompt)
+            self.assertNotIn(hidden_raw, manager_prompt)
+            self.assertEqual(
+                catalog.require(("agent_only",))[0].prompt,
+                hidden_raw,
+            )
 
     def test_rejects_filename_header_or_name_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
