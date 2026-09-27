@@ -1,5 +1,6 @@
 from __future__ import annotations
 from .image_tool import read_picture
+from .read_partly import read_partly
 from .skill_script import SKILL_SILENT, run_skill_script
 
 from dataclasses import dataclass
@@ -359,6 +360,16 @@ class AgentWorker:
         picture = read_picture(directive.command, self._runtime, self.client)
         if picture is not None:
             self._messages.append({"role": "user", "content": picture})
+            return self._continue_or_limit(step)
+
+        partly = read_partly(
+            directive.command,
+            self._runtime,
+            self.client,
+            task_text=self._task or "",
+        )
+        if partly is not None:
+            self._messages.append({"role": "user", "content": partly})
             return self._continue_or_limit(step)
 
         script_result = run_skill_script(
