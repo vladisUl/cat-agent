@@ -73,8 +73,9 @@ class ManagerRuntime:
         template = self.pool.get("agent1")
         if template is None:
             raise RuntimeError("manager requires agent1 runtime template")
-        manager_names = getattr(self.skill_base, "manager_names", self.skill_base.names)()
+        manager_names = self.skill_base.manager_names()
         self._manager_skills = self.skill_base.require(manager_names)
+        self._manager_prompt_tools = self.skill_base.manager_prompt_tools()
         self._manager_workspace = template.workspace
         self._direct_runtime = CommandRuntime(
             template.workspace,
@@ -85,7 +86,7 @@ class ManagerRuntime:
         self.system_runtime.set_task_handler(self._run_task_activation)
         bootstrap = self._bootstrap_prompt().strip()
         system_context = self.prompt_store.manager_system_prompt(
-            self._manager_skills
+            self._manager_prompt_tools
         ).strip()
         if bootstrap:
             system_context = system_context.rstrip() + "\n\n" + bootstrap
