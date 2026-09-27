@@ -124,7 +124,7 @@ class PromptStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             prompt_dir = Path(temp)
             store = PromptStore(prompt_dir, agent_count=1)
-            path = prompt_dir / "prompt_agent_1.txt"
+            path = prompt_dir / "prompt_agent_1.md"
             path.write_text("stable prompt\n", encoding="utf-8")
 
             with patch.object(Path, "write_text", autospec=True) as write_text:
