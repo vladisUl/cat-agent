@@ -53,7 +53,7 @@ class PromptStore:
         return self._read(f"sys_prompt_agent_{index}.md")
 
     def write_manager_prompt(self, text: str) -> Path:
-        path = self.prompt_dir / "prompt_manager.txt"
+        path = self.prompt_dir / "prompt_manager.md"
         path.write_text(text.rstrip() + "\n", encoding="utf-8")
         return path
 
@@ -119,7 +119,7 @@ class PromptStore:
 
     def write_agent_prompt(self, agent_id: str, text: str) -> Path:
         index = self._agent_index(agent_id)
-        path = self.prompt_dir / f"prompt_agent_{index}.txt"
+        path = self.prompt_dir / f"prompt_agent_{index}.md"
         desired = text.rstrip() + "\n"
         if path.is_file() and path.read_text(encoding="utf-8") == desired:
             return path
