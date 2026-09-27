@@ -82,12 +82,6 @@ class ManagerRuntime:
             max_file_bytes=template.max_file_bytes,
             timeout_seconds=template.command_timeout_seconds,
         )
-        self._manager_tools_bootstrap = self.prompt_store.build_agent_bootstrap(
-            self._manager_skills,
-            self._manager_workspace,
-        ).strip()
-        self._agent_execution_protocol = self.prompt_store.agent_system_prompt("agent1").strip()
-
         self.system_runtime.set_task_handler(self._run_task_activation)
         bootstrap = self._bootstrap_prompt().strip()
         system_context = self.prompt_store.manager_system_prompt(
