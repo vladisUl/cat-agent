@@ -40,7 +40,9 @@ class IntegrationTest(unittest.TestCase):
             shutil.copytree(project_root / "tools", tools_dir)
             workspace = root / "workspace"
             workspace.mkdir()
-            (workspace / "alpha.txt").write_text("alpha\n", encoding="utf-8")
+            data = workspace / "data"
+            data.mkdir()
+            (data / "alpha.txt").write_text("alpha\n", encoding="utf-8")
 
             client = FakeClient(
                 [
@@ -202,7 +204,9 @@ class IntegrationTest(unittest.TestCase):
             shutil.copytree(project_root / "tools", tools_dir)
             workspace = root / "workspace"
             workspace.mkdir()
-            (workspace / "answer.txt").write_text("42\n", encoding="utf-8")
+            data = workspace / "data"
+            data.mkdir()
+            (data / "answer.txt").write_text("42\n", encoding="utf-8")
 
             client = FakeClient(
                 [
