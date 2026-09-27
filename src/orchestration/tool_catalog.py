@@ -61,6 +61,18 @@ def _description(text: str, fallback: str) -> str:
     return fallback
 
 
+def _mcp_capability_prompt(name: str, description: str) -> str:
+    return (
+        f"**[TOOL {name}]**\n\n"
+        f"**name:** {name}\n\n"
+        f"**description:** {description}\n\n"
+        "Этот tool используется только при выборе tools для ЗАДАНИЯ AGENT. "
+        "MANAGER не вызывает его через /work#. "
+        "При назначении AGENT получает полный frozen набор tools этого MCP-сервера.\n\n"
+        "**[/TOOL]**"
+    )
+
+
 def load_tool_files(directory: Path) -> tuple[LocalTool, ...]:
     if not directory.exists():
         raise SkillBaseError(f"Tools directory does not exist: {directory}")
@@ -152,6 +164,7 @@ class ToolCatalog:
             server: tuple(items) for server, items in grouped.items()
         }
         self._capabilities: dict[str, Skill] = {}
+        self._manager_capabilities: dict[str, Skill] = {}
         for server, config in self._configs.items():
             tools = self._server_tools.get(server, ())
             if not tools:
@@ -160,6 +173,9 @@ class ToolCatalog:
             if name in self._tools:
                 raise SkillBaseError(f"Duplicate tool: {name}")
             description = config.description.strip() or f"MCP server {server}"
+
+            # AGENT capability: assigning mcp:<server> expands to the complete
+            # frozen leaf-tool set discovered at CORE startup.
             capability = Skill(
                 name=name,
                 description=description,
@@ -168,19 +184,40 @@ class ToolCatalog:
             self._capabilities[server] = capability
             self._tools[name] = capability
 
+            # MANAGER visibility is separate from direct-call authorization.
+            # Every MCP server is visible as a compact delegation capability,
+            # while only manager=true leaf tools are directly callable.
+            self._manager_capabilities[server] = Skill(
+                name=name,
+                description=description,
+                prompt=_mcp_capability_prompt(name, description),
+            )
+
         manager_names = [spec.name for spec in self._local_tools if spec.manager]
+        manager_prompt_tools = [
+            spec.as_skill() for spec in self._local_tools if spec.manager
+        ]
         for server, config in self._configs.items():
+            capability = self._manager_capabilities.get(server)
+            if capability is not None:
+                manager_prompt_tools.append(capability)
             if config.manager:
-                manager_names.extend(
-                    tool.name for tool in self._server_tools.get(server, ())
-                )
+                leaf_tools = self._server_tools.get(server, ())
+                manager_names.extend(tool.name for tool in leaf_tools)
+                manager_prompt_tools.extend(leaf_tools)
         self._manager_names = tuple(manager_names)
+        self._manager_prompt_tools = tuple(manager_prompt_tools)
 
     def names(self) -> tuple[str, ...]:
         return tuple(self._tools)
 
     def manager_names(self) -> tuple[str, ...]:
+        """Tools MANAGER is authorized to invoke directly."""
         return self._manager_names
+
+    def manager_prompt_tools(self) -> tuple[Skill, ...]:
+        """Tools/capabilities MANAGER must know about in its frozen BASE."""
+        return self._manager_prompt_tools
 
     def get(self, name: str) -> Skill:
         try:
