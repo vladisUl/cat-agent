@@ -27,7 +27,7 @@ def execute_cyclic_process(
     *,
     task_text: str,
 ) -> CommandResult:
-    """Process PREFIX_1..PREFIX_N in isolated model contexts.
+    """Process 1FILE..NFILE in isolated model contexts.
 
     This is a pseudo-script primitive. It is intentionally independent of
     MANAGER/AGENT roles: the caller supplies only the current task text, runtime
@@ -56,7 +56,7 @@ def execute_cyclic_process(
         or tokens[2] != "-n"
     ):
         return fail(
-            "cyclic_process: usage: cyclic_process PREFIX -n COUNT"
+            "cyclic_process: usage: cyclic_process FILE -n COUNT"
         )
 
     prefix = tokens[1]
@@ -74,20 +74,18 @@ def execute_cyclic_process(
             "missing_task",
         )
 
-    logical_prefix = prefix[1:] if prefix.startswith("/") else prefix
-    if not logical_prefix:
-        return fail("cyclic_process: PREFIX must not be empty")
+    logical_file = file_arg[1:] if file_arg.startswith("/") else file_arg
+    if not logical_file:
+        return fail("cyclic_process: FILE must not be empty")
 
-    prefix_path = Path(logical_prefix)
-    suffix = prefix_path.suffix
-    stem = prefix_path.stem
-    parent = prefix_path.parent
+    file_path = Path(logical_file)
+    parent = file_path.parent
 
     part_names = [
-        (parent / f"{stem}_{index}{suffix}").as_posix()
+        (parent / f"{index}{file_path.name}").as_posix()
         for index in range(1, count + 1)
     ]
-    output_name = (parent / f"{stem}_out.txt").as_posix()
+    output_name = (parent / f"{file_path.stem}_out.txt").as_posix()
 
     try:
         part_paths = [
@@ -201,7 +199,7 @@ def execute_cyclic_process(
         cwd=runtime.root,
         operation="cyclic_process",
         metadata={
-            "prefix": prefix,
+            "file": file_arg,
             "count": count,
             "output": output_name,
         },
