@@ -174,7 +174,9 @@ class McpDispatchTest(unittest.TestCase):
         base=runtime._base_messages[0]['content']
         self.assertIn('**[TOOL mcp:test]**',base)
         self.assertIn('Echo service',base)
-        self.assertNotIn(NAME,base)
+        self.assertIn('- mcp:test:echo — Echo',base)
+        self.assertNotIn('**[TOOL mcp:test:echo]**',base)
+        self.assertNotIn('schema',base)
         self.assertNotIn('mcp:test',runtime._direct_runtime.skill_names)
         self.assertNotIn(NAME,runtime._direct_runtime.skill_names)
         denied=dispatcher.dispatch('mcp:test:echo {"text":"x"}',runtime._direct_runtime)
@@ -217,11 +219,12 @@ class McpDispatchTest(unittest.TestCase):
         catalog=ToolCatalog(load_tool_files(self.tools),mcp)
         directory=self.root/'mcp'
         catalog.write_snapshots(directory)
-        text=(directory/'test.txt').read_text(encoding='utf-8')
+        text=(directory/'test.md').read_text(encoding='utf-8')
         self.assertIn('manager: false',text)
         self.assertIn('description: Echo service',text)
         self.assertIn(NAME,text)
         self.assertIn('schema',text)
+        self.assertFalse((directory/'test.txt').exists())
 
     def test_fork_shares_catalog_dispatcher_and_base(self):
         runtime,_,_,_=self.runtime([])
