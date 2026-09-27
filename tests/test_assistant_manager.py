@@ -285,7 +285,7 @@ class AssistantManagerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             runtime, _client = self._runtime(root, ["REPLY\nнормально"])
-            path = root / "prompts" / "prompt_manager.txt"
+            path = root / "prompts" / "prompt_manager.md"
             startup = path.read_text(encoding="utf-8")
 
             self.assertEqual(startup.strip(), runtime.messages[0]["content"].strip())
