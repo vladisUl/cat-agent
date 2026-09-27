@@ -8,7 +8,7 @@ import unittest
 from orchestration.agent import AgentState, AgentWorker
 from orchestration.model_client import ChatResponse
 from orchestration.prompt_store import PromptStore
-from orchestration.skills import SkillBase
+from orchestration.tool_catalog import build_tool_catalog
 
 
 class FakeClient:
@@ -31,13 +31,16 @@ class AgentStepwiseTest(unittest.TestCase):
             root = Path(temp)
             prompt_dir = root / "prompts"
             shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+            tools_dir = root / "tools"
+            shutil.copytree(Path(__file__).resolve().parents[1] / "tools", tools_dir)
             workspace = root / "workspace"
             workspace.mkdir()
 
             client = FakeClient(["/work#echo ok", '{"done":true}'])
             prompts = PromptStore(prompt_dir, 1)
             prompts.validate()
-            skills = SkillBase(prompt_dir / "prompt_base.txt").require(("shell",))
+            catalog = build_tool_catalog(tools_dir, ())
+            skills = catalog.require(("shell",))
             worker = AgentWorker(
                 "agent1",
                 client,  # type: ignore[arg-type]
