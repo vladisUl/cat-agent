@@ -76,6 +76,14 @@ class McpDispatchTest(unittest.TestCase):
             SystemRuntime(TaskStore(self.root/'tasks.txt')),max_steps=6,tool_dispatcher=self.dispatcher)
         return runtime,manager,agent,worker
 
+    def test_manager_true_sees_server_capability_and_direct_leaf(self):
+        runtime,_,_,_=self.runtime([])
+        base=runtime._base_messages[0]['content']
+        self.assertIn('**[TOOL mcp:test]**',base)
+        self.assertIn(NAME,base)
+        self.assertNotIn('mcp:test',runtime._direct_runtime.skill_names)
+        self.assertIn(NAME,runtime._direct_runtime.skill_names)
+
     def test_json_is_not_shell_and_manager_receives_actual_result(self):
         text="O'Brien $(touch SHOULD_NOT_EXIST); \\\"nested\\\""
         command='mcp:test:echo '+json.dumps({'text':text,'nested':{'a':[1,True]}})
@@ -164,8 +172,10 @@ class McpDispatchTest(unittest.TestCase):
             tool_dispatcher=dispatcher)
 
         base=runtime._base_messages[0]['content']
-        self.assertNotIn('mcp:test',base)
+        self.assertIn('**[TOOL mcp:test]**',base)
+        self.assertIn('Echo service',base)
         self.assertNotIn(NAME,base)
+        self.assertNotIn('mcp:test',runtime._direct_runtime.skill_names)
         self.assertNotIn(NAME,runtime._direct_runtime.skill_names)
         denied=dispatcher.dispatch('mcp:test:echo {"text":"x"}',runtime._direct_runtime)
         self.assertIn('not assigned',denied)
