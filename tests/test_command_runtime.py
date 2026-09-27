@@ -24,17 +24,21 @@ class CommandRuntimeTest(unittest.TestCase):
         self.assertTrue(self.runtime.execute('echo "hello world" > note.txt').ok)
         read = self.runtime.execute("cat note.txt")
         self.assertEqual(read.stdout, "hello world\n")
-        self.assertTrue(self.runtime.execute("mkdir data").ok)
-        self.assertTrue(self.runtime.execute("mv note.txt data/note.txt").ok)
-        self.assertTrue(self.runtime.execute("test -f data/note.txt").ok)
+        self.assertEqual(
+            (self.root / "data" / "note.txt").read_text(encoding="utf-8"),
+            "hello world\n",
+        )
+        self.assertTrue(self.runtime.execute("mkdir archive").ok)
+        self.assertTrue(self.runtime.execute("mv note.txt archive/note.txt").ok)
+        self.assertTrue(self.runtime.execute("test -f archive/note.txt").ok)
 
     def test_shell_starts_in_workspace(self) -> None:
         result = self.runtime.execute("pwd")
         self.assertTrue(result.ok)
-        self.assertEqual(Path(result.stdout.strip()), self.root.resolve())
+        self.assertEqual(Path(result.stdout.strip()), (self.root / "data").resolve())
 
     def test_boolean_shell_chain_used_by_agent(self) -> None:
-        (self.root / "user.txt").write_text("ok\n", encoding="utf-8")
+        (self.root / "data" / "user.txt").write_text("ok\n", encoding="utf-8")
 
         present = self.runtime.execute(
             'test -f user.txt && echo "ОК" || echo "Авария"'
@@ -42,7 +46,7 @@ class CommandRuntimeTest(unittest.TestCase):
         self.assertTrue(present.ok)
         self.assertEqual(present.stdout, "ОК\n")
 
-        (self.root / "user.txt").unlink()
+        (self.root / "data" / "user.txt").unlink()
         absent = self.runtime.execute(
             'test -f user.txt && echo "ОК" || echo "Авария"'
         )
@@ -55,19 +59,19 @@ class CommandRuntimeTest(unittest.TestCase):
         )
         self.assertTrue(result.ok)
         self.assertEqual(result.stdout.strip(), "2")
-        self.assertEqual((self.root / "count.txt").read_text().strip(), "2")
+        self.assertEqual((self.root / "data" / "count.txt").read_text().strip(), "2")
 
-    def test_executes_workspace_executable_with_dot_slash(self) -> None:
+    def test_workspace_executable_can_run_from_data_default_cwd(self) -> None:
         script = self.root / "timer_test.sh"
         script.write_text("#!/bin/sh\necho tick >> result.txt\n", encoding="utf-8")
         script.chmod(0o755)
 
-        result = self.runtime.execute("./timer_test.sh")
+        result = self.runtime.execute("../timer_test.sh")
 
         self.assertTrue(result.ok)
         self.assertEqual(result.operation, "bash")
         self.assertEqual(
-            (self.root / "result.txt").read_text(encoding="utf-8"),
+            (self.root / "data" / "result.txt").read_text(encoding="utf-8"),
             "tick\n",
         )
 
