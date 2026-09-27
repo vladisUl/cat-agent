@@ -211,7 +211,7 @@ class AssistantManagerRuntime(ManagerRuntime):
             created_monotonic=event.created_monotonic,
         )
         if not task.skills:
-            return self._autonomous_error_completion(task, "нет сохранённых skills")
+            return self._autonomous_error_completion(task, "нет сохранённых tools")
         try:
             skills = self.skill_base.require(task.skills)
         except SkillBaseError as exc:
@@ -360,10 +360,10 @@ class AssistantManagerRuntime(ManagerRuntime):
             if argv and argv[0] in {"task_timer.sh", "query_timer.sh"} and float(argv[1]) == 0:
                 separator = argv.index("--", 2)
                 if separator < 3 or separator != len(argv) - 2:
-                    raise ValueError("usage: task_timer.sh 0 SKILLS -- TEXT")
+                    raise ValueError("usage: task_timer.sh 0 TOOLS -- TEXT")
                 names = tuple(argv[2:separator])
                 if len(set(names)) != len(names) or not argv[-1].strip():
-                    raise ValueError("invalid task or skill list")
+                    raise ValueError("invalid task or tool list")
                 skills = self.skill_base.require(names)
                 # Yield while a suspended autonomous task owns all ordinary workers.
                 worker = self.pool.acquire()
@@ -415,7 +415,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         if argv[0] in {"task_timer.sh", "query_timer.sh"}:
             usage = (
                 "SYSTEM_ERROR\nusage: task_timer.sh|query_timer.sh "
-                "PERIOD SKILLS -- TEXT"
+                "PERIOD TOOLS -- TEXT"
             )
             try:
                 separator = argv.index("--", 2)
@@ -444,7 +444,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         if len(argv) < 4:
             return (
                 "SYSTEM_ERROR\nusage: task_timer.sh|query_timer.sh "
-                "PERIOD SKILLS TEXT"
+                "PERIOD TOOLS TEXT"
             )
 
         try:
@@ -456,7 +456,7 @@ class AssistantManagerRuntime(ManagerRuntime):
 
         skill_names = tuple(item.strip() for item in argv[2:-1] if item.strip())
         if not skill_names or len(set(skill_names)) != len(skill_names):
-            return "SYSTEM_ERROR\ninvalid skill list"
+            return "SYSTEM_ERROR\ninvalid tool list"
 
         task_text = argv[-1].strip()
         if not task_text:
@@ -506,7 +506,7 @@ class AssistantManagerRuntime(ManagerRuntime):
         executor: str = "auto",
     ) -> str:
         if "mqtt" not in skill_names:
-            return "SYSTEM_ERROR\nexternal event currently requires mqtt skill"
+            return "SYSTEM_ERROR\nexternal event currently requires mqtt tool"
 
         store = self.system_runtime.task_store
         if store is None:
