@@ -87,7 +87,7 @@ class ImageToolTest(unittest.TestCase):
                 "REPLY\nЧат создан", "/work#read_pic.sh /cat.png", "REPLY\nКот", "REPLY\nЦветы",
             ])
             client.supports_images = True
-            (runtime._direct_runtime.root / "data").mkdir()
+            (runtime._direct_runtime.root / "data").mkdir(exist_ok=True)
             (runtime._direct_runtime.root / "data" / "cat.png").write_bytes(PNG)
             runtime.user_message("Чат")
             self.assertEqual(runtime.user_message("Что на /cat.png?").text, "Кот")
