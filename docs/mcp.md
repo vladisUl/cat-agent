@@ -56,9 +56,10 @@ plain-scalar failures when descriptions contain `: `, `#`, or YAML-like values.
 `enabled: false` does not connect or spawn a process. `manager` defaults to `true`
 for backward compatibility. With `manager: true`, full tool schemas are added to
 Manager BASE and the manager may call those leaf tools directly. With
-`manager: false`, Manager BASE contains only the short `mcp:<server>` capability
-and `description`; the full frozen schemas are supplied only to an agent assigned
-that capability. A non-empty single-line `description` is required when
+`manager: false`, Manager BASE contains only a compact `mcp:<server>`
+capability: server description plus the discovered leaf tool names and their
+descriptions. Leaf execution schemas are supplied only to an agent assigned that
+capability. A non-empty single-line `description` is required when
 `manager: false`. Names must be unique and
 match `[a-z][a-z0-9_-]*`. Tool names must contain only letters, digits, `_`, `-`
 and `.`. Conflicting definitions from one server are rejected, never overwritten.
@@ -91,13 +92,14 @@ Before building/warming BASE, every enabled server gets one bounded discovery
 attempt (servers are contacted concurrently). The SDK obtains capabilities and
 all pages of `tools/list`. The catalog is then frozen for the lifetime of CORE.
 Descriptions and schemas are frozen as well as names. Each enabled server also
-produces a generated diagnostic snapshot in `/opt/cat-agent/mcp/<server>.txt`.
+produces a generated diagnostic snapshot in `/opt/cat-agent/mcp/<server>.md`.
 The snapshot is derived from the frozen `tools/list` result and is never an input
 or configuration source.
 
-Manager sees one short capability `mcp:<server>` for every discovered server.
-Only servers configured with `manager: true` additionally put their full leaf
-tool schemas into Manager BASE and grant direct execution. Assigning
+Manager sees one compact capability `mcp:<server>` for every discovered server,
+including the leaf tool names and descriptions. Only servers configured with
+`manager: true` additionally put their full leaf tool blocks and schemas into
+Manager BASE and grant direct execution. Assigning
 `mcp:<server>` to an agent expands that capability to the full frozen tool set
 for that server and grants only those MCP leaf calls. Existing saved tasks that
 name a full leaf tool such as `mcp:demo:echo` remain valid.
