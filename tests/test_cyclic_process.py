@@ -52,8 +52,8 @@ class CyclicProcessTest(unittest.TestCase):
         workspace = root / "workspace"
         data = workspace / "data"
         data.mkdir(parents=True)
-        (data / "syslog_1").write_text("AAA first fragment\n", encoding="utf-8")
-        (data / "syslog_2").write_text("BBB second fragment\n", encoding="utf-8")
+        (data / "1syslog.txt").write_text("AAA first fragment\n", encoding="utf-8")
+        (data / "2syslog.txt").write_text("BBB second fragment\n", encoding="utf-8")
         (workspace / "cyclic_process.sh").write_text(
             "cyclic_process\n",
             encoding="utf-8",
@@ -75,7 +75,7 @@ class CyclicProcessTest(unittest.TestCase):
             )
 
             result = run_skill_script(
-                "cyclic_process.sh syslog -n 2",
+                "cyclic_process.sh syslog.txt -n 2",
                 runtime,
                 client,
                 task_text="Кратко опиши каждый фрагмент.",
@@ -109,7 +109,7 @@ class CyclicProcessTest(unittest.TestCase):
 
             client = FakeClient(
                 [
-                    "/work#cyclic_process.sh syslog -n 2",
+                    "/work#cyclic_process.sh syslog.txt -n 2",
                     '{"result":"syslog_out.txt"}',
                 ],
                 child_replies=["first-summary", "second-summary"],
