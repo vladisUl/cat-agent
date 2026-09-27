@@ -9,6 +9,17 @@ from orchestration.mqtt_events import MqttEventMonitor, MqttTopicCatalog
 
 
 class MqttEventTest(unittest.TestCase):
+    def test_repository_markdown_catalog_parses_discrete_rules(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        catalog = MqttTopicCatalog(root / "prompts" / "mqtt.md")
+
+        motion = catalog.require("zigbee2mqtt/dvigen_verh", "occupancy")
+        self.assertEqual(motion.value_type, "boolean")
+        self.assertEqual(motion.values, ("true", "false"))
+
+        leak = catalog.require("zigbee2mqtt/kuhnya_leak", "water_leak")
+        self.assertEqual(leak.values, ("true", "false"))
+
     def test_catalog_parses_discrete_boolean_value_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "mqtt.txt"
