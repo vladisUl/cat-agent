@@ -13,10 +13,10 @@ from orchestration.model_client import ChatResponse
 from orchestration.pool import AgentPool
 from orchestration.prompt_store import PromptStore
 from orchestration.protocol import parse_manager_output
-from orchestration.skills import Skill, SkillBase, SkillBaseError
+from orchestration.skills import Skill, SkillBaseError
 from orchestration.system_events import SystemRuntime, SystemEvent
 from orchestration.tasks import TaskStore
-from orchestration.tool_catalog import ToolCatalog
+from orchestration.tool_catalog import ToolCatalog, load_tool_files
 from orchestration.tool_dispatcher import ToolDispatcher
 from orchestration.workspace_command_runtime import CommandRuntime
 
@@ -59,8 +59,10 @@ class McpDispatchTest(unittest.TestCase):
         self.root=Path(tmp.name)
         self.prompts=self.root/'prompts'
         shutil.copytree(ROOT/'prompts',self.prompts)
+        self.tools=self.root/'tools'
+        shutil.copytree(ROOT/'tools',self.tools)
         self.mcp=FakeMcp()
-        self.catalog=ToolCatalog(SkillBase(self.prompts/'prompt_base.txt'),self.mcp)
+        self.catalog=ToolCatalog(load_tool_files(self.tools),self.mcp)
         self.dispatcher=ToolDispatcher(self.mcp)
         self.commands=CommandRuntime(self.root,('shell','mqtt','read_pic',NAME),max_file_bytes=4096,timeout_seconds=2)
 
@@ -120,7 +122,7 @@ class McpDispatchTest(unittest.TestCase):
         class Collision(FakeMcp):
             def skills(self): return (Skill('shell','conflict','conflict'),)
         with self.assertRaises(SkillBaseError):
-            ToolCatalog(SkillBase(self.prompts/'prompt_base.txt'),Collision())
+            ToolCatalog(load_tool_files(self.tools),Collision())
 
     def test_malformed_unknown_and_unassigned_never_fall_through(self):
         for command in ('mcp:test:echo','mcp:test:echo []','mcp:test:echo {"x":NaN}',
@@ -150,7 +152,7 @@ class McpDispatchTest(unittest.TestCase):
 
     def test_agent_only_server_stays_small_in_manager_and_expands_for_agent(self):
         mcp=FakeMcp(manager=False)
-        catalog=ToolCatalog(SkillBase(self.prompts/'prompt_base.txt'),mcp)
+        catalog=ToolCatalog(load_tool_files(self.tools),mcp)
         dispatcher=ToolDispatcher(mcp)
         manager=FakeModel([])
         agent=FakeModel(['/work#mcp:test:echo {"text":"x"}','{"result":"real answer"}'])
@@ -162,7 +164,7 @@ class McpDispatchTest(unittest.TestCase):
             tool_dispatcher=dispatcher)
 
         base=runtime._base_messages[0]['content']
-        self.assertIn('mcp:test — Echo service [agent-only]',base)
+        self.assertNotIn('mcp:test',base)
         self.assertNotIn(NAME,base)
         self.assertNotIn(NAME,runtime._direct_runtime.skill_names)
         denied=dispatcher.dispatch('mcp:test:echo {"text":"x"}',runtime._direct_runtime)
@@ -177,7 +179,7 @@ class McpDispatchTest(unittest.TestCase):
 
     def test_server_capability_can_be_saved_and_resolved_after_reload(self):
         mcp=FakeMcp(manager=False)
-        catalog=ToolCatalog(SkillBase(self.prompts/'prompt_base.txt'),mcp)
+        catalog=ToolCatalog(load_tool_files(self.tools),mcp)
         dispatcher=ToolDispatcher(mcp)
         manager=FakeModel([])
         agent=FakeModel(['/work#mcp:test:echo {"text":"x"}','{"done":true}'])
@@ -202,7 +204,7 @@ class McpDispatchTest(unittest.TestCase):
 
     def test_mcp_snapshot_contains_frozen_server_tools(self):
         mcp=FakeMcp(manager=False)
-        catalog=ToolCatalog(SkillBase(self.prompts/'prompt_base.txt'),mcp)
+        catalog=ToolCatalog(load_tool_files(self.tools),mcp)
         directory=self.root/'mcp'
         catalog.write_snapshots(directory)
         text=(directory/'test.txt').read_text(encoding='utf-8')
