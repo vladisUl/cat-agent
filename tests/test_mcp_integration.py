@@ -97,8 +97,10 @@ class McpSdkIntegrationTest(unittest.TestCase):
         from orchestration.config import Settings
         from openai_agent.runtime import build_bundle
         with tempfile.TemporaryDirectory() as temp:
-            prompts=Path(temp)/'prompts'
+            temp_root=Path(temp)
+            prompts=temp_root/'prompts'
             shutil.copytree(ROOT/'prompts',prompts)
+            shutil.copytree(ROOT/'tools',temp_root/'tools')
             settings=replace(Settings.from_env(require_model=False), model='test', prompt_dir=prompts,
                 workspace=Path(temp),agent_count=1,
                 mcp_servers=(McpServerConfig('demo',True,'stdio',sys.executable,(str(SERVER),)),))
