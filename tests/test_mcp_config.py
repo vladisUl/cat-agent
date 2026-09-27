@@ -9,7 +9,6 @@ import yaml
 
 from orchestration.config import Settings
 from orchestration.mcp_config import parse_mcp_config, load_mcp_config
-from orchestration.skills import SkillBase
 from orchestration.tool_catalog import build_tool_catalog
 from orchestration.yaml_config import load_app_config
 
@@ -65,8 +64,9 @@ class McpConfigTest(unittest.TestCase):
     def test_disabled_has_no_runtime_or_sdk_import(self):
         config = parse_mcp_config({"servers":[dict(self.entry, enabled=False)]})
         with patch('orchestration.mcp_runtime.McpRuntime', side_effect=AssertionError('must not start')):
-            catalog = build_tool_catalog(ROOT / 'prompts/prompt_base.txt', config)
-        self.assertIsInstance(catalog, SkillBase)
+            catalog = build_tool_catalog(ROOT / 'tools', config)
+        self.assertIn("shell", catalog.names())
+        self.assertFalse(any(name.startswith("mcp:") for name in catalog.names()))
 
     def test_no_mcp_dependency_for_ordinary_core(self):
         script = '''
@@ -83,13 +83,11 @@ from orchestration.assistant_manager import AssistantManagerRuntime
 from orchestration.agent import AgentWorker
 from openai_agent.runtime import build_bundle
 catalog = build_tool_catalog(
-    Path('prompts/prompt_base.txt'),
+    Path('tools'),
     (),
-    skills_dir=Path('skills'),
 )
 names = catalog.names()
-assert names[:3] == ('shell', 'mqtt', 'read_pic')
-assert 'prognoz' in names
+assert {'shell', 'mqtt', 'read_pic', 'prognoz', 'file_divide', 'cyclic_process'} <= set(names)
 assert not any(name.startswith('mcp:') for name in names)
 '''
         result = subprocess.run([sys.executable, '-c', script], cwd=ROOT, capture_output=True, text=True,
