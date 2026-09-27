@@ -83,6 +83,34 @@ class ReadPartlyTest(unittest.TestCase):
             self.assertEqual(len(child.reset_calls), 2)
             self.assertTrue(child.closed)
 
+
+    def test_decodes_windows_1251_without_replacement_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            data = root / "data"
+            data.mkdir()
+            source = "Привет, это русский текст.\nВторая строка.\n"
+            (data / "legacy.txt").write_bytes(source.encode("cp1251"))
+            runtime = CommandRuntime(
+                root,
+                ("read_partly",),
+                max_file_bytes=4096,
+                timeout_seconds=2,
+            )
+            client = FakeClient(["готово"])
+
+            result = read_partly(
+                "read_partly.sh legacy.txt -n 1",
+                runtime,
+                client,
+                task_text="Прочитай текст.",
+            )
+
+            self.assertEqual(result, "готово")
+            prompt = client.children[0].calls[0][-1]["content"]
+            self.assertIn("Привет, это русский текст.", prompt)
+            self.assertNotIn("�", prompt)
+
     def test_requires_assignment_and_valid_count(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
