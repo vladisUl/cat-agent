@@ -20,7 +20,7 @@
 /work#file_divide.sh mydoc.txt -n 25
 ```
 
-stdout содержит логические имена созданных частей FILE_1, FILE_2 ...
+stdout содержит логические имена созданных частей 1FILE, 2FILE ...
 
 **manager:** true
 
