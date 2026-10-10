@@ -1,0 +1,10 @@
+{
+  "models": {
+    "gemma4-12b": {
+      "backend": "cpu",
+      "cpu_thread_count": 6,
+      "speculative_decoding": true,
+      "max_num_tokens": 8192
+    }
+  }
+}
