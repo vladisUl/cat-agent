@@ -48,6 +48,11 @@ class LiteRTRuntime:
         engine_options = {}
         if "enable_ynnpack" in config:
             engine_options["enable_ynnpack"] = config["enable_ynnpack"]
+        if "vision_backend" in config:
+            engine_options["vision_backend"] = (
+                litert_lm.Backend.CPU(thread_count=config.get("cpu_thread_count"))
+                if config["vision_backend"] == "cpu" else litert_lm.Backend.GPU()
+            )
         self.engine = litert_lm.Engine(
             str(model_path), backend=backend,
             max_num_tokens=config.get("max_num_tokens", 8192),
@@ -65,6 +70,9 @@ class LiteRTRuntime:
 
     def new_context(self, base, options):
         return TextContext(self.api, self.engine, base, options)
+
+    def new_vision_context(self, base, options):
+        return VisionContext(self.api, self.engine, options)
 
     def close(self):
         self.engine.close()
@@ -166,3 +174,75 @@ class TextContext:
             if resource is not None:
                 resource.close()
                 setattr(self, name, None)
+
+
+def vision_message(message):
+    """Translate already validated OpenAI content to native LiteRT JSON."""
+    content = message["content"]
+    if isinstance(content, list):
+        content = [
+            {"type": "image", "blob": part["image_url"]["url"].split(",", 1)[1]}
+            if part["type"] == "image_url" else dict(part)
+            for part in content
+        ]
+    return {"role": message["role"], "content": content}
+
+
+class VisionContext:
+    """Persistent Conversation for histories containing images.
+
+    The public Session API only accepts text. Vision preprocessing and template
+    image markers must be handled by Conversation, including on later text turns.
+    There is no raw-Session-to-Conversation KV transfer in the supported API.
+    """
+    def __init__(self, api, engine, options):
+        self.api, self.engine, self.options = api, engine, options
+        self.conversation = None
+        self.cached_tokens = self.prompt_tokens = 0
+
+    def prefill(self, messages, continuation):
+        # send_message_async performs image encoding + prefill + decode together;
+        # final prompt counts become available only after exhausting the iterator.
+        if not continuation or self.conversation is None:
+            self.close()
+            self.conversation = self.engine.create_conversation(
+                messages=[vision_message(m) for m in messages[:-1]],
+                automatic_tool_calling=False,
+                sampler_config=self.api.SamplerConfig(**self.options["sampler"]),
+                thinking_config=self.api.ThinkingConfig(enable_thinking=False),
+                extra_context={"enable_thinking": False},
+                max_output_tokens=self.options["max_output_tokens"],
+            )
+            self.cached_tokens = 0
+        else:
+            self.cached_tokens = self.conversation.token_count
+        self.message = vision_message(messages[-1])
+        return self.cached_tokens, 0
+
+    def decode(self):
+        for response in self.conversation.send_message_async(
+            self.message, max_output_tokens=self.options["max_output_tokens"],
+        ):
+            if response.get("tool_calls"):
+                raise RuntimeError("Unexpected native tool call in image response")
+            content = response.get("content", [])
+            if isinstance(content, str):
+                yield content
+            elif isinstance(content, list):
+                yield "".join(part["text"] for part in content if part.get("type") == "text")
+            else:
+                raise RuntimeError("LiteRT returned invalid image response content")
+
+    def finish(self):
+        count = self.conversation.get_benchmark_info().last_decode_token_count
+        # Use the actual KV position: last_prefill_token_count alone can omit
+        # a separately prefilled preface or an earlier image in the history.
+        self.prompt_tokens = self.conversation.token_count - count
+        if count < 0 or self.prompt_tokens < self.cached_tokens:
+            raise RuntimeError("LiteRT returned inconsistent vision token counts")
+        return count
+
+    def close(self):
+        if self.conversation is not None:
+            self.conversation.close()
+            self.conversation = None

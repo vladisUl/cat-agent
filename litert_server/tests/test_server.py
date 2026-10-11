@@ -1,4 +1,5 @@
 import concurrent.futures
+import base64
 from contextlib import contextmanager
 from copy import deepcopy
 import http.client
@@ -12,12 +13,22 @@ import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
-from litert_server.runtime import LiteRTRuntime, TextContext
+from litert_server.runtime import LiteRTRuntime, TextContext, VisionContext
 from litert_server.server import InferenceService, RequestError, Server, load_config, parse_request
 
 
 CONFIG = {"max_num_tokens": 8192, "temperature": 0.0, "top_p": 1.0}
 BASE = {"role": "system", "content": "Ты помощник. " * 100}
+PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII="
+
+
+def picture_request(history=None, **fields):
+    body = request(history=history, **fields)
+    body["messages"][-1]["content"] = [
+        {"type": "text", "text": "read_pic.sh: test.png\nImage attached."},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + PNG}},
+    ]
+    return body
 
 
 def request(text="привет", history=None, **fields):
@@ -80,6 +91,7 @@ class FakeRuntime:
         self.fail = False
         self.active = self.peak = self.drained = 0
         self.closed = False
+        self.conversations = []
 
     def new_context(self, base, options):
         context = FakeContext(self, deepcopy(base), options)
@@ -87,6 +99,52 @@ class FakeRuntime:
         return context
 
     def close(self):
+        self.closed = True
+
+    def new_vision_context(self, base, options):
+        api = SimpleNamespace(SamplerConfig=lambda **kw: kw, ThinkingConfig=lambda **kw: kw)
+        return VisionContext(api, self, options)
+
+    def create_conversation(self, **kwargs):
+        conversation = FakeVisionConversation(self, kwargs)
+        self.conversations.append(conversation)
+        return conversation
+
+
+class FakeVisionConversation:
+    def __init__(self, runtime, config):
+        self.runtime, self.config = runtime, config
+        self.messages = deepcopy(config["messages"])
+        self.sent = []
+        self.token_count = 0
+        self.closed = False
+
+    def send_message_async(self, message, **kwargs):
+        self.sent.append((deepcopy(message), kwargs))
+        self.messages.append(deepcopy(message))
+        self.runtime.active += 1
+        self.runtime.peak = max(self.runtime.peak, self.runtime.active)
+        try:
+            # Native prefill incorporates the preface, text and visual tokens.
+            self.token_count += 213 if self.token_count == 0 else 13
+            yield {"content": [{"type": "text", "text": "При"}]}
+            if self.runtime.fail:
+                raise RuntimeError("native vision decode failed")
+            yield {"content": [{"type": "text", "text": "вет!"}]}
+            self.token_count += 3
+            self.messages.append({"role": "assistant", "content": "Привет!"})
+        finally:
+            self.runtime.active -= 1
+            self.runtime.drained += 1
+
+    def get_benchmark_info(self):
+        # Last prefill intentionally omits some initial preface tokens. The
+        # adapter must use token_count to report the complete prompt size.
+        return SimpleNamespace(last_prefill_token_count=13, last_decode_token_count=3)
+
+    def close(self):
+        if self.runtime.active:
+            raise AssertionError("Vision conversation freed during native decode")
         self.closed = True
 
 
@@ -218,6 +276,34 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(RequestError):
             parse_request(body, "test", CONFIG)
 
+    def test_png_jpeg_validation_and_mixed_block_order(self):
+        body = picture_request()
+        body["messages"][-1]["content"].extend([
+            {"type": "text", "text": "second"},
+            {"type": "image_url", "image_url": {
+                "url": "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8\xfftest").decode(),
+                "detail": "auto",
+            }},
+        ])
+        messages, _ = parse_request(body, "test", CONFIG)
+        self.assertEqual([p["type"] for p in messages[-1]["content"]],
+                         ["text", "image_url", "text", "image_url"])
+        for url in ("http://example.com/image.png", "file:///image.png",
+                    "data:image/png;base64,???", "data:image/png;base64,",
+                    "data:image/jpeg;base64," + PNG):
+            bad = picture_request()
+            bad["messages"][-1]["content"][1]["image_url"]["url"] = url
+            with self.subTest(url=url), self.assertRaises(RequestError):
+                parse_request(bad, "test", CONFIG)
+        with patch("litert_server.server.MAX_IMAGE_BYTES", 1), self.assertRaises(RequestError):
+            parse_request(picture_request(), "test", CONFIG)
+
+    def test_images_only_in_user_messages(self):
+        body = picture_request()
+        body["messages"][0]["content"] = body["messages"][-1]["content"]
+        with self.assertRaisesRegex(RequestError, "only in user"):
+            parse_request(body, "test", CONFIG)
+
     def test_config_current_user_shape_bom_relative_path_and_defaults(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "server-config.json"
@@ -261,6 +347,87 @@ class ValidationTests(unittest.TestCase):
                             self.assertIs(kwargs["enable_ynnpack"], ynnpack)
                         runtime.close()
                         api.Engine.return_value.close.assert_called_once_with()
+
+    def test_explicit_cpu_vision_backend_is_forwarded(self):
+        with tempfile.TemporaryDirectory() as temp:
+            model = Path(temp) / "model.litertlm"
+            model.touch()
+            api = SimpleNamespace(Engine=Mock(), Backend=SimpleNamespace(CPU=Mock(), GPU=Mock()))
+            with patch("importlib.metadata.version", return_value="0.18.0"), \
+                 patch.dict(sys.modules, {"litert_lm": api}):
+                runtime = LiteRTRuntime("test", {"model_path": str(model),
+                                                "backend": "gpu", "vision_backend": "cpu"})
+            self.assertIs(api.Engine.call_args.kwargs["vision_backend"], api.Backend.CPU.return_value)
+            self.assertIs(api.Engine.call_args.kwargs["backend"], api.Backend.GPU.return_value)
+            runtime.close()
+
+
+class VisionTests(unittest.TestCase):
+    def setUp(self):
+        self.runtime = FakeRuntime()
+        self.service = InferenceService(self.runtime, "test", CONFIG)
+        self.addCleanup(self.service.close)
+
+    def test_image_then_text_reuses_native_conversation_and_visual_kv(self):
+        original = picture_request()
+        content, usage, _ = self.service.complete(original)
+        native = self.runtime.conversations[0]
+        self.assertEqual(native.sent[0][0]["content"][1], {"type": "image", "blob": PNG})
+        self.assertEqual(usage["prompt_tokens"], 213)
+        self.assertEqual(usage["prompt_tokens_details"]["cached_tokens"], 0)
+        history = original["messages"] + [{"role": "assistant", "content": content}]
+        _, usage, _ = self.service.complete(request("describe more", history=history))
+        self.assertEqual(len(self.runtime.conversations), 1)
+        self.assertEqual(native.sent[-1][0], {"role": "user", "content": "describe more"})
+        self.assertEqual(usage["prompt_tokens_details"]["cached_tokens"], 216)
+        self.assertEqual(usage["prompt_tokens"], 229)
+        self.assertEqual(self.runtime.contexts, [])  # No redundant text-base warmup.
+
+    def test_initial_image_preserves_prior_agent_dialogue(self):
+        history = request("inspect file")["messages"] + [
+            {"role": "assistant", "content": "/work#read_pic.sh photo.png"}
+        ]
+        self.service.complete(picture_request(history=history))
+        self.assertEqual(self.runtime.conversations[0].config["messages"], history)
+
+    def test_edited_or_different_image_history_rebuilds(self):
+        original = picture_request()
+        self.service.complete(original)
+        first = self.runtime.conversations[0]
+        history = original["messages"] + [{"role": "assistant", "content": "edited"}]
+        _, usage, _ = self.service.complete(request("continue", history=history))
+        self.assertTrue(first.closed)
+        self.assertEqual(len(self.runtime.conversations), 2)
+        replay = self.runtime.conversations[-1].config["messages"]
+        self.assertEqual(replay[1]["content"][1], {"type": "image", "blob": PNG})
+        self.assertEqual(replay[-1]["content"], "edited")
+        self.assertEqual(usage["prompt_tokens_details"]["cached_tokens"], 0)
+
+    def test_vision_eviction_and_failure_do_not_evict_text_bases(self):
+        self.service.complete(request())
+        text = self.runtime.contexts[0]
+        self.service.complete(picture_request())
+        first = self.runtime.conversations[0]
+        self.service.complete(picture_request(history=[{"role": "system", "content": "other"}]))
+        self.assertTrue(first.closed)
+        self.runtime.fail = True
+        with self.assertRaisesRegex(RuntimeError, "vision decode"):
+            self.service.complete(picture_request())
+        self.runtime.fail = False
+        _, usage, _ = self.service.complete(request())
+        self.assertEqual(usage["prompt_tokens_details"]["cached_tokens"], 100)
+        self.assertFalse(text.closed)
+        self.assertEqual(len(self.runtime.contexts), 1)
+        self.assertFalse(self.service.vision_slots)
+
+    def test_disconnected_vision_request_is_drained_and_discarded(self):
+        def emit(_):
+            raise BrokenPipeError()
+        with self.assertRaises(ConnectionError):
+            self.service.complete(picture_request(), emit)
+        self.assertEqual(self.runtime.drained, 1)
+        self.assertTrue(self.runtime.conversations[0].closed)
+        self.assertFalse(self.service.vision_slots)
 
 
 @contextmanager
@@ -350,6 +517,43 @@ class HTTPTests(unittest.TestCase):
             third = client.chat(request("продолжай", history=history)["messages"])
             self.assertEqual(third.cached_tokens, 108)
             self.assertTrue(service.runtime.contexts[0].calls[-1][1])
+
+    def test_existing_cat_agent_image_payload_stream_and_followup(self):
+        source = str(Path(__file__).resolve().parents[2] / "src")
+        with patch.object(sys, "path", [source, *sys.path]):
+            from openai_agent.model_client import OpenAICompatibleChatClient
+        with running_server() as (port, service), patch.dict(os.environ, {"CAT_AGENT_OPENAI_STREAM": "1"}):
+            client = OpenAICompatibleChatClient(
+                api_base_url=f"http://127.0.0.1:{port}/v1", model="test",
+                timeout_seconds=5, retries=0, retry_delay_seconds=0,
+                max_output_tokens=128000, temperature=0.0, top_p=1.0,
+                reasoning_effort="none", label="vision",
+            )
+            self.addCleanup(client.close)
+            chunks = []
+            client.set_event_handler(lambda label, event, payload: chunks.append(payload)
+                                     if event == "chunk" else None)
+            original = picture_request()
+            first = client.chat(original["messages"])
+            self.assertEqual("".join(chunks), "Привет!")
+            self.assertEqual(first.prompt_tokens, 213)
+            self.assertEqual(first.cached_tokens, 0)
+            native = service.runtime.conversations[0]
+            self.assertEqual(native.sent[0][0]["content"][1], {"type": "image", "blob": PNG})
+            history = original["messages"] + [{"role": "assistant", "content": first.content}]
+            second = client.chat(request("Уточни", history=history)["messages"])
+            self.assertEqual(second.cached_tokens, 216)
+            self.assertEqual(second.prompt_evaluated_tokens, 13)
+            self.assertEqual(len(service.runtime.conversations), 1)
+
+    def test_nonstream_image_request_returns_json(self):
+        with running_server() as (port, service):
+            status, raw = self.send(port, "/v1/chat/completions", picture_request())
+            self.assertEqual(status, 200)
+            result = json.loads(raw)
+            self.assertEqual(result["choices"][0]["message"]["content"], "Привет!")
+            self.assertEqual(result["usage"]["total_tokens"], 216)
+            self.assertEqual(len(service.runtime.conversations), 1)
 
 
 # Fake C boundary checks the real TextContext orchestration, including rendering

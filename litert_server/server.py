@@ -1,7 +1,9 @@
-"""Local text inference server; standard library HTTP, serialized native inference."""
+"""Local text/image inference server; serialized native inference over HTTP."""
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass
@@ -17,7 +19,8 @@ import uuid
 from .runtime import LiteRTRuntime
 
 LOG = logging.getLogger(__name__)
-MAX_BODY_BYTES = 8 * 1024 * 1024
+MAX_BODY_BYTES = 64 * 1024 * 1024
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 
 class RequestError(ValueError):
@@ -67,7 +70,7 @@ def load_config(path, model_id=None):
     allowed = {
         "model_path", "backend", "cpu_thread_count", "speculative_decoding",
         "enable_ynnpack", "cache", "max_num_tokens", "max_output_tokens",
-        "temperature", "top_p", "top_k", "seed", "thinking",
+        "temperature", "top_p", "top_k", "seed", "thinking", "vision_backend",
     }
     if set(config) - allowed:
         raise ValueError(f"Unsupported settings: {sorted(set(config) - allowed)}")
@@ -83,6 +86,8 @@ def load_config(path, model_id=None):
         raise ValueError("This text Session adapter supports thinking=false only")
     if config.get("backend", "cpu") not in ("cpu", "gpu"):
         raise ValueError("backend must be cpu or gpu")
+    if "vision_backend" in config and config["vision_backend"] not in ("cpu", "gpu"):
+        raise ValueError("vision_backend must be cpu or gpu")
     if config.get("cache", "disk") not in ("disk", "memory", "no"):
         raise ValueError("cache must be disk, memory or no")
     sampler_values(config)
@@ -92,6 +97,61 @@ def load_config(path, model_id=None):
         model_path = Path(config["model_path"]).expanduser()
         config["model_path"] = str(model_path if model_path.is_absolute() else path.parent / model_path)
     return model_id, config
+
+
+def image_part(part):
+    """Validate the inline PNG/JPEG representation produced by read_pic.sh."""
+    if set(part) != {"type", "image_url"} or not isinstance(part["image_url"], dict):
+        raise RequestError("image_url must be an object containing url")
+    image = part["image_url"]
+    if set(image) - {"url", "detail"} or image.get("detail", "auto") != "auto":
+        raise RequestError("Image detail supports only auto")
+    url = image.get("url")
+    if not isinstance(url, str):
+        raise RequestError("image_url.url must be a data URL string")
+    header, separator, encoded = url.partition(",")
+    signatures = {"data:image/png;base64": b"\x89PNG\r\n\x1a\n",
+                  "data:image/jpeg;base64": b"\xff\xd8\xff"}
+    if not separator or header not in signatures:
+        raise RequestError("Images must be inline data:image/png;base64 or data:image/jpeg;base64")
+    if len(encoded) > 4 * ((MAX_IMAGE_BYTES + 2) // 3):
+        raise RequestError(f"Image exceeds {MAX_IMAGE_BYTES} bytes")
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise RequestError("Invalid image base64") from exc
+    if len(decoded) > MAX_IMAGE_BYTES:
+        raise RequestError(f"Image exceeds {MAX_IMAGE_BYTES} bytes")
+    if not decoded.startswith(signatures[header]):
+        raise RequestError("Image bytes do not match the declared PNG/JPEG type")
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
+def normalize_content(content, role):
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        raise RequestError("Message content must be text or an array of text/image_url blocks")
+    parts, has_images = [], False
+    for part in content:
+        if not isinstance(part, dict):
+            raise RequestError("Content blocks must be objects")
+        if (part.get("type") == "text" and set(part) == {"type", "text"}
+            and isinstance(part["text"], str)):
+            parts.append(dict(part))
+        elif part.get("type") == "image_url":
+            if role != "user":
+                raise RequestError("Images are supported only in user messages")
+            parts.append(image_part(part))
+            has_images = True
+        else:
+            raise RequestError("Supported content blocks: text and image_url (PNG/JPEG)")
+    return parts if has_images else "".join(p["text"] for p in parts)
+
+
+def has_images(messages):
+    return any(isinstance(m["content"], list) and
+               any(p["type"] == "image_url" for p in m["content"]) for m in messages)
 
 
 def parse_request(body, model_id, config):
@@ -128,13 +188,7 @@ def parse_request(body, model_id, config):
         role, content = message["role"], message["content"]
         if role not in ("system", "user", "assistant") or (role == "system" and i != 0):
             raise RequestError("Supported roles: initial system, user, assistant")
-        if isinstance(content, list):
-            if not all(isinstance(p, dict) and set(p) == {"type", "text"}
-                       and p["type"] == "text" and isinstance(p["text"], str) for p in content):
-                raise RequestError("Only text content is supported; images/audio/tools are not")
-            content = "".join(p["text"] for p in content)
-        if not isinstance(content, str):
-            raise RequestError("Message content must be text")
+        content = normalize_content(content, role)
         normalized.append({"role": role, "content": content})
     if normalized[-1]["role"] != "user":
         raise RequestError("Last message must have role=user")
@@ -159,33 +213,41 @@ class Slot:
 
 
 class InferenceService:
-    def __init__(self, runtime, model_id, config, max_contexts=2):
+    def __init__(self, runtime, model_id, config, max_contexts=2, max_vision_contexts=1):
         self.runtime, self.model_id, self.config = runtime, model_id, config
         self.max_contexts = positive_int(max_contexts, "max_contexts")
         self.slots = OrderedDict()
+        self.vision_slots = OrderedDict()
+        self.max_vision_contexts = positive_int(max_vision_contexts, "max_vision_contexts")
         self.lock = threading.Lock()
 
     def complete(self, body, emit=None):
         messages, options = parse_request(body, self.model_id, self.config)
         base = messages[:1] if messages[0]["role"] == "system" else []
         key = json.dumps([base, options], sort_keys=True, ensure_ascii=False)
+        vision = has_images(messages)
+        slots = self.vision_slots if vision else self.slots
+        capacity = self.max_vision_contexts if vision else self.max_contexts
         # A single lock covers context selection, prefill, native async decode,
         # delivery and history commit. No two calls may use the engine together.
         with self.lock:
             started = time.monotonic()
-            slot = self.slots.get(key)
+            slot = slots.get(key)
             cold = slot is None
             mode = "cold"
             try:
                 if cold:
-                    if len(self.slots) >= self.max_contexts:
-                        _, old = self.slots.popitem(last=False)
+                    if len(slots) >= capacity:
+                        _, old = slots.popitem(last=False)
                         old.context.close()
-                        LOG.info("CONTEXT_EVICT slots=%d", len(self.slots))
-                    slot = Slot(self.runtime.new_context(base, options), deepcopy(base))
-                    self.slots[key] = slot
+                        LOG.info("CONTEXT_EVICT kind=%s slots=%d", "vision" if vision else "text", len(slots))
+                    factory = self.runtime.new_vision_context if vision else self.runtime.new_context
+                    slot = Slot(factory(base, options), deepcopy(base))
+                    slots[key] = slot
                 continuation = not cold and messages[:-1] == slot.history
-                if not cold:
+                if vision:
+                    mode = "vision-resume" if continuation else "vision-rebuild"
+                elif not cold:
                     mode = "resume" if continuation else ("base" if messages[:-1] == base else "replay")
                 LOG.info("CONTEXT mode=%s base_messages=%d history_messages=%d",
                          mode, len(base), len(messages) - 1)
@@ -197,10 +259,13 @@ class InferenceService:
                 if prompt_tokens >= self.config.get("max_num_tokens", 8192):
                     raise RequestError("Context is full; shorten messages or increase max_num_tokens")
                 prefill_seconds = time.monotonic() - started
+                first_token_seconds = None
                 parts = []
                 disconnected = False
                 for text in slot.context.decode():
                     parts.append(text)
+                    if text and first_token_seconds is None:
+                        first_token_seconds = time.monotonic() - started
                     if emit and text and not disconnected:
                         try:
                             emit(text)
@@ -208,6 +273,10 @@ class InferenceService:
                             # Drain the native iterator before closing its C pointer.
                             disconnected = True
                 completion_tokens = slot.context.finish()
+                if vision:
+                    cached = slot.context.cached_tokens
+                    prompt_tokens = slot.context.prompt_tokens
+                    evaluated = prompt_tokens - cached
                 content = "".join(parts)
                 if not content:
                     raise RuntimeError("LiteRT generated no text; context may be exhausted")
@@ -229,24 +298,27 @@ class InferenceService:
                     slot.history = []
                 else:
                     slot.history = deepcopy(messages) + [{"role": "assistant", "content": content}]
-                self.slots.move_to_end(key)
+                slots.move_to_end(key)
                 LOG.info("REQUEST_DONE mode=%s cached=%d evaluated=%d decoded=%d "
-                         "prefill_seconds=%.3f total_seconds=%.3f",
-                         mode, cached, evaluated, completion_tokens, prefill_seconds,
+                         "prefill_seconds=%s ttft_seconds=%s total_seconds=%.3f",
+                         mode, cached, evaluated, completion_tokens,
+                         "unknown" if vision else f"{prefill_seconds:.3f}",
+                         f"{first_token_seconds:.3f}" if first_token_seconds is not None else "unknown",
                          time.monotonic() - started)
                 return content, usage, finish_reason
             except BaseException:
                 # Do not reuse partially written / failed native KV state.
-                broken = self.slots.pop(key, None)
+                broken = slots.pop(key, None)
                 if broken:
                     broken.context.close()
                 raise
 
     def close(self):
         with self.lock:
-            for slot in self.slots.values():
+            for slot in list(self.slots.values()) + list(self.vision_slots.values()):
                 slot.context.close()
             self.slots.clear()
+            self.vision_slots.clear()
             self.runtime.close()
 
 
@@ -376,14 +448,17 @@ def main():
     parser.add_argument("--port", type=int, default=9379)
     parser.add_argument("--max-contexts", type=int, default=2,
                         help="Maximum resident system-prompt/settings slots (default: 2)")
+    parser.add_argument("--max-vision-contexts", type=int, default=1,
+                        help="Additional resident image conversations (default: 1)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     positive_int(args.max_contexts, "max-contexts")
+    positive_int(args.max_vision_contexts, "max-vision-contexts")
     model_id, config = load_config(args.config, args.model)
     runtime = LiteRTRuntime(model_id, config)
-    service = InferenceService(runtime, model_id, config, args.max_contexts)
+    service = InferenceService(runtime, model_id, config, args.max_contexts, args.max_vision_contexts)
     try:
         with Server((args.host, args.port), service) as server:
             LOG.info("SERVER_READY http://%s:%d/v1 model=%s slots=%d",
