@@ -48,10 +48,13 @@ class LiteRTRuntime:
         engine_options = {}
         if "enable_ynnpack" in config:
             engine_options["enable_ynnpack"] = config["enable_ynnpack"]
-        if "vision_backend" in config:
+        # Unlike the CLI, Engine does not resolve a missing vision backend from
+        # model metadata. None disables the executor even for a vision model.
+        self.vision_backend = config.get("vision_backend", "cpu")
+        if self.vision_backend != "none":
             engine_options["vision_backend"] = (
                 litert_lm.Backend.CPU(thread_count=config.get("cpu_thread_count"))
-                if config["vision_backend"] == "cpu" else litert_lm.Backend.GPU()
+                if self.vision_backend == "cpu" else litert_lm.Backend.GPU()
             )
         self.engine = litert_lm.Engine(
             str(model_path), backend=backend,
@@ -65,13 +68,15 @@ class LiteRTRuntime:
             ],
             **engine_options,
         )
-        LOG.info("ENGINE_READY model=%s version=%s seconds=%.3f", model_id, version,
-                 time.monotonic() - started)
+        LOG.info("ENGINE_READY model=%s version=%s vision_backend=%s seconds=%.3f",
+                 model_id, version, self.vision_backend, time.monotonic() - started)
 
     def new_context(self, base, options):
         return TextContext(self.api, self.engine, base, options)
 
     def new_vision_context(self, base, options):
+        if self.vision_backend == "none":
+            raise ValueError("Vision is disabled: set vision_backend=cpu or gpu and restart the server")
         return VisionContext(self.api, self.engine, options)
 
     def close(self):

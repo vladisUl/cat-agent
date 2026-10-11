@@ -336,8 +336,10 @@ class ValidationTests(unittest.TestCase):
                         with patch("importlib.metadata.version", return_value=version), \
                              patch.dict(sys.modules, {"litert_lm": api}):
                             runtime = LiteRTRuntime("test", config)
-                        api.Backend.CPU.assert_called_once_with(thread_count=6)
+                        self.assertEqual(api.Backend.CPU.call_count, 2)
+                        api.Backend.CPU.assert_called_with(thread_count=6)
                         kwargs = api.Engine.call_args.kwargs
+                        self.assertIs(kwargs["vision_backend"], api.Backend.CPU.return_value)
                         self.assertIs(kwargs["enable_speculative_decoding"], True)
                         self.assertIs(kwargs["use_ringbuffers_local_attention"], False)
                         self.assertEqual(kwargs["max_num_tokens"], 8192)
@@ -359,6 +361,19 @@ class ValidationTests(unittest.TestCase):
                                                 "backend": "gpu", "vision_backend": "cpu"})
             self.assertIs(api.Engine.call_args.kwargs["vision_backend"], api.Backend.CPU.return_value)
             self.assertIs(api.Engine.call_args.kwargs["backend"], api.Backend.GPU.return_value)
+            runtime.close()
+
+    def test_explicit_text_only_mode_does_not_create_vision_executor(self):
+        with tempfile.TemporaryDirectory() as temp:
+            model = Path(temp) / "model.litertlm"
+            model.touch()
+            api = SimpleNamespace(Engine=Mock(), Backend=SimpleNamespace(CPU=Mock()))
+            with patch("importlib.metadata.version", return_value="0.18.0"), \
+                 patch.dict(sys.modules, {"litert_lm": api}):
+                runtime = LiteRTRuntime("test", {"model_path": str(model), "vision_backend": "none"})
+            self.assertNotIn("vision_backend", api.Engine.call_args.kwargs)
+            with self.assertRaisesRegex(ValueError, "Vision is disabled"):
+                runtime.new_vision_context([], {})
             runtime.close()
 
 

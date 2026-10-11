@@ -86,8 +86,8 @@ def load_config(path, model_id=None):
         raise ValueError("This text Session adapter supports thinking=false only")
     if config.get("backend", "cpu") not in ("cpu", "gpu"):
         raise ValueError("backend must be cpu or gpu")
-    if "vision_backend" in config and config["vision_backend"] not in ("cpu", "gpu"):
-        raise ValueError("vision_backend must be cpu or gpu")
+    if "vision_backend" in config and config["vision_backend"] not in ("cpu", "gpu", "none"):
+        raise ValueError("vision_backend must be cpu, gpu or none")
     if config.get("cache", "disk") not in ("disk", "memory", "no"):
         raise ValueError("cache must be disk, memory or no")
     sampler_values(config)
