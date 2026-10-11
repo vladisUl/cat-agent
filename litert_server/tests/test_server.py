@@ -9,7 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 from litert_server.runtime import LiteRTRuntime, TextContext
@@ -234,6 +234,33 @@ class ValidationTests(unittest.TestCase):
         with patch("importlib.metadata.version", return_value="1.0.0"):
             with self.assertRaisesRegex(RuntimeError, "checkpoint C ABI"):
                 LiteRTRuntime("test", {})
+
+    def test_supported_runtime_startup_preserves_engine_options(self):
+        with tempfile.TemporaryDirectory() as temp:
+            model = Path(temp) / "model.litertlm"
+            model.touch()
+            for version in ("0.16.0", "0.16.1", "0.18.0", "0.18.0+local"):
+                for ynnpack in (None, False, True):
+                    with self.subTest(version=version, ynnpack=ynnpack):
+                        api = SimpleNamespace(Engine=Mock(), Backend=SimpleNamespace(CPU=Mock()))
+                        config = {"model_path": str(model), "cpu_thread_count": 6,
+                                  "speculative_decoding": True, "max_num_tokens": 8192}
+                        if ynnpack is not None:
+                            config["enable_ynnpack"] = ynnpack
+                        with patch("importlib.metadata.version", return_value=version), \
+                             patch.dict(sys.modules, {"litert_lm": api}):
+                            runtime = LiteRTRuntime("test", config)
+                        api.Backend.CPU.assert_called_once_with(thread_count=6)
+                        kwargs = api.Engine.call_args.kwargs
+                        self.assertIs(kwargs["enable_speculative_decoding"], True)
+                        self.assertIs(kwargs["use_ringbuffers_local_attention"], False)
+                        self.assertEqual(kwargs["max_num_tokens"], 8192)
+                        if ynnpack is None:
+                            self.assertNotIn("enable_ynnpack", kwargs)
+                        else:
+                            self.assertIs(kwargs["enable_ynnpack"], ynnpack)
+                        runtime.close()
+                        api.Engine.return_value.close.assert_called_once_with()
 
 
 @contextmanager

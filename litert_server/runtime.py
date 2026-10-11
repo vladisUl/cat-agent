@@ -1,4 +1,4 @@
-"""LiteRT-LM 0.16.x adapter. No imports from cat-agent or its configuration.
+"""LiteRT-LM adapter. No imports from cat-agent or its configuration.
 
 The Session checkpoint approach is also used by src/litert_agent/model_client.py.
 Keep the three private C API calls here: their signatures are version-sensitive.
@@ -10,18 +10,18 @@ import importlib.metadata
 import logging
 import os
 from pathlib import Path
-import re
 import time
 
 LOG = logging.getLogger(__name__)
+SUPPORTED_VERSIONS = ("0.16.0", "0.16.1", "0.18.0")
 
 
 class LiteRTRuntime:
     def __init__(self, model_id, config):
         version = importlib.metadata.version("litert-lm")
-        if not re.match(r"^0\.16\.(0|1)(?:$|[.+-])", version):
+        if version.split("+", 1)[0] not in SUPPORTED_VERSIONS:
             raise RuntimeError(
-                f"LiteRT-LM {version}: this adapter supports 0.16.0 and 0.16.1; "
+                f"LiteRT-LM {version}: this adapter supports {', '.join(SUPPORTED_VERSIONS)}; "
                 "verify the checkpoint C ABI before using another version"
             )
         import litert_lm
@@ -29,7 +29,7 @@ class LiteRTRuntime:
         self.api = litert_lm
         model_path = config.get("model_path")
         if not model_path:
-            # Same registry layout as the 0.16 CLI; no import from CLI internals.
+            # Same registry layout as the CLI; no import from CLI internals.
             registry = Path(os.environ.get("LITERT_LM_DIR", Path.home() / ".litert-lm"))
             model_path = registry / "models" / model_id.replace("/", "--") / "model.litertlm"
         model_path = Path(model_path).expanduser().resolve()
@@ -43,17 +43,22 @@ class LiteRTRuntime:
         else:
             raise ValueError("backend must be cpu or gpu")
         started = time.monotonic()
+        # 0.18 uses None to select the runtime's YNNPACK default. Do not turn
+        # it off merely because an existing serve config omits this option.
+        engine_options = {}
+        if "enable_ynnpack" in config:
+            engine_options["enable_ynnpack"] = config["enable_ynnpack"]
         self.engine = litert_lm.Engine(
             str(model_path), backend=backend,
             max_num_tokens=config.get("max_num_tokens", 8192),
             enable_speculative_decoding=config.get("speculative_decoding", False),
-            enable_ynnpack=config.get("enable_ynnpack", False),
             enable_benchmark=True,
             # Rewinding must preserve the base, including local attention KV.
             use_ringbuffers_local_attention=False,
             cache_dir={"disk": "", "memory": ":memory", "no": ":nocache"}[
                 config.get("cache", "disk")
             ],
+            **engine_options,
         )
         LOG.info("ENGINE_READY model=%s version=%s seconds=%.3f", model_id, version,
                  time.monotonic() - started)
