@@ -163,6 +163,51 @@ class LlamaClientTest(unittest.TestCase):
         self.assertEqual(payload["n_predict"], 64)
 
 
+    def test_sampling_overrides_are_forwarded_to_completion(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "CAT_AGENT_LLAMA_TOP_K": "64",
+                "CAT_AGENT_LLAMA_MIN_P": "0",
+            },
+        ):
+            client = FakeLlamaClient()
+        payload = client._completion_payload("PROMPT", n_predict=64, stream=False)
+        self.assertEqual(payload["top_k"], 64)
+        self.assertEqual(payload["min_p"], 0.0)
+        self.assertEqual(payload["temperature"], 0.0)
+        self.assertEqual(payload["top_p"], 1.0)
+
+    def test_gemma4_template_disables_thinking_by_default(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"CAT_AGENT_LLAMA_ENABLE_THINKING": "0"},
+        ):
+            client = FakeLlamaClient()
+        client.model = "/storage/models/gemma-4-26B-A4B-it-Q2.gguf"
+        with mock.patch.object(
+            client, "_post_json", return_value={"prompt": "GEMMA_PROMPT"}
+        ) as post:
+            self.assertEqual(
+                client._apply_template([{"role": "user", "content": "hello"}]),
+                "GEMMA_PROMPT",
+            )
+        self.assertEqual(
+            post.call_args.args[1]["chat_template_kwargs"],
+            {"enable_thinking": False},
+        )
+
+    def test_other_models_keep_original_template_payload(self) -> None:
+        client = FakeLlamaClient()
+        with mock.patch.object(
+            client, "_post_json", return_value={"prompt": "PROMPT"}
+        ) as post:
+            client._apply_template([{"role": "user", "content": "hello"}])
+        self.assertEqual(
+            post.call_args.args[1], {"messages": [{"role": "user", "content": "hello"}]}
+        )
+
+
 class LlamaRuntimeTest(unittest.TestCase):
     def test_runtime_uses_current_assistant_manager_and_two_llama_slots(self) -> None:
         with mock.patch.dict(
