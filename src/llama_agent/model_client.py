@@ -5,7 +5,6 @@ from dataclasses import dataclass
 import json
 from agent_core.metrics import measured
 import logging
-import os
 import time
 from typing import Any, Callable
 from urllib import error, request
@@ -58,23 +57,6 @@ class LlamaChatClient:
         self.temperature = temperature
         self.top_p = top_p
         self.reasoning_effort = reasoning_effort
-
-        # Per-request sampling overrides for llama.cpp only. If unset, use the
-        # server default so existing models keep their previous behavior.
-        top_k_raw = os.getenv("CAT_AGENT_LLAMA_TOP_K", "").strip()
-        self.top_k = int(top_k_raw) if top_k_raw else None
-        if self.top_k is not None and self.top_k < 1:
-            raise ValueError("CAT_AGENT_LLAMA_TOP_K must be >= 1")
-
-        min_p_raw = os.getenv("CAT_AGENT_LLAMA_MIN_P", "").strip()
-        self.min_p = float(min_p_raw) if min_p_raw else None
-        if self.min_p is not None and not 0.0 <= self.min_p <= 1.0:
-            raise ValueError("CAT_AGENT_LLAMA_MIN_P must be in [0, 1]")
-
-        thinking_raw = os.getenv("CAT_AGENT_LLAMA_ENABLE_THINKING", "0").strip()
-        if thinking_raw not in {"0", "1"}:
-            raise ValueError("CAT_AGENT_LLAMA_ENABLE_THINKING must be 0 or 1")
-        self.enable_thinking = thinking_raw == "1"
         self.label = label
         self.id_slot = id_slot
 
@@ -414,7 +396,7 @@ class LlamaChatClient:
         n_predict: int,
         stream: bool,
     ) -> dict[str, Any]:
-        payload = {
+        return {
             "prompt": prompt,
             "stream": stream,
             "n_predict": n_predict,
@@ -423,21 +405,12 @@ class LlamaChatClient:
             "cache_prompt": True,
             "id_slot": self.id_slot,
         }
-        if self.top_k is not None:
-            payload["top_k"] = self.top_k
-        if self.min_p is not None:
-            payload["min_p"] = self.min_p
-        return payload
 
     def _apply_template(self, messages: list[dict[str, str]]) -> str:
-        payload: dict[str, Any] = {"messages": messages}
-        if "gemma-4" in self.model.lower():
-            # Keep the generation prefix consistent for Gemma 4 in multi-turn
-            # interactions; --reasoning off alone controls server-side parsing.
-            payload["chat_template_kwargs"] = {
-                "enable_thinking": self.enable_thinking,
-            }
-        response = self._post_json(self.apply_template_url, payload)
+        response = self._post_json(
+            self.apply_template_url,
+            {"messages": messages},
+        )
         prompt = response.get("prompt")
         if not isinstance(prompt, str):
             raise ModelClientError(
