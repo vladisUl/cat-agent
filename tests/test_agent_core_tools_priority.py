@@ -302,7 +302,9 @@ class BackgroundIpcTests(unittest.TestCase):
         background_writes = []
 
         def send_with_disconnected_reader(payload):
-            if payload.get("type", "").startswith("background_"):
+            # Track unsolicited background notifications only. The test
+            # itself polls background_status, which is an ordinary IPC reply.
+            if payload.get("type") in ("background_progress", "background_completed"):
                 background_writes.append(payload["type"])
             if payload.get("type") == "background_progress":
                 raise BrokenPipeError(32, "test client disconnected")
