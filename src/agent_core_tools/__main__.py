@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from pathlib import Path
 import signal
 import sys
@@ -29,6 +30,11 @@ def main(argv: list[str] | None = None) -> int:
                         help='Allow ephemeral, explicitly sliced background agent jobs')
     parser.add_argument('--enable-hardware-probe', action='store_true',
                         help='Enable IPC event priority diagnostics (not Task SYSTEM)')
+    parser.add_argument('--enable-task-worker', action='store_true',
+                        help='Connect to authoritative Task SYSTEM RPC (stage 5A)')
+    parser.add_argument('--task-socket', type=Path,
+                        default=Path(os.getenv('CAT_AGENT_TASK_SOCKET',
+                                             '/run/cat-agent/tasks.sock')))
     parser.add_argument('--agent-config', type=Path,
                         help='JSON agent pool configuration (experimental)')
     parser.add_argument('--trace-native-json', action='store_true')
@@ -38,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error('--enable-background-probe requires --agent-config')
     if args.enable_hardware_probe and args.agent_config is None:
         parser.error('--enable-hardware-probe requires --agent-config')
+    if args.enable_task_worker and args.agent_config is None:
+        parser.error('--enable-task-worker requires --agent-config and --model')
     if args.agent_config is not None and args.model is None:
         parser.error('--agent-config requires --model and --system-file')
     if bool(args.model) != bool(args.system_file):
@@ -61,10 +69,19 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError) as exc:
             print(f'TOOLS CORE manager initialization failed: {exc}', file=sys.stderr)
             return 2
+    agent_permissions = None
+    if args.enable_task_worker:
+        from orchestration_tools.agent_config import load_agent_specs
+        agent_permissions = {
+            spec.agent_id: spec.tool_names
+            for spec in load_agent_specs(args.agent_config)
+        }
     server = CoreServer(
         args.socket, manager=manager,
         background_enabled=args.enable_background_probe,
         hardware_probe_enabled=args.enable_hardware_probe,
+        task_worker_socket=args.task_socket if args.enable_task_worker else None,
+        task_agent_permissions=agent_permissions,
     )
 
     def terminate(_signal, _frame) -> None:
@@ -74,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         server.start()
         server.serve_forever()
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         print(f'TOOLS CORE startup/service error: {exc}', file=sys.stderr)
         return 1
     except KeyboardInterrupt:

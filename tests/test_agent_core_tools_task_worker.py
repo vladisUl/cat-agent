@@ -1,0 +1,249 @@
+"""Stage 5A integration tests: real TaskEngine grant policy, fake model.
+
+Test the authoritative worker protocol, not a second private task registry.
+"""
+from __future__ import annotations
+
+from dataclasses import asdict, is_dataclass
+import json
+from pathlib import Path
+import tempfile
+import threading
+import time
+import unittest
+
+from agent_core_tools.priority_scheduler import PriorityScheduler
+from agent_core_tools.task_worker import NativeTaskWorker
+from orchestration.tasks import TaskStoreError
+from task_system.engine import TaskEngine
+from task_system.client import TaskRPC
+from task_system.main import Server, Handler
+from test_agent_core_tools_priority import FakeManager
+
+
+class LocalRPC:
+    def __init__(self, engine, peer="native"):
+        self.engine = engine
+        self.peer = peer
+        self.fail_finish_once = False
+        self.requests = []
+
+    def call(self, target, operation, *args, **kwargs):
+        self.requests.append((target, operation, kwargs))
+        if target == "worker" and operation == "finish" and self.fail_finish_once:
+            self.fail_finish_once = False
+            raise TaskStoreError("test RPC timeout after inference")
+        response = self.engine.call(target, operation, args, kwargs, peer=self.peer)
+        return json.loads(json.dumps(
+            response,
+            default=lambda obj: asdict(obj) if is_dataclass(obj) else obj,
+        ))
+
+
+class TaskWorkerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.engine = TaskEngine(
+            root / "tasks.sqlite3",
+            task_file=root / "tasks.txt",
+            event_file=root / "events.json",
+            alive=lambda peer: peer == "native",
+        )
+        self.addCleanup(self.engine.close)
+        self.rpc = LocalRPC(self.engine)
+        self.manager = FakeManager()
+        self.manager.run_agent = lambda ident, task: self.manager.pool.run(task, ident)
+        self.scheduler = PriorityScheduler()
+        self.addCleanup(self.scheduler.close)
+        self.worker = NativeTaskWorker(
+            self.scheduler, self.manager, rpc=self.rpc,
+            agent_permissions={"agent_1": ("shell",)},
+            poll_seconds=10,  # Explicit poll_once() in deterministic tests.
+        )
+        self.worker.start()
+        self.addCleanup(self.worker.close)
+
+    def make_task(self, skills=("shell",), method="task"):
+        task = self.engine.runtime.create_periodic_task(
+            "stage5-test", "TASK_TEST_ACTION", skills, 60,
+            method=method, executor="litert",
+        )
+        timer = self.engine.runtime._task_timers[task.task_id]
+        self.engine.tick(timer.next_fire_monotonic + 0.01)
+        return task
+
+    def wait_model_done(self):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if self.worker.snapshot()["unacknowledged"]:
+                return
+            time.sleep(0.005)
+        self.fail("No model completion submitted for authoritative finish")
+
+    def test_task_run_exactly_once_and_durable_finish(self):
+        task = self.make_task()
+        self.assertTrue(self.worker.poll_once())
+        self.wait_model_done()
+        self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 1)
+        self.assertFalse(self.worker.poll_once())  # Flush completion; no new offer.
+        record, = list(self.engine.runs.values())
+        self.assertEqual(record["state"], "done")
+        self.assertEqual(record["event"]["task_id"], task.task_id)
+        self.assertEqual(self.worker.snapshot()["unacknowledged"], 0)
+        self.assertEqual(self.manager.agent_chat.working_kv_tokens, 200)
+        operations = [op for _, op, _ in self.rpc.requests]
+        self.assertIn("heartbeat", operations)
+        self.assertIn("pull", operations)
+        self.assertIn("begin", operations)
+        self.assertIn("valid", operations)
+        self.assertIn("finish", operations)
+
+    def test_finish_rpc_outage_retries_ack_only(self):
+        self.rpc.fail_finish_once = True
+        self.make_task()
+        self.assertTrue(self.worker.poll_once())
+        self.wait_model_done()
+        self.assertFalse(self.worker.poll_once())  # finish RPC failed
+        self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 1)
+        self.assertEqual(self.worker.snapshot()["unacknowledged"], 1)
+        self.assertFalse(self.worker.poll_once())  # finish RPC recovered
+        self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 1)
+        self.assertEqual(self.worker.snapshot()["unacknowledged"], 0)
+        record, = list(self.engine.runs.values())
+        self.assertEqual(record["state"], "done")
+        self.assertEqual(len([r for r in self.rpc.requests if r[1]=="begin"]), 1)
+
+    def test_stopped_task_never_executes_after_offer(self):
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        self.scheduler.submit("background", lambda: (entered.set(), release.wait(3)))
+        self.assertTrue(entered.wait(2))
+        task = self.make_task()
+        self.assertTrue(self.worker.poll_once())
+        self.engine.runtime.stop_task(task.task_id)
+        release.set()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if not self.worker.snapshot()["reserved_agents"]:
+                break
+            time.sleep(.005)
+        self.assertEqual(self.worker.snapshot()["reserved_agents"], [])
+        self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 0)
+        record, = list(self.engine.runs.values())
+        self.assertEqual(record["state"], "cancelled")
+
+    def test_permissions_and_unsupported_method_do_not_claim_offer(self):
+        self.make_task(skills=("mqtt",))
+        self.assertFalse(self.worker.poll_once())
+        self.assertEqual(self.worker.snapshot()["offered"], 0)
+        self.assertEqual(self.manager.events, [])
+        # Method=query is intentionally not interpreted as a plain TASK.
+        # In a separate store, ensure it is left untouched.
+        self.engine.runtime.delete_task(1)
+        for run in self.engine.runs.values():
+            self.assertNotEqual(run["state"], "running")
+        self.make_task(method="query")
+        self.assertFalse(self.worker.poll_once())
+        self.assertEqual(self.manager.events, [])
+
+    def test_human_priority_over_waiting_task(self):
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        order = self.manager.events
+        self.scheduler.submit(
+            "background", lambda: (order.append("blocking"),
+                                   entered.set(), release.wait(3)),
+        )
+        self.assertTrue(entered.wait(2))
+        self.make_task()
+        self.assertTrue(self.worker.poll_once())
+        self.scheduler.submit("human", lambda: order.append("human"))
+        release.set()
+        self.wait_model_done()
+        self.assertEqual(order[:3], ["blocking", "human", "TASK_TEST_ACTION"])
+
+    def test_begin_failure_never_invokes_model(self):
+        self.make_task()
+        self.rpc.fail_begin_once = True
+        original = self.rpc.call
+        def call(target, operation, *args, **kwargs):
+            if target == "worker" and operation == "begin" and self.rpc.fail_begin_once:
+                self.rpc.fail_begin_once = False
+                raise TaskStoreError("begin unavailable")
+            return original(target, operation, *args, **kwargs)
+        self.rpc.call = call
+        self.assertTrue(self.worker.poll_once())
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if not self.worker.snapshot()["reserved_agents"]:
+                break
+            time.sleep(.005)
+        self.assertEqual(self.manager.events, [])
+        # Offer is allowed to return to the next pull, since no model ran.
+        self.assertEqual(self.worker.snapshot()["reserved_agents"], [])
+        self.assertEqual(self.worker.snapshot()["offered"], 0)
+
+
+class TaskWorkerUnixTests(unittest.TestCase):
+    def test_real_unix_rpc_claims_and_finishes_one_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            engine = TaskEngine(
+                root / "state.db",
+                task_file=root / "tasks.txt",
+                event_file=root / "events.json",
+            )
+            try:
+                with Server(str(root / "tasks.sock"), Handler) as service:
+                    service.engine = engine
+                    service_thread = threading.Thread(
+                        target=service.serve_forever,
+                        kwargs={"poll_interval": .02}, daemon=True,
+                    )
+                    service_thread.start()
+                    try:
+                        manager = FakeManager()
+                        manager.run_agent = (
+                            lambda ident, task: manager.pool.run(task, ident)
+                        )
+                        scheduler = PriorityScheduler()
+                        worker = NativeTaskWorker(
+                            scheduler, manager,
+                            rpc=TaskRPC(root / "tasks.sock"),
+                            agent_permissions={"agent_1": ("shell",)},
+                            poll_seconds=10,
+                        )
+                        try:
+                            worker.start()
+                            task = engine.runtime.create_periodic_task(
+                                "real-socket", "TASK_UNIX_ACTION",
+                                ("shell",), 60, method="task", executor="litert",
+                            )
+                            rpc = TaskRPC(root / "tasks.sock")
+                            rpc.call("system", "run_task", task.task_id)
+                            self.assertTrue(worker.poll_once())
+                            deadline = time.monotonic() + 3
+                            while (not worker.snapshot()["unacknowledged"]
+                                   and time.monotonic() < deadline):
+                                time.sleep(.01)
+                            self.assertEqual(
+                                manager.events.count("TASK_UNIX_ACTION"), 1,
+                            )
+                            worker.poll_once()
+                            runs = rpc.call("system", "runs")
+                            self.assertEqual(runs[0]["state"], "done")
+                            self.assertEqual(worker.snapshot()["unacknowledged"], 0)
+                        finally:
+                            scheduler.close()
+                            worker.close()
+                    finally:
+                        service.shutdown()
+                        service_thread.join(timeout=2)
+            finally:
+                engine.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -92,6 +92,8 @@ class CoreServer:
         manager: ManagerRuntime | None = None,
         background_enabled: bool = False,
         hardware_probe_enabled: bool = False,
+        task_worker_socket: Path | None = None,
+        task_agent_permissions: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
         self.path = Path(path)
         self._socket_owner = SocketOwner(self.path)
@@ -107,6 +109,18 @@ class CoreServer:
         self._hardware_probe_enabled = hardware_probe_enabled
         self._backgrounds: dict[str, _BackgroundJob] = {}
         self._finished_backgrounds: OrderedDict[str, tuple[_Client, int, dict]] = OrderedDict()
+        self._task_worker = None
+        if task_worker_socket is not None:
+            if manager is None:
+                raise ValueError("TASK worker requires native manager")
+            from .task_worker import NativeTaskWorker
+            from task_system.client import TaskRPC
+            self._task_worker = NativeTaskWorker(
+                self._scheduler, manager, rpc=TaskRPC(task_worker_socket),
+                agent_permissions=task_agent_permissions,
+                agent_blocked=self._task_agent_blocked,
+                stop_event=self._stop,
+            )
 
     def start(self) -> None:
         with self._close_lock:
@@ -128,6 +142,12 @@ class CoreServer:
                 raise
             self._stop.clear()
             self._socket = listener
+        if self._task_worker is not None:
+            try:
+                self._task_worker.start()
+            except Exception:
+                self.close()
+                raise
         if self._manager is None:
             LOGGER.info("TOOLS CORE SKELETON READY: %s (manager not connected)", self.path)
         else:
@@ -218,7 +238,19 @@ class CoreServer:
             ]
             if hasattr(self._manager, "agent_status"):
                 status["agents"] = self._manager.agent_status()
+            if self._task_worker is not None:
+                status["task_worker"] = self._task_worker.snapshot()
             return status
+
+    def _task_agent_blocked(self, agent_id: str) -> bool:
+        # Worker calls this on its RPC thread; model callback holds the same
+        # lock for status changes. A waiting background KV is not disposable.
+        with self._lock:
+            return any(job.agent_id == agent_id for job in self._backgrounds.values())
+
+    def _task_agent_reserved(self, agent_id: str) -> bool:
+        return (self._task_worker is not None and
+                self._task_worker.is_reserved(agent_id))
 
     def _schedule_release(self, session_id: str) -> None:
         # Called while holding _lock; serialized AFTER in-flight inference.
@@ -509,6 +541,9 @@ class CoreServer:
             if any(j.agent_id == agent_id for j in self._backgrounds.values()):
                 client.send({"type": "error", "error": "agent already has a background job"})
                 return
+            if self._task_agent_reserved(agent_id):
+                client.send({"type": "error", "error": "agent reserved for TASK SYSTEM"})
+                return
             job_id = uuid.uuid4().hex
             job = _BackgroundJob(job_id, client, client.epoch, agent_id,
                                  tuple(t.strip() for t in steps),
@@ -586,6 +621,9 @@ class CoreServer:
             if any(job.agent_id == agent_id for job in self._backgrounds.values()):
                 client.send({"type": "error", "error": "hardware probe agent has a background job"})
                 return
+            if self._task_agent_reserved(agent_id):
+                client.send({"type": "error", "error": "agent reserved for TASK SYSTEM"})
+                return
             event_id, epoch = uuid.uuid4().hex, client.epoch
             try:
                 self._scheduler.submit(
@@ -641,6 +679,7 @@ class CoreServer:
                         "model": getattr(self._manager, "model_name", None),
                         "backend": "UNCONNECTED" if self._manager is None else "CPU",
                         "stage": (1 if self._manager is None else
+                                  5 if self._task_worker is not None else
                                   4 if self._background_enabled else 2),
                         "manager_warm_tokens": getattr(self._manager, "base_kv_tokens", None),
                     },
@@ -762,6 +801,9 @@ class CoreServer:
             if self._scheduler is not None:
                 self._scheduler.close()
                 self._scheduler = None
+            if self._task_worker is not None:
+                self._task_worker.close()
+                self._task_worker = None
             if self._manager is not None:
                 self._manager.close()
             self._socket_owner.release()
