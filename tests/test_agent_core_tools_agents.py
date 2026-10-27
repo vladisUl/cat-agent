@@ -69,6 +69,36 @@ class AgentPoolTests(unittest.TestCase):
         pool.close()
         self.assertTrue(chat.closed)
 
+    def test_cooperative_slices_retain_and_then_reset_context(self):
+        chat = FakeChat()
+        agent = NativeAgent("agent_1", chat)
+        pool = AgentPool([agent])
+        first = pool.run_slice("agent_1", "first step", final=False)
+        self.assertEqual(first.state, AgentState.WAITING)
+        self.assertEqual(agent.state, AgentState.WAITING)
+        self.assertEqual(chat.working_kv_tokens, 270)
+        self.assertEqual(chat.reset_count, 0)
+        with self.assertRaisesRegex(RuntimeError, "not available"):
+            pool.run("new unrelated task", "agent_1")
+        second = pool.run_slice("agent_1", "second step", final=True)
+        self.assertEqual(second.state, AgentState.FREE)
+        self.assertEqual(chat.task_calls, ["first step", "second step"])
+        self.assertEqual(chat.reset_count, 1)
+        self.assertEqual(chat.working_kv_tokens, 250)
+        self.assertEqual(agent.state, AgentState.FREE)
+        pool.close()
+
+    def test_cancel_suspended_agent_without_next_model_call(self):
+        chat = FakeChat()
+        agent = NativeAgent("agent_1", chat)
+        pool = AgentPool([agent])
+        pool.run_slice("agent_1", "one", final=False)
+        pool.abort_slices("agent_1")
+        self.assertEqual(agent.state, AgentState.FREE)
+        self.assertEqual(chat.reset_count, 1)
+        self.assertEqual(chat.task_calls, ["one"])
+        pool.close()
+
     def test_agent_pool_rejects_unknown_busy_and_duplicate(self):
         one = NativeAgent("agent_1", FakeChat())
         with self.assertRaisesRegex(ValueError, "Duplicate"):

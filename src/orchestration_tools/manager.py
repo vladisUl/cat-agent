@@ -106,6 +106,15 @@ class NativeManager:
             raise RuntimeError("Manager is closed")
         return self.agents.run(task, agent_id)
 
+    def run_agent_slice(self, agent_id: str, text: str, *, final: bool) -> AgentOutcome:
+        if self._closed:
+            raise RuntimeError("Manager is closed")
+        return self.agents.run_slice(agent_id, text, final=final)
+
+    def abort_agent_slices(self, agent_id: str) -> None:
+        if not self._closed:
+            self.agents.abort_slices(agent_id)
+
     def release_session(self, session_id: str) -> None:
         if not self._closed:
             # Do not reuse the last owner's dialogue in a new session.

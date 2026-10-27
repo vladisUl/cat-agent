@@ -75,6 +75,57 @@ class NativeAgent:
             return AgentOutcome(self.agent_id, AgentState.FAILED, str(failure), kv)
         return AgentOutcome(self.agent_id, AgentState.FREE, content, kv)
 
+    def run_slice(self, instruction: str, *, final: bool) -> AgentOutcome:
+        """One non-preemptible native model call for a cooperative background job.
+
+        WAITING keeps the same working Conversation resident between slices.
+        The caller must execute this only on the CORE model worker.
+        """
+        if self._closed or self.state not in (AgentState.FREE, AgentState.WAITING):
+            raise RuntimeError(f"{self.agent_id} is not available: {self.state.value}")
+        if not isinstance(instruction, str) or not instruction.strip():
+            raise ValueError("Background slice must not be empty")
+        self.state = AgentState.RUNNING
+        failure = None
+        text = ""
+        kv = None
+        try:
+            text = self.chat.ask(instruction)
+            kv = self.chat.working_kv_tokens
+            if not text.strip():
+                failure = RuntimeError("Agent returned an empty response")
+        except Exception as exc:
+            failure = exc
+            kv = self.chat.working_kv_tokens
+            LOGGER.exception("%s background slice failed", self.agent_id)
+        if failure is not None or final:
+            try:
+                self.chat.new_dialogue()
+            except Exception as exc:
+                self.state = AgentState.FAILED
+                LOGGER.exception("%s background context reset failed", self.agent_id)
+                raise RuntimeError(f"{self.agent_id} reset failed: {exc}") from exc
+            self.state = AgentState.FREE
+        else:
+            self.state = AgentState.WAITING
+        if failure is not None:
+            return AgentOutcome(self.agent_id, AgentState.FAILED, str(failure), kv)
+        return AgentOutcome(self.agent_id, AgentState.FREE if final else AgentState.WAITING, text, kv)
+
+    def abort_slices(self) -> None:
+        """Discard a suspended task without replaying the previous native call."""
+        if self._closed:
+            return
+        if self.state is AgentState.RUNNING:
+            raise RuntimeError(f"{self.agent_id} is still running")
+        if self.state is AgentState.WAITING:
+            try:
+                self.chat.new_dialogue()
+            except Exception as exc:
+                self.state = AgentState.FAILED
+                raise RuntimeError(f"{self.agent_id} reset failed: {exc}") from exc
+            self.state = AgentState.FREE
+
     def close(self) -> None:
         if self._closed:
             return
@@ -108,6 +159,22 @@ class AgentPool:
         except KeyError as exc:
             raise ValueError(f"Unknown agent: {agent_id}") from exc
         return agent.run(task)
+
+    def run_slice(self, agent_id: str, text: str, *, final: bool) -> AgentOutcome:
+        if self._closed:
+            raise RuntimeError("Agent pool is closed")
+        try:
+            return self._agents[agent_id].run_slice(text, final=final)
+        except KeyError as exc:
+            raise ValueError(f"Unknown agent: {agent_id}") from exc
+
+    def abort_slices(self, agent_id: str) -> None:
+        if self._closed:
+            return
+        try:
+            self._agents[agent_id].abort_slices()
+        except KeyError as exc:
+            raise ValueError(f"Unknown agent: {agent_id}") from exc
 
     def close(self) -> None:
         if self._closed:
