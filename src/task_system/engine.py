@@ -382,13 +382,20 @@ class TaskEngine:
             if executor not in {'litert', 'openai'}:
                 raise TaskStoreError('worker executor must be litert or openai')
             seen = set(kw.get('seen', []))
+            # Advisory per-worker exclusion: an unstarted offer can be
+            # released and skipped by this worker without starving other RUNs.
+            # Existing clients omit this field and retain old semantics.
+            skip_run_ids = set(kw.get('skip_run_ids', []))
             for run in self.runs.values():
                 if (run['state'] == 'offered' and run['owner'] == owner and run['peer'] == peer
-                        and (run['event'].get('offer_id') or run['event']['run_id']) not in seen):
+                        and (run['event'].get('offer_id') or run['event']['run_id']) not in seen
+                        and run['event']['run_id'] not in skip_run_ids):
                     return run['event']
             occupied = {r['event']['task_id'] for r in self.runs.values() if r['state'] in {'offered', 'running'}}
             for run in self.runs.values():
-                if run['state'] != 'pending' or run['event']['task_id'] in occupied:
+                if (run['state'] != 'pending' or
+                        run['event']['task_id'] in occupied or
+                        run['event']['run_id'] in skip_run_ids):
                     continue
                 policy = self._policy(run)
                 selected = self._best_ready() if policy == 'auto' else policy

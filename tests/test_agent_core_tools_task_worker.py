@@ -149,23 +149,86 @@ class TaskWorkerTests(unittest.TestCase):
                 self.assertEqual(selected == "agent_1", expected)
         self.assertEqual(self.manager.events, [])
 
-    def test_permissions_and_unsupported_method_do_not_claim_offer(self):
-        self.make_task(skills=("mqtt",))
+    def test_unmatched_skill_is_deferred_without_begin_and_next_run_executes(self):
+        denied = self.make_task(skills=("mqtt",))
+        denied_run = next(iter(self.engine.runs))
         self.assertFalse(self.worker.poll_once())
         self.assertEqual(self.worker.snapshot()["offered"], 0)
         self.assertEqual(self.manager.events, [])
         self.assertFalse(any(
             target == "worker" and method in ("begin", "valid")
             for target, method, _ in self.rpc.requests
-        ))  # Rejected grants must never reach a model-authorizing RPC.
-        # Method=query is intentionally not interpreted as a plain TASK.
-        # In a separate store, ensure it is left untouched.
-        self.engine.runtime.delete_task(1)
-        for run in self.engine.runs.values():
-            self.assertNotEqual(run["state"], "running")
-        self.make_task(method="query")
+        ))
+        self.assertEqual(self.engine.runs[denied_run]["state"], "pending")
+        allowed = self.make_task(skills=("shell",))
+        self.assertNotEqual(denied.task_id, allowed.task_id)
+        self.assertTrue(self.worker.poll_once())
+        self.wait_model_done()
         self.assertFalse(self.worker.poll_once())
-        self.assertEqual(self.manager.events, [])
+        runs = list(self.engine.runs.values())
+        self.assertEqual(runs[0]["state"], "pending")
+        self.assertEqual(runs[1]["state"], "done")
+        self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 1)
+
+    def test_query_agent_then_separate_manager_and_result_publisher(self):
+        from orchestration_tools.contracts import ManagerTurn
+        summaries = []
+        self.worker.on_query_result = summaries.append
+        def report(task_id, result, *, failed=False):
+            self.manager.events.append("query-manager")
+            self.assertEqual(task_id, 1)
+            self.assertIn("TASK_TEST_ACTION", result)
+            return ManagerTurn("reply", "TASK QUERY summary: " + result)
+        self.manager.process_task_query = report
+        self.make_task(method="query")
+        self.assertTrue(self.worker.poll_once())
+        deadline = time.monotonic() + 3
+        while not summaries and time.monotonic() < deadline:
+            time.sleep(.005)
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(self.manager.events, ["TASK_TEST_ACTION", "query-manager"])
+        self.assertEqual(summaries[0]["task_id"], 1)
+        self.assertIn("TASK QUERY summary", summaries[0]["text"])
+        self.assertEqual(self.manager.agent_chat.working_kv_tokens, 200)
+        self.assertFalse(self.worker.poll_once())  # Flush finish, no new RUN.
+        self.assertEqual(next(iter(self.engine.runs.values()))["state"], "done")
+
+    def test_query_yields_to_human_between_agent_and_manager(self):
+        from orchestration_tools.contracts import ManagerTurn
+        from unittest.mock import patch
+        self.manager.process_task_query = lambda *args, **kwargs: (
+            self.manager.events.append("query-manager")
+            or ManagerTurn("reply", "Summary")
+        )
+        self.make_task(method="query")
+        original_submit = self.scheduler.submit
+        def submit(kind, callback, *, continuation=False):
+            if continuation:
+                original_submit("human", lambda: self.manager.events.append("human"))
+            return original_submit(kind, callback, continuation=continuation)
+        with patch.object(self.scheduler, "submit", side_effect=submit):
+            self.assertTrue(self.worker.poll_once())
+            deadline = time.monotonic() + 3
+            while self.worker.snapshot()["unacknowledged"] == 0 and time.monotonic() < deadline:
+                time.sleep(.005)
+        self.assertEqual(self.manager.events[:3],
+                         ["TASK_TEST_ACTION", "human", "query-manager"])
+
+    def test_deferred_grant_uses_correct_offer_and_can_go_to_other_worker(self):
+        denied = self.make_task(skills=("mqtt",))
+        self.assertFalse(self.worker.poll_once())
+        self.assertEqual(next(iter(self.engine.runs.values()))["state"], "pending")
+        # Different litert worker has the required skill; native worker's
+        # local skip is not a server-wide blacklist.
+        from task_system.client import RemoteSystemRuntime
+        other = RemoteSystemRuntime("litert", rpc=LocalRPC(self.engine, peer="other"))
+        self.engine.alive = lambda peer: peer in ("native", "other")
+        offer, = other.poll_due()
+        self.assertEqual(offer.task_id, denied.task_id)
+        self.assertTrue(other.begin_run(offer))
+        other.finish_run(offer, "done")
+        self.assertTrue(other.flush_completions())
+        self.assertEqual(next(iter(self.engine.runs.values()))["state"], "done")
 
     def test_human_priority_over_waiting_task(self):
         entered, release = threading.Event(), threading.Event()
@@ -182,6 +245,26 @@ class TaskWorkerTests(unittest.TestCase):
         release.set()
         self.wait_model_done()
         self.assertEqual(order[:3], ["blocking", "human", "TASK_TEST_ACTION"])
+
+    def test_revocation_between_agent_and_query_manager_blocks_report(self):
+        from orchestration_tools.contracts import ManagerTurn
+        from unittest.mock import patch
+        task = self.make_task(method="query")
+        self.manager.process_task_query = lambda *_args, **_kw: (
+            self.manager.events.append("query-manager")
+            or ManagerTurn("reply", "Summary")
+        )
+        original_submit = self.scheduler.submit
+        def submit(kind, callback, *, continuation=False):
+            if continuation:
+                original_submit("human", lambda: self.engine.runtime.stop_task(task.task_id))
+            return original_submit(kind, callback, continuation=continuation)
+        with patch.object(self.scheduler, "submit", side_effect=submit):
+            self.assertTrue(self.worker.poll_once())
+            self.wait_model_done()
+        self.assertEqual(self.manager.events, ["TASK_TEST_ACTION"])
+        self.worker.poll_once()
+        self.assertEqual(next(iter(self.engine.runs.values()))["state"], "cancelled")
 
     def test_begin_failure_never_invokes_model(self):
         self.make_task()

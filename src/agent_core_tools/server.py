@@ -109,6 +109,8 @@ class CoreServer:
         self._hardware_probe_enabled = hardware_probe_enabled
         self._backgrounds: dict[str, _BackgroundJob] = {}
         self._finished_backgrounds: OrderedDict[str, tuple[_Client, int, dict]] = OrderedDict()
+        # Ephemeral autonomous QUERY output. Not a durable notification outbox.
+        self._query_results: OrderedDict[str, dict] = OrderedDict()
         self._task_worker = None
         if task_worker_socket is not None:
             if manager is None:
@@ -119,6 +121,7 @@ class CoreServer:
                 self._scheduler, manager, rpc=TaskRPC(task_worker_socket),
                 agent_permissions=task_agent_permissions,
                 agent_blocked=self._task_agent_blocked,
+                on_query_result=self._publish_task_query_result,
                 stop_event=self._stop,
             )
 
@@ -240,7 +243,26 @@ class CoreServer:
                 status["agents"] = self._manager.agent_status()
             if self._task_worker is not None:
                 status["task_worker"] = self._task_worker.snapshot()
+                status["task_query_result_count"] = len(self._query_results)
             return status
+
+    def _publish_task_query_result(self, item: dict) -> None:
+        """Store bounded QUERY output; notify the live human if present.
+
+        Invoked only from the serialized native model worker. The independent
+        tool-free query manager did not touch the human dialogue's KV.
+        """
+        with self._lock:
+            run_id = item["run_id"]
+            self._query_results[run_id] = dict(item)
+            self._query_results.move_to_end(run_id)
+            while len(self._query_results) > 32:
+                self._query_results.popitem(last=False)
+            if self._human is not None:
+                try:
+                    self._human.send(dict(item))
+                except OSError:
+                    LOGGER.info("native-task QUERY client disconnected run=%s", run_id)
 
     def _task_agent_blocked(self, agent_id: str) -> bool:
         # Worker calls this on its RPC thread; model callback holds the same
@@ -696,6 +718,17 @@ class CoreServer:
                     self._cancel_backgrounds(client)
                     self._schedule_release(client.session_id)
             client.send({"type": "released"})
+            return
+        if message_type == "task_query_results":
+            with self._lock:
+                if self._human is not client:
+                    client.send({"type": "busy",
+                                 "owner": self._human.name if self._human else None})
+                    return
+                client.send({
+                    "type": "task_query_results",
+                    "items": list(self._query_results.values()),
+                })
             return
         if message_type == "hardware_probe":
             self._submit_hardware_probe(client, message)

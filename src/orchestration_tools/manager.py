@@ -20,6 +20,7 @@ class NativeManager:
     def __init__(
         self, chat, engine, *, model_name: str,
         agents: AgentPool | None = None, delegations: DelegationBroker | None = None,
+        query_chat=None,
     ):
         self.chat = chat
         self.engine = engine
@@ -27,6 +28,8 @@ class NativeManager:
         self._closed = False
         self.agents = agents if agents is not None else AgentPool([])
         self.delegations = delegations
+        # Separate tool-free Conversation, never the interactive user's KV.
+        self.query_chat = query_chat
 
     @property
     def base_kv_tokens(self):
@@ -98,6 +101,31 @@ class NativeManager:
         finally:
             broker.finish_turn()
 
+    def process_task_query(
+        self, task_id: int, agent_result: str, *, failed: bool = False,
+    ) -> ManagerTurn:
+        """Convert an autonomous AGENT result without mutating user dialogue.
+
+        Query chat has NO tools and a separate BASE/working KV. The entire
+        call occurs on the serialized model scheduler, never inside a tool.
+        """
+        if self._closed:
+            raise RuntimeError("Manager is closed")
+        if self.query_chat is None:
+            raise RuntimeError("Autonomous QUERY manager is not configured")
+        payload = json.dumps({
+            "kind": "task_query_result", "task_id": task_id,
+            "ok": not failed, "result": agent_result[:4096],
+        }, ensure_ascii=False, separators=(",", ":"))
+        try:
+            answer = self.query_chat.ask(
+                "SYSTEM_QUERY_RESULT TASK " + str(task_id) + "\n" + payload
+            )
+            return ManagerTurn("reply", answer) if answer.strip() else ManagerTurn("silent")
+        finally:
+            # Crucial: neither another QUERY nor a human inherits this KV.
+            self.query_chat.new_dialogue()
+
     def agent_status(self) -> list[dict[str, object]]:
         return self.agents.status()
 
@@ -129,6 +157,10 @@ class NativeManager:
             self.agents.close()
         finally:
             try:
-                self.chat.close()
+                if self.query_chat is not None:
+                    self.query_chat.close()
             finally:
-                self.engine.close()
+                try:
+                    self.chat.close()
+                finally:
+                    self.engine.close()

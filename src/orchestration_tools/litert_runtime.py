@@ -80,6 +80,7 @@ def build_native_manager(
     )
     engine.__enter__()
     chat = None
+    query_chat = None
     agents = []
     try:
         sampler = litert_lm.SamplerConfig(temperature=temperature, top_p=top_p, seed=0)
@@ -102,6 +103,16 @@ def build_native_manager(
                 trace_native_json=trace_native_json,
             )
             agents.append(NativeAgent(spec.agent_id, agent_chat))
+        # 5B: independent tool-free manager. An autonomous QUERY must
+        # NEVER inject a user-role message into the human manager session,
+        # nor trigger shell/MQTT/delegation while reading agent output.
+        query_prompt_file = Path(__file__).resolve().parents[2] / "prompts_tools/query_manager.md"
+        query_prompt = query_prompt_file.read_text(encoding="utf-8")
+        query_chat = NativeConversationChat(
+            engine, query_prompt, [], sampler_config=sampler,
+            max_output_tokens=max_output_tokens,
+            thinking_config=thinking, trace_native_json=trace_native_json,
+        )
         if shell_gate is not None:
             shell_gate.enabled = True
         if delegations is not None:
@@ -109,10 +120,13 @@ def build_native_manager(
         return NativeManager(
             chat, engine, model_name=model.name,
             agents=AgentPool(agents), delegations=delegations,
+            query_chat=query_chat,
         )
     except BaseException:
         for agent in reversed(agents):
             agent.close()
+        if query_chat is not None:
+            query_chat.close()
         if chat is not None:
             chat.close()
         engine.close()

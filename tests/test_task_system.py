@@ -86,6 +86,25 @@ class TaskSystemTest(unittest.TestCase):
             results = list(pool.map(self.pull, [self.a, self.c]))
         self.assertEqual(sum(len(r) for r in results), 1)
 
+    def test_pull_skip_run_ids_is_local_to_one_worker(self):
+        first = self.create()
+        second = self.create()
+        self.engine.call('system', 'run_task', (first.task_id,))
+        self.engine.call('system', 'run_task', (second.task_id,))
+        run_ids = list(self.engine.runs)
+        # Old clients omit skip_run_ids; their behavior remains unchanged.
+        event = self.a.rpc.call(
+            'worker', 'pull', owner=self.a.owner, executor='litert',
+            seen=[], skip_run_ids=[run_ids[0]],
+        )
+        self.assertEqual(event['run_id'], run_ids[1])
+        # Other CORE can take the excluded RUN; it was never globally blacklisted.
+        other = self.c.rpc.call(
+            'worker', 'pull', owner=self.c.owner, executor='litert',
+            seen=[],
+        )
+        self.assertEqual(other['run_id'], run_ids[0])
+
     def test_lost_offer_reply_returns_same_run(self):
         task = self.create()
         self.due(task)

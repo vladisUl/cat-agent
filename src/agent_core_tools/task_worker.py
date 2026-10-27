@@ -27,7 +27,8 @@ class NativeTaskWorker:
 
     def __init__(
         self, scheduler, manager, *, rpc=None, agent_permissions=None,
-        agent_blocked=None, stop_event=None, poll_seconds=POLL_SECONDS,
+        agent_blocked=None, on_query_result=None,
+        stop_event=None, poll_seconds=POLL_SECONDS,
         clock=time.monotonic,
     ):
         if poll_seconds <= 0:
@@ -42,6 +43,7 @@ class NativeTaskWorker:
         if not self.permissions:
             raise ValueError("Task worker requires at least one configured agent")
         self.agent_blocked = agent_blocked or (lambda ident: False)
+        self.on_query_result = on_query_result
         self.external_stop = stop_event
         self.clock = clock
         self.poll_seconds = poll_seconds
@@ -51,6 +53,8 @@ class NativeTaskWorker:
         self._seen: set[str] = set()
         self._reserved: set[str] = set()
         self._pending_finishes: OrderedDict[str, tuple[dict, str]] = OrderedDict()
+        self._deferred: dict[str, float] = {}
+        self._pending_defers: OrderedDict[str, dict] = OrderedDict()
         self._lock = threading.RLock()
         self._ready = False
 
@@ -105,6 +109,88 @@ class NativeTaskWorker:
                 self._seen.discard(token)
         return True
 
+    def _defer_offer(self, event: dict, *, seconds: float, reason: str) -> bool:
+        """Release an UNSTARTED offer and temporarily exclude its RUN on pull.
+
+        Task SYSTEM's existing finish(offered) atomically returns the RUN
+        to pending, without changing its execution outcome.
+        """
+        token = event["offer_id"]
+        with self._lock:
+            self._deferred[event["run_id"]] = self.clock() + seconds
+            self._pending_defers[token] = event
+        LOGGER.info("native-task DEFER run=%s seconds=%s reason=%s",
+                    event["run_id"], seconds, reason)
+        return self._flush_defers()
+
+    def _flush_defers(self) -> bool:
+        with self._lock:
+            entries = tuple(self._pending_defers.items())
+        for token, event in entries:
+            try:
+                done = self._rpc("finish", run_id=event["run_id"],
+                                 offer_id=token, outcome="cancelled")
+            except TaskStoreError as exc:
+                LOGGER.warning("native-task DEFER RPC pending run=%s: %s",
+                               event["run_id"], exc)
+                return False
+            if done is False:
+                LOGGER.info("native-task DEFER revoked run=%s", event["run_id"])
+            with self._lock:
+                self._pending_defers.pop(token, None)
+        return True
+
+    def _finish_started(self, token: str, event: dict, agent_id: str,
+                        outcome: str) -> None:
+        with self._lock:
+            self._reserved.discard(agent_id)
+            # Never discard a started RUN before its finish is acknowledged.
+            self._pending_finishes[token] = (event, outcome)
+
+    def _complete_query(self, event: dict, agent_id: str,
+                        result_text: str, agent_failed: bool) -> None:
+        """Second model boundary: QUERY manager is distinct from human chat."""
+        token = event["offer_id"]
+        outcome = "error"
+        try:
+            # TASK SYSTEM is authoritative on every cooperative model boundary.
+            # A stopped/reassigned TASK must not generate a fresh report.
+            try:
+                still_valid = self._rpc(
+                    "valid", run_id=event["run_id"], offer_id=token,
+                )
+            except TaskStoreError:
+                still_valid = False  # Fail closed on unavailable RPC.
+            if not still_valid:
+                outcome = "cancelled"
+                LOGGER.info("native-task QUERY revoked before manager run=%s",
+                            event["run_id"])
+                return
+            turn = self.manager.process_task_query(
+                event["task_id"], result_text, failed=agent_failed,
+            )
+            if turn.kind not in ("reply", "silent"):
+                raise RuntimeError("QUERY manager returned invalid kind")
+            outcome = "error" if agent_failed else "done"
+            if turn.kind == "reply" and turn.text.strip() and self.on_query_result:
+                try:
+                    self.on_query_result({
+                        "type": "task_query_result", "task_id": event["task_id"],
+                        "run_id": event["run_id"], "source": event.get("source", ""),
+                        "text": turn.text[:4096], "agent_id": agent_id,
+                        "agent_ok": not agent_failed,
+                    })
+                except Exception:
+                    LOGGER.exception("native-task QUERY result delivery failed run=%s",
+                                     event["run_id"])
+            LOGGER.info("native-task QUERY MANAGER run=%s kind=%s outcome=%s",
+                        event["run_id"], turn.kind, outcome)
+        except Exception:
+            LOGGER.exception("native-task QUERY manager failed run=%s",
+                             event["run_id"])
+        finally:
+            self._finish_started(token, event, agent_id, outcome)
+
     def _select_agent(self, task: dict) -> str | None:
         required = task.get("skills")
         if not isinstance(required, list) or not all(isinstance(s, str) for s in required):
@@ -136,14 +222,23 @@ class NativeTaskWorker:
             return False
         if not self._can_run():
             return False
-        if not self._finish_pending():
-            return False  # Never accumulate more work behind unknown finish replies.
+        if not self._finish_pending() or not self._flush_defers():
+            return False  # No new execution behind unacknowledged RPC replies.
         with self._lock:
             if len(self._seen) >= MAX_UNACKNOWLEDGED:
                 return False
+            now = self.clock()
+            self._deferred = {
+                run_id: expiry for run_id, expiry in self._deferred.items()
+                if expiry > now
+            }
+            skip_run_ids = list(self._deferred)
             seen = tuple(self._seen)
         try:
-            event = self._rpc("pull", executor="litert", seen=list(seen))
+            event = self._rpc(
+                "pull", executor="litert", seen=list(seen),
+                skip_run_ids=skip_run_ids,
+            )
         except TaskStoreError as exc:
             LOGGER.warning("native-task PULL unavailable: %s", exc)
             return False
@@ -163,15 +258,17 @@ class NativeTaskWorker:
         if (not isinstance(task, dict) or not task.get("enabled")
                 or task.get("generation") != event.get("task_generation")):
             LOGGER.info("native-task stale offer id=%s (not executed)", event["run_id"])
+            self._defer_offer(event, seconds=30, reason="stale_record")
             return False
-        # 'query' requires result routing in the manager, implemented separately.
-        # Keep the offer untouched rather than silently converting its semantics.
-        if task.get("method") != "task":
-            LOGGER.debug("native-task unsupported method %r id=%s", task.get("method"), event["run_id"])
+        if task.get("method") not in ("task", "query"):
+            self._defer_offer(event, seconds=60, reason="unknown_method")
             return False
         agent_id = self._select_agent(task)
         if agent_id is None:
-            return False  # Keep the offer; permissions/state may change.
+            # This grant is still OFFERED. Return it to TASK SYSTEM, or it
+            # will monopolize the worker's next pull forever.
+            self._defer_offer(event, seconds=2, reason="agent_busy_or_not_authorized")
+            return False
         source = event.get("source", "")
         kind = "hardware" if source == "mqtt" else "background"
         with self._lock:
@@ -198,6 +295,7 @@ class NativeTaskWorker:
         token = event["offer_id"]
         outcome = "cancelled"
         started = False
+        handed_off = False
         try:
             if not self._can_run():
                 return  # Offered but never begun: service can re-offer on offline.
@@ -230,20 +328,33 @@ class NativeTaskWorker:
             # The prompt is taken from the saved TASK record, not the IPC offer.
             result = self.manager.run_agent(agent_id, instruction)
             from orchestration_tools.agents import AgentState
-            outcome = "done" if result.state is AgentState.FREE else "error"
+            agent_failed = result.state is not AgentState.FREE
+            outcome = "error" if agent_failed else "done"
             LOGGER.info("native-task EXECUTED run=%s agent=%s outcome=%s",
                         event["run_id"], agent_id, outcome)
+            if task["method"] == "query":
+                # Yield to interactive requests BEFORE the second model call.
+                # A started RUN stays reserved until QUERY manager completes.
+                self.scheduler.submit(
+                    "hardware" if event.get("source") == "mqtt" else "background",
+                    lambda: self._complete_query(
+                        event, agent_id, result.text[:4096], agent_failed,
+                    ),
+                    continuation=True,
+                )
+                handed_off = True
         except Exception:
             LOGGER.exception("native-task FAILED run=%s (never automatically replay)",
                              event["run_id"])
             outcome = "error"
         finally:
             with self._lock:
-                self._reserved.discard(agent_id)
-                if started:
+                if not handed_off:
+                    self._reserved.discard(agent_id)
+                if started and not handed_off:
                     # Finish is retried by the poll thread, NEVER the model call.
                     self._pending_finishes[token] = (event, outcome)
-                else:
+                elif not started:
                     self._seen.discard(token)
 
     def _select_agent_for_reserved(self, agent_id: str) -> bool:
@@ -268,6 +379,8 @@ class NativeTaskWorker:
                 "reserved_agents": sorted(self._reserved),
                 "unacknowledged": len(self._pending_finishes),
                 "offered": len(self._seen),
+                "deferred": len(self._deferred),
+                "pending_defers": len(self._pending_defers),
             }
 
     def close(self) -> None:
@@ -277,6 +390,7 @@ class NativeTaskWorker:
             self._thread = None
         # Called after scheduler.join(): no native side effects still in flight.
         self._finish_pending()
+        self._flush_defers()
         try:
             self._rpc("offline")
         except TaskStoreError:

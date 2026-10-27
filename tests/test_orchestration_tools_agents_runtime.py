@@ -82,11 +82,13 @@ class RuntimeAgentTests(unittest.TestCase):
                 )
             engine = FakeEngine.instances[0]
             self.assertEqual(len(FakeEngine.instances), 1)
-            self.assertEqual(len(engine.created), 2)
+            self.assertEqual(len(engine.created), 3)
             self.assertTrue(engine.created[0]["messages"][0]["content"].startswith("Я менеджер"))
             self.assertIn("agent_1", engine.created[0]["messages"][0]["content"])
             self.assertEqual(engine.created[1]["messages"][0]["content"], "Я агент")
             self.assertEqual(engine.created[1]["tools"], [])
+            self.assertEqual(engine.created[2]["tools"], [])
+            self.assertIn("TASK QUERY", engine.created[2]["messages"][0]["content"])
             self.assertEqual(len(engine.created[0]["tools"]), 1)
             self.assertEqual(engine.created[0]["tools"][0].__name__, "delegate_task")
             self.assertEqual(
@@ -96,6 +98,8 @@ class RuntimeAgentTests(unittest.TestCase):
             self.assertEqual(manager.base_kv_tokens, 20)
             self.assertEqual(manager.agent_status()[0]["base_kv_tokens"], 20)
             self.assertEqual(manager.respond("test", "Привет").text, "DONE:Привет")
+            self.assertIn("SYSTEM_QUERY_RESULT TASK 1",
+                          manager.process_task_query(1, "/opt/model").text)
             self.assertEqual(manager.run_agent("agent_1", "работай").text, "DONE:работай")
             self.assertEqual(manager.run_agent("agent_1", "еще").text, "DONE:еще")
             self.assertEqual(manager.agent_status()[0]["state"], "FREE")
