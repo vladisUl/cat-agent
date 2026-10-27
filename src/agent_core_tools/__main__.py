@@ -25,9 +25,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--shell-timeout', type=float, default=15.0)
     parser.add_argument('--shell-max-output', type=int, default=16384)
     parser.add_argument('--disable-mqtt', action='store_true')
+    parser.add_argument('--agent-config', type=Path,
+                        help='JSON agent pool configuration (experimental)')
     parser.add_argument('--trace-native-json', action='store_true')
     parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
     args = parser.parse_args(argv)
+    if args.agent_config is not None and args.model is None:
+        parser.error('--agent-config requires --model and --system-file')
     if bool(args.model) != bool(args.system_file):
         parser.error('--model and --system-file must be used together')
     logging.basicConfig(level=getattr(logging, args.log_level))
@@ -44,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_output_tokens=args.max_output_tokens,
                 cpu_threads=args.cpu_threads, temperature=args.temperature,
                 top_p=args.top_p, trace_native_json=args.trace_native_json,
+                agent_config=args.agent_config,
             )
         except (OSError, ValueError, RuntimeError) as exc:
             print(f'TOOLS CORE manager initialization failed: {exc}', file=sys.stderr)

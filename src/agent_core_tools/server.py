@@ -23,6 +23,7 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_SOCKET = Path("/run/cat-agent/litert-tools.sock")
 MAX_FRAME_BYTES = 65536
 MAX_CLIENTS = 16
+MAX_PENDING = 16
 
 
 @dataclass(eq=False)
@@ -166,17 +167,23 @@ class CoreServer:
                     "state": "NOT_READY", "ready": False, "pending": 0,
                     "label": "", "reason": "manager_not_connected_stage1",
                 }
-            return {
+            status = {
                 "state": "BUSY" if self._working else "IDLE", "ready": True,
                 "pending": self._pending, "label": "manager" if self._working else "",
             }
+            if hasattr(self._manager, "agent_status"):
+                status["agents"] = self._manager.agent_status()
+            return status
 
     def _schedule_release(self, session_id: str) -> None:
         # Called while holding _lock; serialized AFTER in-flight inference.
         if self._executor is not None:
             self._executor.submit(self._manager.release_session, session_id)
 
-    def _model_worker(self, client: _Client, epoch: int, request_id: str, text: str) -> None:
+    def _model_worker(
+        self, client: _Client, epoch: int, request_id: str, text: str,
+        agent_id: str | None = None,
+    ) -> None:
         with self._lock:
             self._pending -= 1
             if self._human is not client or client.epoch != epoch or self._stop.is_set():
@@ -184,15 +191,25 @@ class CoreServer:
             self._working = True
         try:
             try:
-                turn = self._manager.respond(client.session_id, text)
+                if agent_id is None:
+                    turn = self._manager.respond(client.session_id, text)
+                else:
+                    from orchestration_tools.agents import AgentState
+                    from orchestration_tools.contracts import ManagerTurn
+                    outcome = self._manager.run_agent(agent_id, text)
+                    turn = ManagerTurn(
+                        "reply" if outcome.state is AgentState.FREE else "error",
+                        outcome.text,
+                    )
             except Exception as exc:
                 LOGGER.exception("Native manager turn failed id=%s", request_id)
                 # This response may reflect a partially mutated native KV. Reset
                 # serialized after the exception, never replay a tool call.
-                try:
-                    self._manager.release_session(client.session_id)
-                except Exception:
-                    LOGGER.exception("Failed to reset native manager after error")
+                if agent_id is None:
+                    try:
+                        self._manager.release_session(client.session_id)
+                    except Exception:
+                        LOGGER.exception("Failed to reset native manager after error")
                 from orchestration_tools.contracts import ManagerTurn
                 turn = ManagerTurn("error", str(exc))
             with self._lock:
@@ -200,8 +217,10 @@ class CoreServer:
                     return
                 fields = {
                     "request_id": request_id, "session_id": client.session_id,
-                    "kind": turn.kind, "text": turn.text, "chat_open": True,
+                    "kind": turn.kind, "text": turn.text, "chat_open": agent_id is None,
                 }
+                if agent_id is not None:
+                    fields["agent_id"] = agent_id
                 if turn.kind == "error":
                     client.send({"type": "error", **fields})
                 elif turn.kind == "reply":
@@ -264,12 +283,21 @@ class CoreServer:
                     self._schedule_release(client.session_id)
             client.send({"type": "released"})
             return
-        if message_type == "user":
+        if message_type in ("user", "agent_task"):
             content = message.get("text")
             if not isinstance(content, str) or not content.strip():
                 raise ValueError("user text must be nonempty")
             # json.loads permits escaped lone surrogates; C++ LiteRT does not.
             content.encode("utf-8", errors="strict")
+            agent_id = None
+            if message_type == "agent_task":
+                agent_id = message.get("agent")
+                if not isinstance(agent_id, str) or not agent_id.strip():
+                    raise ValueError("agent_task requires a non-empty agent id")
+                if self._manager is not None:
+                    pool_status = getattr(self._manager, "agent_status", lambda: [])()
+                    if not any(a["agent_id"] == agent_id for a in pool_status):
+                        raise ValueError(f"agent is not configured: {agent_id}")
             with self._lock:
                 owner = self._human is client
                 current = self._human.name if self._human else None
@@ -284,15 +312,23 @@ class CoreServer:
                     if self._human is not client:
                         client.send({"type": "busy", "owner": None, "text": "Гена занят"})
                         return
+                    if self._pending >= MAX_PENDING:
+                        client.send({
+                            "type": "error", "error": "CORE request queue is full",
+                        })
+                        return
                     request_id = uuid.uuid4().hex
                     client.send({
                         "type": "accepted", "request_id": request_id,
                         "session_id": client.session_id,
                     })
                     self._pending += 1
-                    self._executor.submit(self._model_worker, client, client.epoch, request_id, content)
+                    self._executor.submit(
+                        self._model_worker, client, client.epoch,
+                        request_id, content, agent_id,
+                    )
             return
-        # Stage 1 has no voice, event, fallback, MODEL or TASK execution.
+        # Voice, events, TASK SYSTEM and fallback channels are not connected.
         client.send({
             "type": "error", "error": f"{message_type} is not available in stage 1",
         })
