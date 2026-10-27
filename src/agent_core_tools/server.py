@@ -180,6 +180,11 @@ class CoreServer:
         if self._executor is not None:
             self._executor.submit(self._manager.release_session, session_id)
 
+    def _client_still_active(self, client: _Client, epoch: int) -> bool:
+        with self._lock:
+            return (not self._stop.is_set() and self._human is client
+                    and client.epoch == epoch)
+
     def _model_worker(
         self, client: _Client, epoch: int, request_id: str, text: str,
         agent_id: str | None = None,
@@ -192,7 +197,14 @@ class CoreServer:
         try:
             try:
                 if agent_id is None:
-                    turn = self._manager.respond(client.session_id, text)
+                    guarded = getattr(self._manager, "respond_guarded", None)
+                    if callable(guarded):
+                        turn = guarded(
+                            client.session_id, text,
+                            lambda: self._client_still_active(client, epoch),
+                        )
+                    else:
+                        turn = self._manager.respond(client.session_id, text)
                 else:
                     from orchestration_tools.agents import AgentState
                     from orchestration_tools.contracts import ManagerTurn

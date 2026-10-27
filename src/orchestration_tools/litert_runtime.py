@@ -13,6 +13,7 @@ from litert_agent_tools.shell_tools import ShellConfig, ShellGate, create_shell_
 
 from .agent_config import load_agent_specs
 from .agents import AgentPool, NativeAgent
+from .delegation import DelegationBroker, create_delegate_tool
 from .manager import NativeManager
 
 
@@ -38,6 +39,12 @@ def build_native_manager(
         raise ValueError('CPU threads must be positive')
 
     specs = load_agent_specs(agent_config) if agent_config is not None else ()
+    if specs:
+        prompt += (
+            "\n\nДоступные независимые исполнители AGENT: "
+            + ", ".join(spec.agent_id for spec in specs)
+            + ". Для передачи задания используй инструмент delegate_task."
+        )
     tools = create_mqtt_tools(MqttConfig.from_env()) if enable_mqtt else []
     shell_gate = None
     if enable_shell:
@@ -56,6 +63,12 @@ def build_native_manager(
             )
         if not spec.prompt_file.read_text(encoding="utf-8").strip():
             raise ValueError(f"{spec.agent_id}: agent prompt is empty")
+
+    # Manager-only tool. Do not place it in available_tools: AGENTs cannot
+    # delegate, and must not be able to request nested model inference.
+    delegations = DelegationBroker(tuple(spec.agent_id for spec in specs)) if specs else None
+    if delegations is not None:
+        tools.append(create_delegate_tool(delegations))
 
     import litert_lm
 
@@ -91,9 +104,11 @@ def build_native_manager(
             agents.append(NativeAgent(spec.agent_id, agent_chat))
         if shell_gate is not None:
             shell_gate.enabled = True
+        if delegations is not None:
+            delegations.enabled = True
         return NativeManager(
             chat, engine, model_name=model.name,
-            agents=AgentPool(agents),
+            agents=AgentPool(agents), delegations=delegations,
         )
     except BaseException:
         for agent in reversed(agents):

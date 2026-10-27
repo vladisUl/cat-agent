@@ -83,9 +83,16 @@ class RuntimeAgentTests(unittest.TestCase):
             engine = FakeEngine.instances[0]
             self.assertEqual(len(FakeEngine.instances), 1)
             self.assertEqual(len(engine.created), 2)
-            self.assertEqual(engine.created[0]["messages"][0]["content"], "Я менеджер")
+            self.assertTrue(engine.created[0]["messages"][0]["content"].startswith("Я менеджер"))
+            self.assertIn("agent_1", engine.created[0]["messages"][0]["content"])
             self.assertEqual(engine.created[1]["messages"][0]["content"], "Я агент")
             self.assertEqual(engine.created[1]["tools"], [])
+            self.assertEqual(len(engine.created[0]["tools"]), 1)
+            self.assertEqual(engine.created[0]["tools"][0].__name__, "delegate_task")
+            self.assertEqual(
+                engine.created[0]["tools"][0]("agent_1", "проверить"),
+                {"ok": False, "error": "no_active_manager_turn"},
+            )
             self.assertEqual(manager.base_kv_tokens, 20)
             self.assertEqual(manager.agent_status()[0]["base_kv_tokens"], 20)
             self.assertEqual(manager.respond("test", "Привет").text, "DONE:Привет")
