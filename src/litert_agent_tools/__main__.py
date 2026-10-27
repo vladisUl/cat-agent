@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 from pathlib import Path
 import sys
 
@@ -24,10 +23,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--warm-message", default="warm", help="One-time BASE warm-up user message")
-    parser.add_argument(
-        "--require-prefilled-base", action="store_true",
-        help="Fail when the current native library lacks the prefilled Conversation API",
-    )
     args = parser.parse_args(argv)
     if args.max_context_tokens < 2 or args.max_output_tokens < 1:
         parser.error("Token limits must be positive")
@@ -70,12 +65,6 @@ def main(argv: list[str] | None = None) -> int:
             print("Native Conversation tools ready. /new resets dialogue, /exit quits.")
             print(f"BASE prefilled: {chat.base_prefilled}; BASE KV tokens: {chat.base_kv_tokens}")
             print(f"BASE warm response: {chat.base_warm_reply}")
-            if args.require_prefilled_base and not chat.base_prefilled:
-                print(
-                    "ERROR: BASE warm-up did not produce a resident native KV cache.",
-                    file=sys.stderr,
-                )
-                return 2
             while True:
                 try:
                     question = input("You> ").strip()
