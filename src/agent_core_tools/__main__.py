@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--disable-mqtt', action='store_true')
     parser.add_argument('--enable-background-probe', action='store_true',
                         help='Allow ephemeral, explicitly sliced background agent jobs')
+    parser.add_argument('--enable-hardware-probe', action='store_true',
+                        help='Enable IPC event priority diagnostics (not Task SYSTEM)')
     parser.add_argument('--agent-config', type=Path,
                         help='JSON agent pool configuration (experimental)')
     parser.add_argument('--trace-native-json', action='store_true')
@@ -34,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.enable_background_probe and args.agent_config is None:
         parser.error('--enable-background-probe requires --agent-config')
+    if args.enable_hardware_probe and args.agent_config is None:
+        parser.error('--enable-hardware-probe requires --agent-config')
     if args.agent_config is not None and args.model is None:
         parser.error('--agent-config requires --model and --system-file')
     if bool(args.model) != bool(args.system_file):
@@ -60,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     server = CoreServer(
         args.socket, manager=manager,
         background_enabled=args.enable_background_probe,
+        hardware_probe_enabled=args.enable_hardware_probe,
     )
 
     def terminate(_signal, _frame) -> None:

@@ -4,7 +4,10 @@ No Task SYSTEM, legacy scheduler, or agent imports. Tool calls are native.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
+import math
+import time
 import json
 import logging
 import os
@@ -26,6 +29,10 @@ MAX_CLIENTS = 16
 MAX_PENDING = 16
 MAX_BACKGROUND_STEPS = 8
 MAX_BACKGROUND_STEP_CHARS = 2048
+MAX_FINISHED_JOBS = 32
+MAX_HARDWARE_SOURCE_CHARS = 64
+MAX_HARDWARE_TEXT_CHARS = 2048
+MAX_BACKGROUND_RUNTIME = 3600.0
 
 
 @dataclass(eq=False)
@@ -58,6 +65,22 @@ class _BackgroundJob:
     steps: tuple[str, ...]
     index: int = 0
     cancelled: bool = False
+    state: str = "QUEUED"
+    max_runtime_seconds: float = 120.0
+    started_at: float = field(default_factory=time.monotonic)
+    last_result: str = ""
+
+    @property
+    def deadline(self) -> float:
+        return self.started_at + self.max_runtime_seconds
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "id": self.job_id, "agent_id": self.agent_id,
+            "state": self.state, "completed_steps": self.index,
+            "total_steps": len(self.steps), "cancelled": self.cancelled,
+            "last_result": self.last_result,
+        }
 
 
 class CoreServer:
@@ -67,6 +90,7 @@ class CoreServer:
         self, path: Path = DEFAULT_SOCKET, *,
         manager: ManagerRuntime | None = None,
         background_enabled: bool = False,
+        hardware_probe_enabled: bool = False,
     ) -> None:
         self.path = Path(path)
         self._socket_owner = SocketOwner(self.path)
@@ -79,7 +103,9 @@ class CoreServer:
         self._manager = manager
         self._scheduler = PriorityScheduler(max_pending=MAX_PENDING) if manager else None
         self._background_enabled = background_enabled
+        self._hardware_probe_enabled = hardware_probe_enabled
         self._backgrounds: dict[str, _BackgroundJob] = {}
+        self._finished_backgrounds: OrderedDict[str, tuple[_Client, int, dict]] = OrderedDict()
 
     def start(self) -> None:
         with self._close_lock:
@@ -187,10 +213,7 @@ class CoreServer:
                 }
             status = {"ready": True, **self._scheduler.snapshot()}
             status["background_jobs"] = [
-                {"id": job.job_id, "agent_id": job.agent_id,
-                 "completed_steps": job.index, "total_steps": len(job.steps),
-                 "cancelled": job.cancelled}
-                for job in self._backgrounds.values()
+                job.snapshot() for job in self._backgrounds.values()
             ]
             if hasattr(self._manager, "agent_status"):
                 status["agents"] = self._manager.agent_status()
@@ -265,6 +288,34 @@ class CoreServer:
             LOGGER.info("native-scheduler HUMAN FINISH id=%s agent=%s",
                         request_id, agent_id)
 
+    def _finish_background(self, job: _BackgroundJob, state: str, result: str = "") -> None:
+        """Move an active job into a bounded per-session terminal ledger.
+
+        Only called under _lock. Never replay a completed native operation.
+        """
+        job.state = state
+        job.last_result = result[:2048]
+        self._backgrounds.pop(job.job_id, None)
+        self._finished_backgrounds[job.job_id] = (
+            job.client, job.epoch, job.snapshot(),
+        )
+        self._finished_backgrounds.move_to_end(job.job_id)
+        while len(self._finished_backgrounds) > MAX_FINISHED_JOBS:
+            self._finished_backgrounds.popitem(last=False)
+
+    def _background_status(self, client: _Client, job_id: str) -> dict | None:
+        with self._lock:
+            job = self._backgrounds.get(job_id)
+            if job is not None:
+                if job.client is client and job.epoch == client.epoch:
+                    return job.snapshot()
+                return None
+            finished = self._finished_backgrounds.get(job_id)
+            if finished is None:
+                return None
+            owner, epoch, record = finished
+            return dict(record) if owner is client and epoch == client.epoch else None
+
     def _cancel_backgrounds(self, client: _Client, job_id: str | None = None) -> list[str]:
         """Mark work cancelled; model-side context cleanup runs on scheduler."""
         cancelled = []
@@ -274,6 +325,7 @@ class CoreServer:
             if job_id is not None and job.job_id != job_id:
                 continue
             job.cancelled = True
+            job.state = "CANCELLING"
             cancelled.append(job.job_id)
             if self._scheduler is not None and not self._stop.is_set():
                 self._scheduler.submit(
@@ -282,6 +334,16 @@ class CoreServer:
                         self._clear_background_context(agent_id, jid),
                 )
         return cancelled
+
+    def _notify_background_terminal(
+        self, job: _BackgroundJob, *, ok: bool, result: str,
+    ) -> None:
+        self._send_background_event(job, {
+            "type": "background_completed",
+            "background_id": job.job_id, "agent_id": job.agent_id,
+            "completed_steps": job.index, "total": len(job.steps),
+            "ok": ok, "state": job.state, "text": result[:2048],
+        })
 
     def _clear_background_context(self, agent_id: str, job_id: str) -> None:
         try:
@@ -292,7 +354,23 @@ class CoreServer:
             with self._lock:
                 job = self._backgrounds.get(job_id)
                 if job is not None and job.cancelled:
-                    self._backgrounds.pop(job_id, None)
+                    self._finish_background(job, "CANCELLED")
+                    self._notify_background_terminal(
+                        job, ok=False, result="Cancelled before next native call",
+                    )
+
+    def _clear_timed_out_context(self, agent_id: str, job_id: str) -> None:
+        try:
+            self._manager.abort_agent_slices(agent_id)
+        except Exception:
+            LOGGER.exception("Background timeout context reset failed agent=%s", agent_id)
+        finally:
+            with self._lock:
+                job = self._backgrounds.get(job_id)
+                if job is not None:
+                    result = "Deadline reached between native calls"
+                    self._finish_background(job, "TIMED_OUT", result)
+                    self._notify_background_terminal(job, ok=False, result=result)
 
     def _send_background_event(self, job: _BackgroundJob, payload: dict) -> bool:
         """Best-effort IPC: a vanished reader must cancel future model steps.
@@ -322,6 +400,18 @@ class CoreServer:
             position = job.index
             instruction = job.steps[position]
             final = position == len(job.steps) - 1
+            if time.monotonic() >= job.deadline:
+                LOGGER.info("native-background DEADLINE id=%s before step=%d",
+                            job_id, position + 1)
+                job.state = "CANCELLING"
+                job.cancelled = True
+                self._scheduler.submit(
+                    "control",
+                    lambda agent_id=job.agent_id, jid=job.job_id:
+                        self._clear_timed_out_context(agent_id, jid),
+                )
+                return
+            job.state = "RUNNING"
         LOGGER.info("native-background STEP id=%s agent=%s step=%d/%d",
                     job_id, job.agent_id, position + 1, len(job.steps))
         try:
@@ -338,6 +428,7 @@ class CoreServer:
             if job.cancelled or self._stop.is_set():
                 return
             job.index += 1
+            job.last_result = answer
             if not self._send_background_event(job, {
                 "type": "background_progress",
                 "background_id": job_id, "agent_id": job.agent_id,
@@ -345,7 +436,17 @@ class CoreServer:
                 "ok": ok, "text": answer,
             }):
                 return
+            if ok and not final and time.monotonic() >= job.deadline:
+                job.cancelled = True
+                job.state = "CANCELLING"
+                self._scheduler.submit(
+                    "control",
+                    lambda agent_id=job.agent_id, jid=job.job_id:
+                        self._clear_timed_out_context(agent_id, jid),
+                )
+                return
             if ok and not final:
+                job.state = "WAITING"
                 try:
                     self._scheduler.submit(
                         "background", lambda: self._background_step(job_id),
@@ -359,13 +460,8 @@ class CoreServer:
                         "control",
                         lambda: self._manager.abort_agent_slices(job.agent_id),
                     )
-            self._backgrounds.pop(job_id, None)
-            self._send_background_event(job, {
-                "type": "background_completed",
-                "background_id": job_id, "agent_id": job.agent_id,
-                "completed_steps": job.index, "total": len(job.steps),
-                "ok": ok, "text": answer,
-            })
+            self._finish_background(job, "COMPLETED" if ok else "FAILED", answer)
+            self._notify_background_terminal(job, ok=ok, result=answer)
         LOGGER.info("native-background FINISH id=%s completed=%s/%s ok=%s",
                     job_id, job.index, len(job.steps), ok)
 
@@ -383,6 +479,12 @@ class CoreServer:
             raise ValueError("invalid background step")
         for text in steps:
             text.encode("utf-8", "strict")
+        requested_runtime = message.get("max_runtime_seconds", 120.0)
+        if (isinstance(requested_runtime, bool) or
+                not isinstance(requested_runtime, (int, float)) or
+                not math.isfinite(requested_runtime) or
+                not 1.0 <= requested_runtime <= MAX_BACKGROUND_RUNTIME):
+            raise ValueError("max_runtime_seconds must be 1..3600")
         with self._lock:
             if self._human is not client:
                 client.send({"type": "busy",
@@ -396,7 +498,8 @@ class CoreServer:
                 return
             job_id = uuid.uuid4().hex
             job = _BackgroundJob(job_id, client, client.epoch, agent_id,
-                                 tuple(t.strip() for t in steps))
+                                 tuple(t.strip() for t in steps),
+                                 max_runtime_seconds=float(requested_runtime))
             try:
                 self._scheduler.submit(
                     "background", lambda: self._background_step(job_id),
@@ -408,6 +511,83 @@ class CoreServer:
             client.send({
                 "type": "background_accepted", "background_id": job_id,
                 "agent_id": agent_id, "total": len(steps),
+            })
+
+    def _hardware_probe_worker(
+        self, client: _Client, epoch: int, event_id: str,
+        source: str, name: str, agent_id: str, task: str,
+    ) -> None:
+        """Diagnostic ONLY: one agent turn, never a Task SYSTEM RUN."""
+        if not self._client_still_active(client, epoch):
+            return
+        LOGGER.info("native-hardware START id=%s source=%s name=%s agent=%s",
+                    event_id, source, name, agent_id)
+        try:
+            from orchestration_tools.agents import AgentState
+            outcome = self._manager.run_agent(agent_id, task)
+            ok = outcome.state is AgentState.FREE
+            result = outcome.text[:2048]
+        except Exception as exc:
+            LOGGER.exception("native-hardware ERROR id=%s", event_id)
+            ok, result = False, str(exc)[:2048]
+        LOGGER.info("native-hardware FINISH id=%s ok=%s", event_id, ok)
+        with self._lock:
+            if not self._client_still_active(client, epoch):
+                return
+            try:
+                client.send({
+                    "type": "hardware_completed", "event_id": event_id,
+                    "source": source, "name": name, "agent_id": agent_id,
+                    "ok": ok, "text": result,
+                })
+            except OSError:
+                LOGGER.info("native-hardware CLIENT-GONE id=%s", event_id)
+
+    def _submit_hardware_probe(self, client: _Client, message: dict[str, Any]) -> None:
+        if not self._hardware_probe_enabled or self._manager is None:
+            client.send({"type": "error", "error": "hardware probe disabled"})
+            return
+        if set(message) != {"type", "source", "name", "agent", "text"}:
+            raise ValueError("hardware_probe accepts only source, name, agent and text")
+        source, name = message.get("source"), message.get("name")
+        agent_id, task = message.get("agent"), message.get("text")
+        if not isinstance(source, str) or not 0 < len(source.strip()) <= MAX_HARDWARE_SOURCE_CHARS:
+            raise ValueError("hardware_probe requires a short source")
+        if not isinstance(name, str) or not 0 < len(name.strip()) <= MAX_HARDWARE_SOURCE_CHARS:
+            raise ValueError("hardware_probe requires a short name")
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("hardware_probe requires agent")
+        if not isinstance(task, str) or not 0 < len(task.strip()) <= MAX_HARDWARE_TEXT_CHARS:
+            raise ValueError("hardware_probe requires short text")
+        for value in (source, name, agent_id, task):
+            value.encode("utf-8", "strict")
+        with self._lock:
+            if self._human is not client:
+                client.send({
+                    "type": "busy",
+                    "owner": self._human.name if self._human else None,
+                })
+                return
+            if not any(a["agent_id"] == agent_id for a in self._manager.agent_status()):
+                raise ValueError(f"agent is not configured: {agent_id}")
+            if any(job.agent_id == agent_id for job in self._backgrounds.values()):
+                client.send({"type": "error", "error": "hardware probe agent has a background job"})
+                return
+            event_id, epoch = uuid.uuid4().hex, client.epoch
+            try:
+                self._scheduler.submit(
+                    "hardware", lambda: self._hardware_probe_worker(
+                        client, epoch, event_id,
+                        source.strip().lower(), name.strip(), agent_id, task.strip(),
+                    ),
+                )
+            except (QueueFullError, RuntimeError) as exc:
+                client.send({"type": "error", "error": str(exc)})
+                return
+            client.send({
+                "type": "hardware_accepted", "event_id": event_id,
+                "source": source.strip().lower(), "name": name.strip(),
+                "agent_id": agent_id,
             })
 
     def _handle_message(self, client: _Client, message: dict[str, Any]) -> None:
@@ -464,6 +644,21 @@ class CoreServer:
                     self._cancel_backgrounds(client)
                     self._schedule_release(client.session_id)
             client.send({"type": "released"})
+            return
+        if message_type == "hardware_probe":
+            self._submit_hardware_probe(client, message)
+            return
+        if message_type == "background_status":
+            job_id = message.get("background_id")
+            if not isinstance(job_id, str) or not job_id.strip():
+                raise ValueError("background_status requires background_id")
+            with self._lock:
+                if self._human is not client:
+                    client.send({"type": "busy",
+                                 "owner": self._human.name if self._human else None})
+                    return
+                result = self._background_status(client, job_id)
+            client.send({"type": "background_status", "job": result})
             return
         if message_type == "background_task":
             self._submit_background(client, message)
