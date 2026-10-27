@@ -27,7 +27,11 @@ def _last_prefill_tokens(conversation: Any) -> int | None:
     reader = getattr(conversation, "get_benchmark_info", None)
     if not callable(reader):
         return None
-    info = reader()
+    try:
+        info = reader()
+    except Exception:
+        LOGGER.debug("Native benchmark info is unavailable", exc_info=True)
+        return None
     value = getattr(info, "last_prefill_token_count", None)
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
