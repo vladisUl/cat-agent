@@ -20,6 +20,7 @@ from typing import Callable
 
 LOGGER = logging.getLogger(__name__)
 MAX_COMMAND_CHARS = 4096
+DEFAULT_SHELL_CWD = Path("/opt/model")
 
 
 @dataclass(frozen=True)

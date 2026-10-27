@@ -23,6 +23,13 @@ The native function is `shell(command: str) -> dict` and is registered in
 `Conversation(tools=...)` alongside MQTT. LiteRT-LM 0.18.0 constructs
 a tool schema from the Python signature and invokes it automatically.
 
+By default, each shell command starts in `/opt/model`, independent of the
+directory from which the Python launcher was started. `--shell-cwd PATH`
+explicitly overrides this default. The directory must exist when shell is
+enabled. Each shell invocation creates a new Bash process, so `cd` does not
+persist into the next invocation. This sets the initial working directory,
+not the OS `HOME` environment variable.
+
 ```sh
 cd /opt/cat-agent
 PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
@@ -30,7 +37,6 @@ PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
   --model /storage/models/litert/gemma-4-E4B-it.litertlm \
   --system-file /opt/prompt/sys_prompt_manager.md \
   --enable-shell \
-  --shell-cwd /opt/cat-agent \
   --shell-timeout 15 \
   --shell-max-output 16384
 ```
@@ -151,7 +157,7 @@ PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
   -m litert_agent_tools \
   --model /storage/models/litert/gemma-4-E4B-it.litertlm \
   --system-file /opt/prompt/sys_prompt_manager.md \
-  --enable-shell --shell-cwd /opt/cat-agent --trace-native-json
+  --enable-shell --trace-native-json
 ```
 
 ## Diagnosing a blank reply after a native tool call

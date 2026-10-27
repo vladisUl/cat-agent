@@ -10,7 +10,7 @@ import sys
 from .config import MqttConfig
 from .conversation import NativeConversationChat
 from .mqtt_tools import create_mqtt_tools
-from .shell_tools import ShellConfig, ShellGate, create_shell_tool
+from .shell_tools import DEFAULT_SHELL_CWD, ShellConfig, ShellGate, create_shell_tool
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,8 +28,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Trace all native message roles; dump failed JSON (may contain private data)")
     parser.add_argument("--enable-shell", action="store_true",
                         help="Enable native shell(command) execution as the current OS user")
-    parser.add_argument("--shell-cwd", type=Path, default=None,
-                        help="Shell working directory (default: current directory; NOT a sandbox)")
+    parser.add_argument("--shell-cwd", type=Path, default=DEFAULT_SHELL_CWD,
+                        help="Shell working directory (default: /opt/model; NOT a sandbox)")
     parser.add_argument("--shell-timeout", type=float, default=15.0,
                         help="Shell command timeout in seconds (max 120)")
     parser.add_argument("--shell-max-output", type=int, default=16384,
@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.enable_shell:
         try:
             shell_config = ShellConfig(
-                workdir=args.shell_cwd or Path.cwd(),
+                workdir=args.shell_cwd,
                 timeout_seconds=args.shell_timeout,
                 max_output_bytes=args.shell_max_output,
             )

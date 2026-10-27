@@ -9,7 +9,7 @@ import time
 import unittest
 
 from litert_agent_tools.shell_tools import (
-    MAX_COMMAND_CHARS, ShellConfig, ShellGate, create_shell_tool,
+    DEFAULT_SHELL_CWD, MAX_COMMAND_CHARS, ShellConfig, ShellGate, create_shell_tool,
 )
 
 
@@ -33,6 +33,9 @@ class ShellToolTests(unittest.TestCase):
         self.assertIn("Args:", inspect.getdoc(shell))
         result = shell("printf 'a\\nb\\n' | tail -n 1")
         self.assertEqual(result, {"ok": True, "exit_code": 0, "output": "b\n"})
+
+    def test_default_shell_directory(self):
+        self.assertEqual(DEFAULT_SHELL_CWD, Path("/opt/model"))
 
     def test_runs_from_configured_directory(self):
         result = self._tool()("pwd")
