@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import inspect
 import logging
 import time
 from typing import Any
@@ -55,10 +54,9 @@ def response_text(response: Any) -> str:
 class NativeConversationChat:
     """One template/base Conversation and one disposable working clone.
 
-    The stock LiteRT-LM 0.18.x Python/C ABI lacks the C++ prefill-preface
-    switch. When a patched engine exposes the opt-in
-    prefill_preface_on_init parameter, create and measure a real warmed BASE.
-    Otherwise keep the existing (cold) clone behavior and report it honestly.
+    One-time warm turn fills native KV using the stock Conversation API.
+    Then the immutable BASE is cloned for real dialogues and /new resets.
+    The BASE contains the single service exchange warm -> model reply.
     """
 
     def __init__(
@@ -70,15 +68,19 @@ class NativeConversationChat:
         sampler_config: Any = None,
         max_output_tokens: int | None = None,
         thinking_config: Any = None,
+        warm_message: str = "warm",
     ):
         if not system_prompt.strip():
             raise ValueError("The temporary system prompt must not be empty")
+        if not warm_message.strip():
+            raise ValueError("The warm message must not be empty")
         self._engine = engine
         self._base = None
         self._working = None
         self._closed = False
         self._base_kv_tokens: int | None = None
         self._base_prefilled = False
+        self._base_warm_reply: str | None = None
         kwargs: dict[str, Any] = {
             "messages": [{"role": "system", "content": system_prompt}],
             "tools": list(tools),
@@ -91,32 +93,38 @@ class NativeConversationChat:
         if thinking_config is not None:
             kwargs["thinking_config"] = thinking_config
 
-        # Only the locally patched 0.18.x engine exposes this switch.
-        # Do not guess a ctypes symbol that the stock C ABI does not have.
-        supports_prefill = (
-            "prefill_preface_on_init"
-            in inspect.signature(engine.create_conversation).parameters
-        )
-        if supports_prefill:
-            kwargs["prefill_preface_on_init"] = True
-
         try:
             started = time.monotonic()
             self._base = engine.create_conversation(**kwargs)
+            initial_kv = _kv_tokens(self._base)
+
+            # First real inference populates the system + tools preface KV.
+            # Unlike a manually rendered prefill, the stock 0.18.x API
+            # necessarily retains this user/assistant exchange in BASE.
+            response = self._base.send_message(warm_message)
+            self._base_warm_reply = response_text(response)
+            if not self._base_warm_reply.strip():
+                raise RuntimeError("BASE warm message returned an empty assistant reply")
+
             self._base_kv_tokens = _kv_tokens(self._base)
-            self._base_prefilled = bool(
-                supports_prefill and self._base_kv_tokens is not None
-                and self._base_kv_tokens > 0
-            )
-            if supports_prefill and not self._base_prefilled:
+            if self._base_kv_tokens is None or self._base_kv_tokens <= 0:
                 raise RuntimeError(
-                    "prefill_preface_on_init was requested, but BASE has no resident KV; "
-                    "refusing to report a warmed BASE"
+                    "BASE warm response completed but native KV token_count "
+                    "is missing or empty; refusing to clone a cold BASE"
                 )
+            if initial_kv is not None and self._base_kv_tokens <= initial_kv:
+                raise RuntimeError(
+                    "BASE warm response did not increase native KV token_count"
+                )
+            self._base_prefilled = True
             LOGGER.info(
-                "native-conversation BASE prefill_supported=%s kv_tokens=%s elapsed=%.3fs",
-                supports_prefill, self._base_kv_tokens, time.monotonic() - started,
+                "native-conversation BASE-WARM message=%r response=%r "
+                "kv_before=%s kv_after=%d elapsed=%.3fs",
+                warm_message, self._base_warm_reply, initial_kv,
+                self._base_kv_tokens, time.monotonic() - started,
             )
+
+            # The BASE is immutable from this point forward.
             self._working = self._clone_base()
         except BaseException:
             self.close()
@@ -130,12 +138,16 @@ class NativeConversationChat:
     def base_kv_tokens(self) -> int | None:
         return self._base_kv_tokens
 
+    @property
+    def base_warm_reply(self) -> str | None:
+        return self._base_warm_reply
+
     def _clone_base(self):
         assert self._base is not None
         fresh = clone_conversation(self._base)
         kv = _kv_tokens(fresh)
         LOGGER.info("native-conversation BASE-CLONE kv_tokens=%s expected=%s", kv, self._base_kv_tokens)
-        if self._base_prefilled and kv != self._base_kv_tokens:
+        if kv != self._base_kv_tokens:
             fresh.close()
             raise RuntimeError(
                 f"Cloned KV length {kv} does not match warmed BASE {self._base_kv_tokens}"
@@ -160,7 +172,7 @@ class NativeConversationChat:
         return response_text(result)
 
     def new_dialogue(self) -> None:
-        """Drop previous question, answers and tool results together with their KV."""
+        """Drop user dialogue; preserve the already-prefilled warm exchange."""
         if self._closed or self._base is None:
             raise RuntimeError("Conversation is closed")
         fresh = self._clone_base()  # Do not destroy the current session on failure.

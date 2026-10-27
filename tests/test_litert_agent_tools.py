@@ -107,16 +107,21 @@ class StubConversation:
         self.tools = tools
         self.closed = False
         self.calls = []
+        self.token_count = 0
 
     def clone(self):
         clone = StubConversation(self.messages, self.tools)
         clone.calls = list(self.calls)
+        clone.token_count = self.token_count
         return clone
 
     def send_message(self, question):
         self.calls.append(question)
+        self.token_count += len(question) + 8
         self.messages.append({"role": "user", "content": question})
-        return {"role": "assistant", "content": [{"type": "text", "text": f"answer: {question}"}]}
+        text = f"answer: {question}"
+        self.messages.append({"role": "assistant", "content": text})
+        return {"role": "assistant", "content": [{"type": "text", "text": text}]}
 
     def close(self):
         self.closed = True
@@ -166,40 +171,78 @@ class ConversationTests(unittest.TestCase):
         with NativeConversationChat(engine, "TEMP PROMPT", ["tool"]) as chat:
             self.assertTrue(engine.options["automatic_tool_calling"])
             self.assertEqual(engine.base.messages[0]["content"], "TEMP PROMPT")
-            self.assertFalse(chat.base_prefilled)
+            self.assertTrue(chat.base_prefilled)
+            self.assertEqual(engine.base.calls, ["warm"])
+            self.assertEqual(chat.base_warm_reply, "answer: warm")
+            self.assertGreater(chat.base_kv_tokens, 0)
+            self.assertEqual(chat._working.token_count, chat.base_kv_tokens)
             self.assertEqual(chat.ask("first"), "answer: first")
             first = chat._working
             self.assertEqual(chat.ask("second"), "answer: second")
             chat.new_dialogue()
             self.assertTrue(first.closed)
-            self.assertEqual(chat._working.calls, [])
+            self.assertEqual(chat._working.calls, ["warm"])
+            self.assertEqual(chat._working.token_count, chat.base_kv_tokens)
             self.assertEqual(chat.ask("third"), "answer: third")
-            self.assertEqual(engine.base.calls, [])
+            self.assertEqual(engine.base.calls, ["warm"])
         self.assertTrue(engine.base.closed)
 
-    def test_opt_in_native_prefill_measured_and_inherited_by_clone(self):
-        engine = WarmStubEngine(tokens=275)
+    def test_stock_litert_warm_turn_and_kv_inheritance(self):
+        engine = WarmStubEngine(tokens=0)
         with self.assertLogs("litert_agent_tools.conversation", level="INFO") as events:
-            with NativeConversationChat(engine, "TEMP PROMPT", ["tool"]) as chat:
-                self.assertTrue(engine.prefill_requested)
+            with NativeConversationChat(engine, "TEMP PROMPT", ["tool"], warm_message="warm") as chat:
+                self.assertFalse(engine.prefill_requested)
                 self.assertTrue(chat.base_prefilled)
-                self.assertEqual(chat.base_kv_tokens, 275)
-                self.assertEqual(chat._working.token_count, 275)
+                self.assertEqual(engine.base.calls, ["warm"])
+                self.assertEqual(chat.base_warm_reply, "answer: warm")
+                warm_tokens = chat.base_kv_tokens
+                self.assertEqual(warm_tokens, 12)
+                self.assertEqual(chat._working.token_count, warm_tokens)
                 self.assertEqual(chat.ask("test"), "answer: test")
                 chat.new_dialogue()
-                self.assertEqual(chat._working.token_count, 275)
+                self.assertEqual(chat._working.token_count, warm_tokens)
+                self.assertEqual(engine.base.calls, ["warm"])
         logs = "\n".join(events.output)
-        self.assertIn("prefill_supported=True kv_tokens=275", logs)
-        self.assertIn("BASE-CLONE kv_tokens=275 expected=275", logs)
+        self.assertIn("BASE-WARM message='warm' response='answer: warm'", logs)
+        self.assertIn("kv_before=0 kv_after=12", logs)
+        self.assertIn("BASE-CLONE kv_tokens=12 expected=12", logs)
         self.assertIn("last_prefill_tokens=7", logs)
 
-    def test_prefill_request_rejects_empty_native_kv(self):
+    def test_warm_rejects_missing_native_kv(self):
         engine = WarmStubEngine(tokens=0)
-        with self.assertRaisesRegex(RuntimeError, "no resident KV"):
-            NativeConversationChat(engine, "TEMP PROMPT", [])
+        with patch.object(WarmStubConversation, "send_message",
+                          return_value={"role": "assistant", "content": "OK"}):
+            with self.assertRaisesRegex(RuntimeError, "missing or empty"):
+                NativeConversationChat(engine, "TEMP PROMPT", [])
         self.assertTrue(engine.base.closed)
 
-    def test_prefill_request_rejects_clone_with_missing_kv(self):
+    def test_warm_rejects_kv_that_does_not_increase(self):
+        engine = WarmStubEngine(tokens=275)
+        with patch.object(WarmStubConversation, "send_message",
+                          return_value={"role": "assistant", "content": "OK"}):
+            with self.assertRaisesRegex(RuntimeError, "did not increase"):
+                NativeConversationChat(engine, "TEMP PROMPT", [])
+        self.assertTrue(engine.base.closed)
+
+    def test_warm_rejects_empty_reply(self):
+        engine = WarmStubEngine(tokens=0)
+        with patch.object(WarmStubConversation, "send_message",
+                          return_value={"role": "assistant", "content": " "}):
+            with self.assertRaisesRegex(RuntimeError, "empty assistant reply"):
+                NativeConversationChat(engine, "TEMP PROMPT", [])
+        self.assertTrue(engine.base.closed)
+
+    def test_warm_exception_does_not_clone_and_closes_base(self):
+        engine = WarmStubEngine(tokens=0)
+        with patch.object(WarmStubConversation, "send_message",
+                          side_effect=RuntimeError("native failure")):
+            with patch("litert_agent_tools.conversation.clone_conversation") as cloned:
+                with self.assertRaisesRegex(RuntimeError, "native failure"):
+                    NativeConversationChat(engine, "TEMP PROMPT", [])
+        cloned.assert_not_called()
+        self.assertTrue(engine.base.closed)
+
+    def test_warm_rejects_clone_with_missing_kv(self):
         engine = WarmStubEngine(tokens=275)
         with patch("litert_agent_tools.conversation.clone_conversation",
                    return_value=WarmStubConversation([], [], tokens=0)) as cloned:
@@ -207,6 +250,13 @@ class ConversationTests(unittest.TestCase):
                 NativeConversationChat(engine, "TEMP PROMPT", [])
         self.assertEqual(cloned.call_count, 1)
         self.assertTrue(engine.base.closed)
+
+    def test_warm_message_can_be_custom_without_an_ok_reply_requirement(self):
+        engine = StubEngine()
+        with NativeConversationChat(engine, "TEMP PROMPT", [], warm_message="startup") as chat:
+            self.assertEqual(engine.base.calls, ["startup"])
+            self.assertEqual(chat.base_warm_reply, "answer: startup")
+            self.assertTrue(chat.base_prefilled)
 
     def test_reset_clone_error_does_not_destroy_active_dialogue(self):
         engine = StubEngine()
@@ -222,6 +272,8 @@ class ConversationTests(unittest.TestCase):
         engine = StubEngine()
         with self.assertRaises(ValueError):
             NativeConversationChat(engine, " ", [])
+        with self.assertRaises(ValueError):
+            NativeConversationChat(engine, "temp", [], warm_message=" ")
         with NativeConversationChat(engine, "temp", []) as chat:
             with self.assertRaises(ValueError):
                 chat.ask(" ")

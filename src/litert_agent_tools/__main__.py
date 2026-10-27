@@ -23,6 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--warm-message", default="warm", help="One-time BASE warm-up user message")
     parser.add_argument(
         "--require-prefilled-base", action="store_true",
         help="Fail when the current native library lacks the prefilled Conversation API",
@@ -64,13 +65,14 @@ def main(argv: list[str] | None = None) -> int:
             sampler_config=sampler,
             max_output_tokens=args.max_output_tokens,
             thinking_config=litert_lm.ThinkingConfig(enable_thinking=False),
+            warm_message=args.warm_message,
         ) as chat:
             print("Native Conversation tools ready. /new resets dialogue, /exit quits.")
             print(f"BASE prefilled: {chat.base_prefilled}; BASE KV tokens: {chat.base_kv_tokens}")
+            print(f"BASE warm response: {chat.base_warm_reply}")
             if args.require_prefilled_base and not chat.base_prefilled:
                 print(
-                    "ERROR: This LiteRT-LM library cannot prefill a Conversation BASE. "
-                    "See src/litert_agent_tools/native_patch/README.md",
+                    "ERROR: BASE warm-up did not produce a resident native KV cache.",
                     file=sys.stderr,
                 )
                 return 2
