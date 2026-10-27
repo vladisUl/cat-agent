@@ -8,12 +8,55 @@ client, MCP, /work#, and TASK SYSTEM. None of their code or prompts is modified.
 - Four native zero-argument Python tools registered in Conversation(tools=...):
   outdoor temperature/humidity, home temperature/humidity, aquarium temperature
   and freezer temperature. Topics are the existing entries in prompts/mqtt.md.
-- Tools are read-only; each invocation runs mosquitto_sub for one MQTT JSON
-  message. Errors are returned as JSON objects with ok=false.
-- The temporary system prompt is supplied by the operator via --system-file.
-  It contains no shell or /work# tool instructions.
+- MQTT tools are read-only; each invokes mosquitto_sub once. They return JSON
+  with ok=false on errors.
+- Optional native shell(command: str) is available with --enable-shell. It
+  executes Bash with the current OS user's full permissions; shell is disabled
+  by default. There is no /work# intermediary.
+- The system prompt is supplied by the operator via --system-file.
 - One BASE Conversation plus a disposable working clone. /new closes the old
   conversation and clones BASE, so its history and KV are independent.
+
+## Native shell tool (explicit opt-in)
+
+The native function is `shell(command: str) -> dict` and is registered in
+`Conversation(tools=...)` alongside MQTT. LiteRT-LM 0.18.0 constructs
+a tool schema from the Python signature and invokes it automatically.
+
+```sh
+cd /opt/cat-agent
+PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
+  -m litert_agent_tools \
+  --model /storage/models/litert/gemma-4-E4B-it.litertlm \
+  --system-file /opt/prompt/sys_prompt_manager.md \
+  --enable-shell \
+  --shell-cwd /opt/cat-agent \
+  --shell-timeout 15 \
+  --shell-max-output 16384
+```
+
+A suggested first user test: "Вызови shell и выполни pwd, сообщи результат."
+The console must contain `native-tool CALL name=shell` and
+`native-tool RESULT name=shell`; text from Gemma without those logs
+is NOT proof of tool execution.
+
+Return values: `ok`, `exit_code` (null on timeout/output overrun),
+`output` (merged stdout/stderr) and `error` when unsuccessful. The process
+is killed (including normally inherited children in its process group) on
+timeout or output overflow. The defaults are 15 seconds and 16 KiB, with
+respective maximum values 120 seconds and 64 KiB. Commands over 4096 chars,
+empty commands and embedded NUL bytes are rejected.
+
+**Security:** Enabling shell gives the model arbitrary Bash execution with
+the effective permissions of the Python process. `--shell-cwd` only sets the
+initial directory; it is **not a filesystem jail or access restriction**.
+For production run under a dedicated low-privilege OS user/container and
+consider an allow/approve policy for mutating commands. Never enable shell
+in an exposed service without additional isolation and access control.
+
+The `shell` callback is registered during BASE construction, but remains
+**disabled during the one-time warm message**. It becomes available only
+after a successful BASE warm and initial clone. On /new it remains available.
 
 ## One-time warm-up BASE (stock LiteRT-LM 0.18.x)
 
@@ -59,7 +102,7 @@ while retaining the service warm/response exchange. /exit closes everything.
 
   cd /opt/cat-agent
   PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
-      -m unittest discover -s tests -p 'test_litert_agent_tools.py' -v
+      -m unittest discover -s tests -p 'test_litert_agent_tools*.py' -v
 
 End-to-end native cloning, actual MQTT and KV prefill performance require a
 real installed LiteRT-LM library, model and MQTT broker.

@@ -10,6 +10,7 @@ import sys
 from .config import MqttConfig
 from .conversation import NativeConversationChat
 from .mqtt_tools import create_mqtt_tools
+from .shell_tools import ShellConfig, ShellGate, create_shell_tool
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -23,6 +24,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--warm-message", default="warm", help="One-time BASE warm-up user message")
+    parser.add_argument("--enable-shell", action="store_true",
+                        help="Enable native shell(command) execution as the current OS user")
+    parser.add_argument("--shell-cwd", type=Path, default=None,
+                        help="Shell working directory (default: current directory; NOT a sandbox)")
+    parser.add_argument("--shell-timeout", type=float, default=15.0,
+                        help="Shell command timeout in seconds (max 120)")
+    parser.add_argument("--shell-max-output", type=int, default=16384,
+                        help="Maximum combined shell output in bytes (max 65536)")
     args = parser.parse_args(argv)
     if args.max_context_tokens < 2 or args.max_output_tokens < 1:
         parser.error("Token limits must be positive")
@@ -36,6 +45,19 @@ def main(argv: list[str] | None = None) -> int:
     if not prompt.strip():
         parser.error("System prompt is empty")
 
+    shell_gate = None
+    native_tools = create_mqtt_tools(MqttConfig.from_env())
+    if args.enable_shell:
+        try:
+            shell_config = ShellConfig(
+                workdir=args.shell_cwd or Path.cwd(),
+                timeout_seconds=args.shell_timeout,
+                max_output_bytes=args.shell_max_output,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        shell_gate = ShellGate()
+        native_tools.append(create_shell_tool(shell_config, gate=shell_gate))
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
     try:
         import litert_lm
@@ -56,13 +78,16 @@ def main(argv: list[str] | None = None) -> int:
             temperature=args.temperature, top_p=args.top_p, seed=0,
         )
         with NativeConversationChat(
-            engine, prompt, create_mqtt_tools(MqttConfig.from_env()),
+            engine, prompt, native_tools,
             sampler_config=sampler,
             max_output_tokens=args.max_output_tokens,
             thinking_config=litert_lm.ThinkingConfig(enable_thinking=False),
             warm_message=args.warm_message,
         ) as chat:
+            if shell_gate is not None:
+                shell_gate.enabled = True
             print("Native Conversation tools ready. /new resets dialogue, /exit quits.")
+            print("Shell tool: ENABLED (full user permissions)" if shell_gate else "Shell tool: disabled")
             print(f"BASE prefilled: {chat.base_prefilled}; BASE KV tokens: {chat.base_kv_tokens}")
             print(f"BASE warm response: {chat.base_warm_reply}")
             while True:
