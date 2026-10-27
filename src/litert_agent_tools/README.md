@@ -55,3 +55,15 @@ tool-result history by closing the working clone. /exit closes everything.
 
 End-to-end native cloning, actual MQTT and KV prefill performance require a
 real installed LiteRT-LM library, model and MQTT broker.
+
+## Diagnosing real native tool calls
+
+At the default INFO log level, native tool invocation is logged on both sides
+of the subprocess execution:
+
+    INFO:litert_agent_tools.mqtt_tools:native-tool CALL name=get_home_climate topic=zigbee2mqtt/temp_tua
+    INFO:litert_agent_tools.mqtt_tools:native-tool RESULT name=get_home_climate result={"ok": true, "temperature_c": 24.66, "humidity_percent": 26.24}
+
+This is an example only; real numbers must be obtained from the broker.
+Clone events are also logged as native-conversation CLONE. If Gemma supplies
+a number but no CALL log appears, it did NOT invoke this Python MQTT tool.

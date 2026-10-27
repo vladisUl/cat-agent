@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import subprocess
 from typing import Callable
 
 from .config import MqttConfig
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 TOPICS = {
@@ -60,6 +64,15 @@ def _read_measurement(config: MqttConfig, topic: str, fields: tuple[str, ...]) -
         return {"ok": False, "error": f"Invalid MQTT payload: {exc}"}
 
 
+
+def _invoke_tool(name: str, config: MqttConfig, topic: str, fields: tuple[str, ...]) -> dict:
+    """Log actual invocation and measured result, not the model's text."""
+    LOGGER.info("native-tool CALL name=%s topic=%s", name, topic)
+    result = _read_measurement(config, topic, fields)
+    LOGGER.info("native-tool RESULT name=%s result=%s", name, json.dumps(result, ensure_ascii=False))
+    return result
+
+
 def create_mqtt_tools(config: MqttConfig | None = None) -> list[Callable[[], dict]]:
     """Return four zero-argument functions with stable names and model-facing docstrings."""
     settings = config if config is not None else MqttConfig.from_env()
@@ -67,22 +80,22 @@ def create_mqtt_tools(config: MqttConfig | None = None) -> list[Callable[[], dic
     def get_outdoor_weather() -> dict:
         """Получить текущие температуру на улице (°C) и влажность воздуха (%)."""
         topic, fields = TOPICS["outdoor"]
-        return _read_measurement(settings, topic, fields)
+        return _invoke_tool("get_outdoor_weather", settings, topic, fields)
 
     def get_home_climate() -> dict:
         """Получить текущие температуру дома (°C) и влажность воздуха (%)."""
         topic, fields = TOPICS["home"]
-        return _read_measurement(settings, topic, fields)
+        return _invoke_tool("get_home_climate", settings, topic, fields)
 
     def get_aquarium_temperature() -> dict:
         """Получить текущую температуру воды в аквариуме (°C)."""
         topic, fields = TOPICS["aquarium"]
-        return _read_measurement(settings, topic, fields)
+        return _invoke_tool("get_aquarium_temperature", settings, topic, fields)
 
     def get_freezer_temperature() -> dict:
         """Получить текущую температуру в морозильнике (°C)."""
         topic, fields = TOPICS["freezer"]
-        return _read_measurement(settings, topic, fields)
+        return _invoke_tool("get_freezer_temperature", settings, topic, fields)
 
     return [
         get_outdoor_weather, get_home_climate,

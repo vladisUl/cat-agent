@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import ctypes
 from importlib import metadata
+import logging
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ConversationCloneError(RuntimeError):
@@ -20,7 +24,9 @@ def clone_conversation(source):
     """Clone the native KV state, history, tool configuration and Python callbacks."""
     native = getattr(source, "clone", None)
     if callable(native):
-        return native()
+        result = native()
+        LOGGER.info("native-conversation CLONE mode=python success")
+        return result
 
     try:
         version = metadata.version("litert-lm")
@@ -51,7 +57,7 @@ def clone_conversation(source):
     try:
         from litert_lm.conversation import Conversation
 
-        return Conversation(
+        result = Conversation(
             lib, cloned_ptr,
             engine=source._engine,
             messages=list(source.messages),
@@ -67,6 +73,8 @@ def clone_conversation(source):
             chat_template=source.chat_template,
             constrained_decoding_config=source.constrained_decoding_config,
         )
+        LOGGER.info("native-conversation CLONE mode=ctypes version=%s success", version)
+        return result
     except BaseException:
         lib.litert_lm_conversation_delete(cloned_ptr)
         raise

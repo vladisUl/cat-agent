@@ -65,6 +65,18 @@ class MqttToolTests(unittest.TestCase):
             ):
                 self.assertFalse(self.tools[0]()["ok"])
 
+    def test_logs_real_tool_call_and_mqtt_result(self):
+        with patch(
+            "litert_agent_tools.mqtt_tools.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, '{"temperature":24.66,"humidity":26.24}', ""),
+        ), self.assertLogs("litert_agent_tools.mqtt_tools", level="INFO") as captured:
+            result = self.tools[1]()
+        self.assertTrue(result["ok"])
+        self.assertIn("native-tool CALL name=get_home_climate topic=zigbee2mqtt/temp_tua", captured.output[0])
+        self.assertIn("native-tool RESULT name=get_home_climate", captured.output[1])
+        self.assertIn("24.66", captured.output[1])
+        self.assertIn("26.24", captured.output[1])
+
     def test_missing_mqtt_binary_and_timeout(self):
         for error in (FileNotFoundError(), subprocess.TimeoutExpired(["mosquitto_sub"], 3)):
             with patch("litert_agent_tools.mqtt_tools.subprocess.run", side_effect=error):
