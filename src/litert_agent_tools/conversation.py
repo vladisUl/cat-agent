@@ -14,6 +14,27 @@ from .native_json_trace import attach_native_json_trace
 LOGGER = logging.getLogger(__name__)
 
 
+class InvalidUserTextError(ValueError):
+    """Reject terminal-corrupted Unicode before entering the native runtime."""
+
+
+def _validate_user_text(text: str) -> None:
+    """Prevent lone UTF-16 surrogate escapes from reaching LiteRT's JSON parser."""
+    try:
+        text.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as exc:
+        codepoint = ord(text[exc.start])
+        LOGGER.warning(
+            "native-conversation REJECT-INPUT invalid_unicode=U+%04X offset=%d; "
+            "resident KV was not touched",
+            codepoint, exc.start,
+        )
+        raise InvalidUserTextError(
+            f"Invalid Unicode U+{codepoint:04X} at character {exc.start}; "
+            "re-enter the request (terminal UTF-8 input was corrupted)."
+        ) from exc
+
+
 def _kv_tokens(conversation: Any) -> int | None:
     """Native Conversation.token_count is the actual resident KV length."""
     value = getattr(conversation, "token_count", None)
@@ -167,6 +188,7 @@ class NativeConversationChat:
             raise RuntimeError("Conversation is closed")
         if not question.strip():
             raise ValueError("Question must not be empty")
+        _validate_user_text(question)
         before = _kv_tokens(self._working)
         started = time.monotonic()
         result = self._working.send_message(question)

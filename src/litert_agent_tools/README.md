@@ -170,3 +170,15 @@ count, and response fields. If the native final response is empty, the
 4096 bytes); the CLI then also writes `native-conversation EMPTY-REPLY`.
 This distinguishes a native empty generation from a response-text extraction
 problem. Instrumentation does not change the tool loop or send extra prompts.
+
+## Invalid terminal UTF-8 input
+
+Some terminal setups can pass an incomplete UTF-8 byte (such as `0xD1`)
+into Python via `surrogateescape`. `json.dumps` emits it as a lone
+surrogate (e.g. `\\udcd1`): Python accepts the JSON, but LiteRT's
+C++ JSON parser rejects the message before inference.
+
+The standalone chat now rejects these user inputs **before** calling
+LiteRT-LM, prints `INPUT ERROR` with the offending Unicode codepoint,
+and keeps the working Conversation/KV intact. Retype or paste the request;
+text is never silently repaired before an authorized shell command.

@@ -15,7 +15,9 @@ from unittest.mock import patch
 
 from litert_agent_tools.clone import ConversationCloneError, clone_conversation
 from litert_agent_tools.config import MqttConfig
-from litert_agent_tools.conversation import NativeConversationChat, response_text
+from litert_agent_tools.conversation import (
+    InvalidUserTextError, NativeConversationChat, response_text,
+)
 from litert_agent_tools.mqtt_tools import TOPICS, create_mqtt_tools
 from litert_agent_tools.native_patch.enable_prefill import CHANGES, change_source
 
@@ -267,6 +269,27 @@ class ConversationTests(unittest.TestCase):
                     chat.new_dialogue()
             self.assertIs(chat._working, current)
             self.assertFalse(current.closed)
+
+    def test_invalid_unicode_is_rejected_before_native_call_without_reset(self):
+        engine = StubEngine()
+        with NativeConversationChat(engine, "TEMP PROMPT", []) as chat:
+            resident = chat._working
+            tokens = resident.token_count
+            calls = list(resident.calls)
+            for question in (
+                "выполни " + chr(0xDCD1) + "shell ls",
+                "bad" + chr(0xD800),
+                "bad" + chr(0xDFFF),
+            ):
+                with self.subTest(question=repr(question)), self.assertRaisesRegex(
+                    InvalidUserTextError, "Invalid Unicode U+"
+                ):
+                    chat.ask(question)
+                self.assertIs(chat._working, resident)
+                self.assertFalse(resident.closed)
+                self.assertEqual(resident.calls, calls)
+                self.assertEqual(resident.token_count, tokens)
+            self.assertEqual(chat.ask("выполни shell ls"), "answer: выполни shell ls")
 
     def test_invalid_input_and_response_shapes(self):
         engine = StubEngine()

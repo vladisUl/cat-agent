@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 
 from .config import MqttConfig
-from .conversation import NativeConversationChat
+from .conversation import InvalidUserTextError, NativeConversationChat
 from .mqtt_tools import create_mqtt_tools
 from .shell_tools import DEFAULT_SHELL_CWD, ShellConfig, ShellGate, create_shell_tool
 
@@ -109,6 +109,10 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 try:
                     print("Gemma>", chat.ask(question))
+                except InvalidUserTextError as exc:
+                    # No native call was made, so the working KV is unchanged.
+                    print(f"INPUT ERROR: {exc}", file=sys.stderr)
+                    continue
                 except Exception as exc:
                     print(f"ERROR: {exc}", file=sys.stderr)
                     # A failed native turn may have mutated state. A fresh clone
