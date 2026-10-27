@@ -43,9 +43,12 @@ def response_text(response: Any) -> str:
         return content
     if isinstance(content, list):
         return "".join(
-            item["text"] for item in content
-            if isinstance(item, Mapping) and item.get("type") == "text"
-            and isinstance(item.get("text"), str)
+            item if isinstance(item, str)
+            else item["text"] if isinstance(item, Mapping)
+                 and item.get("type") == "text"
+                 and isinstance(item.get("text"), str)
+            else ""
+            for item in content
         )
     if content is None:
         return ""
@@ -174,7 +177,13 @@ class NativeConversationChat:
             "last_prefill_tokens=%s elapsed=%.3fs",
             before, after, last_prefill, time.monotonic() - started,
         )
-        return response_text(result)
+        text = response_text(result)
+        if not text.strip():
+            LOGGER.warning(
+                "native-conversation EMPTY-REPLY response_type=%s response=%r",
+                type(result).__name__, repr(result)[:2048],
+            )
+        return text
 
     def new_dialogue(self) -> None:
         """Drop user dialogue; preserve the already-prefilled warm exchange."""

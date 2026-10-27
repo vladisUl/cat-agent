@@ -278,6 +278,7 @@ class ConversationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 chat.ask(" ")
         self.assertEqual(response_text({"content": "hello"}), "hello")
+        self.assertEqual(response_text({"content": ["a", {"type": "text", "text": "b"}]}), "ab")
         self.assertEqual(response_text({"content": [{"type": "text", "text": "A"},
                                                      {"type": "other", "text": "B"}]}), "A")
 

@@ -17,12 +17,16 @@ class MockNativeLib:
         self.calls = []
         self.fail_on = fail_on
         self.litert_lm_conversation_delete = lambda ptr: ptr
+        self.responses = {}
 
     def litert_lm_conversation_send_message(self, ptr, raw, ctx, extra):
         self.calls.append((ptr, raw, ctx, extra))
         if self.fail_on == len(self.calls):
             return None
         return 2345
+
+    def litert_lm_json_response_get_string(self, ptr):
+        return self.responses[ptr]
 
 
 class JsonTraceTests(unittest.TestCase):
@@ -55,6 +59,21 @@ class JsonTraceTests(unittest.TestCase):
         self.assertIn("native-json FAILED seq=1", logs.output[-1])
         self.assertIn("valid_python_json=True", logs.output[-1])
         self.assertIn("shell ls", logs.output[-1])
+
+    def test_native_responses_are_preserved_and_empty_final_is_logged(self):
+        real = MockNativeLib()
+        user_response = b'{"role":"assistant","tool_calls":[{"function":{"name":"shell","arguments":{"command":"ls"}}}]}'
+        empty_response = b'{"role":"assistant","content":[],"channels":{"analysis":"done"}}'
+        real.responses = {1: user_response, 2: empty_response}
+        proxy = NativeJsonTraceLib(real)
+        with self.assertLogs("litert_agent_tools.native_json_trace", "INFO") as logs:
+            self.assertEqual(proxy.litert_lm_json_response_get_string(1), user_response)
+            self.assertEqual(proxy.litert_lm_json_response_get_string(2), empty_response)
+        all_logs = "\\n".join(logs.output)
+        self.assertIn("RESPONSE seq=1 role=assistant empty_content=True", all_logs)
+        self.assertIn("tool_calls=1", all_logs)
+        self.assertIn("EMPTY-FINAL seq=2", all_logs)
+        self.assertIn("analysis", all_logs)
 
     def test_proxy_flags_invalid_python_json(self):
         real = MockNativeLib(fail_on=1)

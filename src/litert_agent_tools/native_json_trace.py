@@ -20,10 +20,13 @@ class NativeJsonTraceLib:
     def __init__(self, lib):
         self._native = lib
         self._send_count = 0
+        self._response_count = 0
 
     def __getattr__(self, name):
         if name == "litert_lm_conversation_send_message":
             return self._send_message
+        if name == "litert_lm_json_response_get_string":
+            return self._get_response_string
         return getattr(self._native, name)
 
     def _send_message(self, ptr, message_json, context_json, optional_args):
@@ -66,6 +69,50 @@ class NativeJsonTraceLib:
                 seq, python_valid, diagnostic_error, wire[:4096],
             )
         return result
+
+    def _get_response_string(self, response_ptr):
+        """Inspect unmodified native bytes before LiteRT's Message.from_json."""
+        raw = self._native.litert_lm_json_response_get_string(response_ptr)
+        self._response_count += 1
+        seq = self._response_count
+        if not raw:
+            LOGGER.warning("native-json RESPONSE seq=%d native_empty_response", seq)
+            return raw
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError, UnicodeError) as exc:
+            LOGGER.warning(
+                "native-json RESPONSE seq=%d invalid_json=%r raw=%r",
+                seq, str(exc), raw[:2048],
+            )
+            return raw
+
+        if not isinstance(parsed, dict):
+            LOGGER.warning(
+                "native-json RESPONSE seq=%d unexpected_type=%s raw=%r",
+                seq, type(parsed).__name__, raw[:2048],
+            )
+            return raw
+
+        content = parsed.get("content")
+        tool_calls = parsed.get("tool_calls") or []
+        channels = parsed.get("channels")
+        empty = content is None or content == "" or content == []
+        # Raw bytes can contain user data and shell output, so only show the
+        # raw payload for an unexpectedly empty final response.
+        LOGGER.info(
+            "native-json RESPONSE seq=%d role=%s empty_content=%s "
+            "content_type=%s tool_calls=%d channels=%s keys=%s",
+            seq, parsed.get("role"), empty, type(content).__name__,
+            len(tool_calls) if isinstance(tool_calls, list) else -1,
+            list(channels) if isinstance(channels, dict) else [],
+            list(parsed),
+        )
+        if empty and not tool_calls:
+            LOGGER.warning(
+                "native-json EMPTY-FINAL seq=%d raw=%r", seq, raw[:4096],
+            )
+        return raw
 
 
 def attach_native_json_trace(conversation):

@@ -153,3 +153,14 @@ PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
   --system-file /opt/prompt/sys_prompt_manager.md \
   --enable-shell --shell-cwd /opt/cat-agent --trace-native-json
 ```
+
+## Diagnosing a blank reply after a native tool call
+
+With `--trace-native-json`, logs also show the raw LiteRT JSON response
+structure after *each* model inference (initial tool call and follow-up).
+`native-json RESPONSE` includes role, whether content is empty, tool call
+count, and response fields. If the native final response is empty, the
+`native-json EMPTY-FINAL` log includes the returned JSON bytes (up to
+4096 bytes); the CLI then also writes `native-conversation EMPTY-REPLY`.
+This distinguishes a native empty generation from a response-text extraction
+problem. Instrumentation does not change the tool loop or send extra prompts.
