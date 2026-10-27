@@ -24,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--warm-message", default="warm", help="One-time BASE warm-up user message")
+    parser.add_argument("--trace-native-json", action="store_true",
+                        help="Trace all native message roles; dump failed JSON (may contain private data)")
     parser.add_argument("--enable-shell", action="store_true",
                         help="Enable native shell(command) execution as the current OS user")
     parser.add_argument("--shell-cwd", type=Path, default=None,
@@ -83,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
             max_output_tokens=args.max_output_tokens,
             thinking_config=litert_lm.ThinkingConfig(enable_thinking=False),
             warm_message=args.warm_message,
+            trace_native_json=args.trace_native_json,
         ) as chat:
             if shell_gate is not None:
                 shell_gate.enabled = True

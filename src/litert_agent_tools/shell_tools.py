@@ -151,6 +151,8 @@ def create_shell_tool(
         Args:
             command (str): Команда Bash, включая допустимые аргументы и конвейеры.
         """
+        LOGGER.info("native-tool DISPATCH name=shell arg_type=%s value=%r",
+                    type(command).__name__, command)
         if gate is not None and not gate.enabled:
             return {"ok": False, "error": "shell disabled during BASE warm-up"}
         return _execute(config, command)

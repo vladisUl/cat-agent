@@ -1,0 +1,69 @@
+"""Python-only tests for the opt-in native message JSON tracing proxy."""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+import unittest
+
+from litert_agent_tools.native_json_trace import (
+    NativeJsonTraceLib,
+    attach_native_json_trace,
+)
+
+
+class MockNativeLib:
+    def __init__(self, *, fail_on=0):
+        self.calls = []
+        self.fail_on = fail_on
+        self.litert_lm_conversation_delete = lambda ptr: ptr
+
+    def litert_lm_conversation_send_message(self, ptr, raw, ctx, extra):
+        self.calls.append((ptr, raw, ctx, extra))
+        if self.fail_on == len(self.calls):
+            return None
+        return 2345
+
+
+class JsonTraceTests(unittest.TestCase):
+    def test_proxy_records_user_and_tool_without_mutating_wire(self):
+        real = MockNativeLib()
+        conversation = SimpleNamespace(_lib=real)
+        attach_native_json_trace(conversation)
+        self.assertIsInstance(conversation._lib, NativeJsonTraceLib)
+        proxy = conversation._lib
+        attach_native_json_trace(conversation)
+        self.assertIs(proxy, conversation._lib)
+        self.assertIs(proxy.litert_lm_conversation_delete, real.litert_lm_conversation_delete)
+
+        user = json.dumps({"role": "user", "content": "выполни ls"})
+        tool = json.dumps([{"role": "tool", "content": [{"type": "tool_response", "name": "shell", "response": {"ok": True}}]}])
+        with self.assertLogs("litert_agent_tools.native_json_trace", "INFO") as logs:
+            self.assertEqual(proxy.litert_lm_conversation_send_message(12, user, "{}", None), 2345)
+            self.assertEqual(proxy.litert_lm_conversation_send_message(12, tool, "{}", None), 2345)
+
+        self.assertEqual(real.calls, [(12, user, "{}", None), (12, tool, "{}", None)])
+        self.assertIn("role=user valid_python_json=True", logs.output[0])
+        self.assertIn("role=['tool'] valid_python_json=True", logs.output[1])
+
+    def test_proxy_logs_exact_message_on_native_failure(self):
+        real = MockNativeLib(fail_on=1)
+        proxy = NativeJsonTraceLib(real)
+        message = json.dumps({"role": "user", "content": "shell ls"})
+        with self.assertLogs("litert_agent_tools.native_json_trace", "INFO") as logs:
+            self.assertIsNone(proxy.litert_lm_conversation_send_message(12, message, "{}", None))
+        self.assertIn("native-json FAILED seq=1", logs.output[-1])
+        self.assertIn("valid_python_json=True", logs.output[-1])
+        self.assertIn("shell ls", logs.output[-1])
+
+    def test_proxy_flags_invalid_python_json(self):
+        real = MockNativeLib(fail_on=1)
+        proxy = NativeJsonTraceLib(real)
+        with self.assertLogs("litert_agent_tools.native_json_trace", "INFO") as logs:
+            proxy.litert_lm_conversation_send_message(12, "{bad json", "{}", None)
+        self.assertIn("valid_python_json=False", logs.output[0])
+        self.assertIn("diagnostic_error=", logs.output[1])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -131,3 +131,25 @@ The numbers above are examples, not actual measurements. Every /new creates
 another clone starting with exactly the measured BASE count, without repeating
 the warm message. last_prefill_tokens is only the last native prefill of a
 turn: automatic Tool Calling can execute multiple prefill operations.
+
+## Debugging native JSON parse failures
+
+Use `--trace-native-json` only during debugging. This wraps the **working
+Conversation's** LiteRT FFI object (not the native library), logging every
+Python -> C send with its role (user or tool), byte count, SHA-256 prefix,
+and a Python JSON validity check. If the C API rejects the input, it also
+prints the first 4096 original JSON bytes. The log can contain private
+command arguments and tool output; inspect before sharing.
+
+If a shell callback was invoked with a malformed argument, the log
+includes `native-tool DISPATCH name=shell arg_type=...` before validation.
+The standard `native-tool CALL name=shell` appears only for valid commands.
+
+Test command:
+```sh
+PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
+  -m litert_agent_tools \
+  --model /storage/models/litert/gemma-4-E4B-it.litertlm \
+  --system-file /opt/prompt/sys_prompt_manager.md \
+  --enable-shell --shell-cwd /opt/cat-agent --trace-native-json
+```

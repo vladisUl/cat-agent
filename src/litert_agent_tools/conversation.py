@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from .clone import clone_conversation
+from .native_json_trace import attach_native_json_trace
 
 
 LOGGER = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ class NativeConversationChat:
         max_output_tokens: int | None = None,
         thinking_config: Any = None,
         warm_message: str = "warm",
+        trace_native_json: bool = False,
     ):
         if not system_prompt.strip():
             raise ValueError("The temporary system prompt must not be empty")
@@ -80,6 +82,7 @@ class NativeConversationChat:
         self._closed = False
         self._base_kv_tokens: int | None = None
         self._base_prefilled = False
+        self._trace_native_json = trace_native_json
         self._base_warm_reply: str | None = None
         kwargs: dict[str, Any] = {
             "messages": [{"role": "system", "content": system_prompt}],
@@ -145,6 +148,8 @@ class NativeConversationChat:
     def _clone_base(self):
         assert self._base is not None
         fresh = clone_conversation(self._base)
+        if self._trace_native_json:
+            fresh = attach_native_json_trace(fresh)
         kv = _kv_tokens(fresh)
         LOGGER.info("native-conversation BASE-CLONE kv_tokens=%s expected=%s", kv, self._base_kv_tokens)
         if kv != self._base_kv_tokens:
