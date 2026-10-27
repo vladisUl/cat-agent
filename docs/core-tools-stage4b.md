@@ -97,15 +97,29 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
     s.settimeout(90)
     s.connect(p)
     with s.makefile('r', encoding='utf-8') as rd:
+        completions = set()
         def send(item):
             s.sendall((json.dumps(item, ensure_ascii=False)+'\n').encode())
         def recv():
             obj = json.loads(rd.readline())
             print(obj, flush=True)
+            if obj['type']=='completed':
+                completions.add('human')
+            elif obj['type']=='hardware_completed':
+                completions.add('hardware')
+            elif obj['type']=='background_completed':
+                completions.add('background')
             return obj
+        def receive_type(expected):
+            # Progress and async completions may interleave with IPC replies.
+            for _ in range(200):
+                item = recv()
+                if item['type']==expected:
+                    return item
+            raise RuntimeError('No response of type '+expected)
 
         send({'type':'acquire','client':'stage4b-test'})
-        recv()
+        receive_type('acquired')
         send({'type':'background_task','agent':'agent_1',
               'max_runtime_seconds':120,
               'steps':[
@@ -113,15 +127,14 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
                   'Выполни через shell ls. Перечисли файлы.',
                   'Выполни через shell pwd. Сообщи каталог.'
               ]})
-        accepted = recv()
-        assert accepted['type']=='background_accepted', accepted
+        accepted = receive_type('background_accepted')
         job_id = accepted['background_id']
 
-        # Убедимся, что первый фоновой шаг уже начал работать.
+        # Check that the first background call is already running.
         for _ in range(150):
             send({'type':'snapshot'})
-            msg = recv()
-            if msg['type']=='snapshot' and msg['status']['label']=='background':
+            msg = receive_type('snapshot')
+            if msg['status']['label']=='background':
                 break
             time.sleep(0.02)
         else:
@@ -130,29 +143,19 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         send({'type':'hardware_probe','source':'gpio','name':'door',
               'agent':'agent_2',
               'text':'Диагностическое событие gpio/door. Подтверди получение.'})
-        hw = recv()
-        assert hw['type']=='hardware_accepted', hw
+        hw = receive_type('hardware_accepted')
 
         send({'type':'user','text':'Ответь одним словом ГОТОВО, без инструментов.'})
-        human = recv()
-        assert human['type']=='accepted', human
+        human = receive_type('accepted')
 
-        completions = set()
         while len(completions) < 3:
-            m = recv()
-            if m['type']=='completed':
-                completions.add('human')
-            elif m['type']=='hardware_completed':
-                completions.add('hardware')
-            elif m['type']=='background_completed':
-                completions.add('background')
+            recv()
 
         send({'type':'background_status','background_id':job_id})
-        status = recv()
-        assert status['type']=='background_status', status
+        status = receive_type('background_status')
         assert status['job']['state']=='COMPLETED', status
         send({'type':'release'})
-        recv()
+        receive_type('released')
 PY
 ```
 
