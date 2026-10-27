@@ -294,6 +294,25 @@ class CoreServer:
                 if job is not None and job.cancelled:
                     self._backgrounds.pop(job_id, None)
 
+    def _send_background_event(self, job: _BackgroundJob, payload: dict) -> bool:
+        """Best-effort IPC: a vanished reader must cancel future model steps.
+
+        Caller holds _lock. The active native turn is never retried.
+        """
+        if self._human is not job.client or job.client.epoch != job.epoch:
+            self._cancel_backgrounds(job.client, job.job_id)
+            return False
+        try:
+            job.client.send(payload)
+            return True
+        except OSError as exc:
+            LOGGER.info(
+                "native-background CLIENT-GONE id=%s error=%s; cancelling remaining steps",
+                job.job_id, exc,
+            )
+            self._cancel_backgrounds(job.client, job.job_id)
+            return False
+
     def _background_step(self, job_id: str) -> None:
         """Run exactly ONE native call, then yield the Engine to priority queue."""
         with self._lock:
@@ -319,13 +338,13 @@ class CoreServer:
             if job.cancelled or self._stop.is_set():
                 return
             job.index += 1
-            if self._human is job.client and job.client.epoch == job.epoch:
-                job.client.send({
-                    "type": "background_progress",
-                    "background_id": job_id, "agent_id": job.agent_id,
-                    "step": job.index, "total": len(job.steps),
-                    "ok": ok, "text": answer,
-                })
+            if not self._send_background_event(job, {
+                "type": "background_progress",
+                "background_id": job_id, "agent_id": job.agent_id,
+                "step": job.index, "total": len(job.steps),
+                "ok": ok, "text": answer,
+            }):
+                return
             if ok and not final:
                 try:
                     self._scheduler.submit(
@@ -341,13 +360,12 @@ class CoreServer:
                         lambda: self._manager.abort_agent_slices(job.agent_id),
                     )
             self._backgrounds.pop(job_id, None)
-            if self._human is job.client and job.client.epoch == job.epoch:
-                job.client.send({
-                    "type": "background_completed",
-                    "background_id": job_id, "agent_id": job.agent_id,
-                    "completed_steps": job.index, "total": len(job.steps),
-                    "ok": ok, "text": answer,
-                })
+            self._send_background_event(job, {
+                "type": "background_completed",
+                "background_id": job_id, "agent_id": job.agent_id,
+                "completed_steps": job.index, "total": len(job.steps),
+                "ok": ok, "text": answer,
+            })
         LOGGER.info("native-background FINISH id=%s completed=%s/%s ok=%s",
                     job_id, job.index, len(job.steps), ok)
 

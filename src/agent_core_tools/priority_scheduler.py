@@ -50,7 +50,9 @@ class PriorityScheduler:
         with self._cv:
             if self._stopping:
                 raise RuntimeError("Scheduler is stopped")
-            # Control work includes session/KV cleanup; never reject it behind\n            # an ordinary saturated queue. Only the CORE schedules controls.\n            if kind != "control" and len(self._queue) >= self._max_pending:
+            # Mandatory KV cleanup and already-admitted background continuations
+            # cannot be dropped because new requests filled the queue.
+            if kind != "control" and not continuation and len(self._queue) >= self._max_pending:
                 raise QueueFullError("CORE model queue is full")
             self._sequence += 1
             heapq.heappush(self._queue, _Operation(

@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from agent_core_tools.priority_scheduler import PriorityScheduler, QueueFullError
 from agent_core_tools.server import CoreServer
@@ -46,6 +47,7 @@ class SchedulerTests(unittest.TestCase):
         scheduler = PriorityScheduler(max_pending=1)
         self.addCleanup(scheduler.close)
         entered, resume, finished = threading.Event(), threading.Event(), threading.Event()
+        self.addCleanup(resume.set)  # Free the blocked worker even if an assertion fails.
         order = []
 
         def slow():
@@ -67,6 +69,7 @@ class SchedulerTests(unittest.TestCase):
         scheduler = PriorityScheduler(max_pending=1)
         self.addCleanup(scheduler.close)
         entered, resume, finished = threading.Event(), threading.Event(), threading.Event()
+        self.addCleanup(resume.set)  # Free the blocked worker even if an assertion fails.
         order = []
 
         def slow():
@@ -286,6 +289,32 @@ class BackgroundIpcTests(unittest.TestCase):
         self.assertNotIn("human:old-user-request", self.manager.events)
         self.assertEqual(self.manager.events.count("human:new-user-request"), 1)
         self.assertNotIn("step2", self.manager.events)
+
+    def test_write_failure_cancels_future_background_steps(self):
+        accepted = self.request({
+            "type": "background_task", "agent": "agent_1",
+            "steps": ["step1", "step2"],
+        })
+        self.assertEqual(accepted["type"], "background_accepted")
+        self.assertTrue(self.manager.entered.wait(2))
+        client = self.server._human
+        original_send = client.send
+
+        def send_with_disconnected_reader(payload):
+            if payload.get("type") == "background_progress":
+                raise BrokenPipeError(32, "test client disconnected")
+            return original_send(payload)
+
+        with patch.object(client, "send", side_effect=send_with_disconnected_reader):
+            self.manager.resume.set()
+            for _ in range(150):
+                if self.manager.agent_chat.reset_count:
+                    break
+                time.sleep(.01)
+            self.assertEqual(self.manager.agent_chat.reset_count, 1)
+            self.assertNotIn("step2", self.manager.events)
+            self.assertEqual(self.manager.agent_chat.working_kv_tokens, 200)
+            self.assertEqual(self.request({"type": "snapshot"})["status"]["background_jobs"], [])
 
     def test_explicit_cancel_marks_job_and_disables_followup(self):
         accepted = self.request({
