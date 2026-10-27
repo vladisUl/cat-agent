@@ -134,11 +134,30 @@ class TaskWorkerTests(unittest.TestCase):
         record, = list(self.engine.runs.values())
         self.assertEqual(record["state"], "cancelled")
 
+    def test_agent_allowlist_requires_true_subset_of_task_skills(self):
+        cases = [
+            (("mqtt",), ("shell",), False),            # disjoint sets
+            (("shell", "mqtt"), ("shell",), False), # missing a required tool
+            (("shell",), ("shell",), True),         # exact match
+            (("shell",), ("shell", "mqtt"), True), # allowed superset
+            ((), (), True),                         # no tool permissions needed
+        ]
+        for required, granted, expected in cases:
+            with self.subTest(required=required, granted=granted):
+                self.worker.permissions["agent_1"] = frozenset(granted)
+                selected = self.worker._select_agent({"skills": list(required)})
+                self.assertEqual(selected == "agent_1", expected)
+        self.assertEqual(self.manager.events, [])
+
     def test_permissions_and_unsupported_method_do_not_claim_offer(self):
         self.make_task(skills=("mqtt",))
         self.assertFalse(self.worker.poll_once())
         self.assertEqual(self.worker.snapshot()["offered"], 0)
         self.assertEqual(self.manager.events, [])
+        self.assertFalse(any(
+            target == "worker" and method in ("begin", "valid")
+            for target, method, _ in self.rpc.requests
+        ))  # Rejected grants must never reach a model-authorizing RPC.
         # Method=query is intentionally not interpreted as a plain TASK.
         # In a separate store, ensure it is left untouched.
         self.engine.runtime.delete_task(1)

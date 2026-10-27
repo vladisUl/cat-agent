@@ -115,7 +115,10 @@ class NativeTaskWorker:
         # Never take the server lock while holding the TaskWorker lock:
         # CoreServer admission checks do the reverse (server -> worker).
         for ident, granted in self.permissions.items():
-            if set(required) > granted or agents.get(ident) != "FREE":
+            # A saved TASK may use only tools explicitly granted to this agent.
+            # Set `>` is a strict-superset comparison and ACCEPTS disjoint
+            # sets; it is not an authorization check.
+            if not set(required).issubset(granted) or agents.get(ident) != "FREE":
                 continue
             if self.agent_blocked(ident):
                 continue
