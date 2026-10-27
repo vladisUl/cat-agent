@@ -346,30 +346,35 @@ class CoreServer:
         })
 
     def _clear_background_context(self, agent_id: str, job_id: str) -> None:
+        reset_error = None
         try:
             self._manager.abort_agent_slices(agent_id)
-        except Exception:
+        except Exception as exc:
+            reset_error = str(exc)
             LOGGER.exception("Background context cleanup failed agent=%s", agent_id)
         finally:
             with self._lock:
                 job = self._backgrounds.get(job_id)
                 if job is not None and job.cancelled:
-                    self._finish_background(job, "CANCELLED")
-                    self._notify_background_terminal(
-                        job, ok=False, result="Cancelled before next native call",
-                    )
+                    state = "FAILED" if reset_error is not None else "CANCELLED"
+                    result = reset_error or "Cancelled before next native call"
+                    self._finish_background(job, state, result)
+                    self._notify_background_terminal(job, ok=False, result=result)
 
     def _clear_timed_out_context(self, agent_id: str, job_id: str) -> None:
+        reset_error = None
         try:
             self._manager.abort_agent_slices(agent_id)
-        except Exception:
+        except Exception as exc:
+            reset_error = str(exc)
             LOGGER.exception("Background timeout context reset failed agent=%s", agent_id)
         finally:
             with self._lock:
                 job = self._backgrounds.get(job_id)
                 if job is not None:
-                    result = "Deadline reached between native calls"
-                    self._finish_background(job, "TIMED_OUT", result)
+                    state = "FAILED" if reset_error is not None else "TIMED_OUT"
+                    result = reset_error or "Deadline reached between native calls"
+                    self._finish_background(job, state, result)
                     self._notify_background_terminal(job, ok=False, result=result)
 
     def _send_background_event(self, job: _BackgroundJob, payload: dict) -> bool:

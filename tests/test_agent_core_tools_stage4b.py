@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from agent_core_tools.server import CoreServer
 from orchestration_tools.agents import NativeAgent
@@ -179,6 +180,30 @@ class HardwareAndLifecycleTests(unittest.TestCase):
                 })+"\n").encode())
                 self.assertEqual(json.loads(reader.readline())["type"], "busy")
         self.assertEqual(self.manager.events, [])
+
+    def test_failed_kv_reset_is_reported_as_failed_job(self):
+        accepted = self.query({
+            "type": "background_task", "agent": "agent_1",
+            "steps": ["step1", "step2"],
+        })
+        self.assertTrue(self.manager.entered.wait(2))
+        self.assertTrue(self.query({
+            "type": "cancel_background",
+            "background_id": accepted["background_id"],
+        })["cancelled"])
+        with patch.object(self.manager.agent_chat, "new_dialogue",
+                          side_effect=RuntimeError("BASE clone failed")):
+            self.manager.resume.set()
+            terminal = self.until("background_completed")
+        self.assertEqual(terminal["state"], "FAILED")
+        self.assertIn("BASE clone failed", terminal["text"])
+        status = self.query({
+            "type": "background_status",
+            "background_id": accepted["background_id"],
+        })
+        self.assertEqual(status["job"]["state"], "FAILED")
+        self.assertEqual(self.manager.pool.status()[0]["state"], "FAILED")
+        self.assertNotIn("step2", self.manager.events)
 
     def test_finished_job_is_not_visible_after_session_epoch_change(self):
         accepted = self.query({
