@@ -1,11 +1,10 @@
-"""Stage-1 Unix IPC CORE skeleton; deliberately does not run a model or TASKs.
+"""Independent native-tools CORE IPC: optional serialized Conversation manager.
 
-Only basic legacy-compatible control messages are implemented. An unmatched
-`user` request is never acknowledged as work; this server is NOT production
-ready until the manager and scheduler are connected in later stages.
+No Task SYSTEM, legacy scheduler, or agent imports. Tool calls are native.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import json
 import logging
@@ -17,6 +16,7 @@ import uuid
 from typing import Any
 
 from .socket_owner import SocketOwner
+from orchestration_tools.contracts import ManagerRuntime
 
 
 LOGGER = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ class _Client:
     sock: socket.socket
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     name: str = "unknown"
+    epoch: int = 0
     send_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def send(self, payload: dict[str, object]) -> None:
@@ -46,9 +47,9 @@ class _Client:
 
 
 class CoreServer:
-    """Dedicated socket, exclusive human owner, observable NOT_READY state."""
+    """Dedicated socket with one owner and one serialized model worker."""
 
-    def __init__(self, path: Path = DEFAULT_SOCKET) -> None:
+    def __init__(self, path: Path = DEFAULT_SOCKET, *, manager: ManagerRuntime | None = None) -> None:
         self.path = Path(path)
         self._socket_owner = SocketOwner(self.path)
         self._socket: socket.socket | None = None
@@ -57,6 +58,10 @@ class CoreServer:
         self._close_lock = threading.RLock()
         self._clients: dict[_Client, threading.Thread] = {}
         self._human: _Client | None = None
+        self._manager = manager
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="native-manager") if manager else None
+        self._pending = 0
+        self._working = False
 
     def start(self) -> None:
         with self._close_lock:
@@ -78,7 +83,10 @@ class CoreServer:
                 raise
             self._stop.clear()
             self._socket = listener
-        LOGGER.info("TOOLS CORE SKELETON READY: %s (manager not connected)", self.path)
+        if self._manager is None:
+            LOGGER.info("TOOLS CORE SKELETON READY: %s (manager not connected)", self.path)
+        else:
+            LOGGER.info("TOOLS CORE READY: %s (native Conversation manager)", self.path)
 
     def serve_forever(self) -> None:
         if self._socket is None:
@@ -134,8 +142,11 @@ class CoreServer:
             pass
         finally:
             with self._lock:
-                if self._human is client:
+                released = self._human is client
+                if released:
                     self._human = None
+                    client.epoch += 1
+                    self._schedule_release(client.session_id)
                 self._clients.pop(client, None)
             client.close()
 
@@ -149,10 +160,56 @@ class CoreServer:
             client.send({"type": "error", "error": f"invalid message: {exc}"})
 
     def _status(self) -> dict[str, object]:
-        return {
-            "state": "NOT_READY", "ready": False, "pending": 0,
-            "label": "", "reason": "manager_not_connected_stage1",
-        }
+        with self._lock:
+            if self._manager is None:
+                return {
+                    "state": "NOT_READY", "ready": False, "pending": 0,
+                    "label": "", "reason": "manager_not_connected_stage1",
+                }
+            return {
+                "state": "BUSY" if self._working else "IDLE", "ready": True,
+                "pending": self._pending, "label": "manager" if self._working else "",
+            }
+
+    def _schedule_release(self, session_id: str) -> None:
+        # Called while holding _lock; serialized AFTER in-flight inference.
+        if self._executor is not None:
+            self._executor.submit(self._manager.release_session, session_id)
+
+    def _model_worker(self, client: _Client, epoch: int, request_id: str, text: str) -> None:
+        with self._lock:
+            self._pending -= 1
+            if self._human is not client or client.epoch != epoch or self._stop.is_set():
+                return
+            self._working = True
+        try:
+            try:
+                turn = self._manager.respond(client.session_id, text)
+            except Exception as exc:
+                LOGGER.exception("Native manager turn failed id=%s", request_id)
+                # This response may reflect a partially mutated native KV. Reset
+                # serialized after the exception, never replay a tool call.
+                try:
+                    self._manager.release_session(client.session_id)
+                except Exception:
+                    LOGGER.exception("Failed to reset native manager after error")
+                from orchestration_tools.contracts import ManagerTurn
+                turn = ManagerTurn("error", str(exc))
+            with self._lock:
+                if self._human is not client or client.epoch != epoch or self._stop.is_set():
+                    return
+                fields = {
+                    "request_id": request_id, "session_id": client.session_id,
+                    "kind": turn.kind, "text": turn.text, "chat_open": True,
+                }
+                if turn.kind == "error":
+                    client.send({"type": "error", **fields})
+                elif turn.kind == "reply":
+                    client.send({"type": "reply", **fields})
+                client.send({"type": "completed", **fields})
+        finally:
+            with self._lock:
+                self._working = False
 
     def _handle_message(self, client: _Client, message: dict[str, Any]) -> None:
         message_type = message.get("type")
@@ -178,6 +235,8 @@ class CoreServer:
             with self._lock:
                 acquired = self._human is None or self._human is client
                 if acquired:
+                    if self._human is not client:
+                        client.epoch += 1
                     self._human = client
                     client.name = name
                 owner = self._human.name if self._human else None
@@ -187,9 +246,10 @@ class CoreServer:
                     "session_id": client.session_id,
                     "core": {
                         "socket": str(self.path),
-                        "model": None,
-                        "backend": "UNCONNECTED",
-                        "stage": 1,
+                        "model": getattr(self._manager, "model_name", None),
+                        "backend": "UNCONNECTED" if self._manager is None else "CPU",
+                        "stage": 1 if self._manager is None else 2,
+                        "manager_warm_tokens": getattr(self._manager, "base_kv_tokens", None),
                     },
                     "status": self._status(),
                 })
@@ -200,6 +260,8 @@ class CoreServer:
             with self._lock:
                 if self._human is client:
                     self._human = None
+                    client.epoch += 1
+                    self._schedule_release(client.session_id)
             client.send({"type": "released"})
             return
         if message_type == "user":
@@ -213,10 +275,22 @@ class CoreServer:
                 current = self._human.name if self._human else None
             if not owner:
                 client.send({"type": "busy", "owner": current, "text": "Гена занят"})
-            else:
+            elif self._manager is None:
                 client.send({
                     "type": "error", "error": "manager backend is not connected (stage 1)",
                 })
+            else:
+                with self._lock:
+                    if self._human is not client:
+                        client.send({"type": "busy", "owner": None, "text": "Гена занят"})
+                        return
+                    request_id = uuid.uuid4().hex
+                    client.send({
+                        "type": "accepted", "request_id": request_id,
+                        "session_id": client.session_id,
+                    })
+                    self._pending += 1
+                    self._executor.submit(self._model_worker, client, client.epoch, request_id, content)
             return
         # Stage 1 has no voice, event, fallback, MODEL or TASK execution.
         client.send({
@@ -238,5 +312,10 @@ class CoreServer:
             for thread in threads:
                 if thread is not threading.current_thread():
                     thread.join(timeout=1.0)
+            if self._executor is not None:
+                self._executor.shutdown(wait=True, cancel_futures=False)
+                self._executor = None
+            if self._manager is not None:
+                self._manager.close()
             self._socket_owner.release()
         LOGGER.info("TOOLS CORE stopped: %s", self.path)
