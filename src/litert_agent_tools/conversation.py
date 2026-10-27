@@ -169,6 +169,15 @@ class NativeConversationChat:
     def base_warm_reply(self) -> str | None:
         return self._base_warm_reply
 
+    @property
+    def base_resident_kv_tokens(self) -> int | None:
+        """Read the current immutable BASE KV length for diagnostics."""
+        return _kv_tokens(self._base) if self._base is not None else None
+
+    @property
+    def working_kv_tokens(self) -> int | None:
+        return _kv_tokens(self._working) if self._working is not None else None
+
     def _clone_base(self):
         assert self._base is not None
         fresh = clone_conversation(self._base)
@@ -206,6 +215,17 @@ class NativeConversationChat:
                 type(result).__name__, repr(result)[:2048],
             )
         return text
+
+    def fork_dialogue(self):
+        """Create an independent live Conversation cloned from the immutable BASE.
+
+        Ownership transfers to the caller: it must close this Conversation
+        before closing the parent NativeConversationChat / Engine.
+        This does not replace or alter the existing working dialogue.
+        """
+        if self._closed or self._base is None:
+            raise RuntimeError("Conversation is closed")
+        return self._clone_base()
 
     def new_dialogue(self) -> None:
         """Drop user dialogue; preserve the already-prefilled warm exchange."""

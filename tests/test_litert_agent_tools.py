@@ -189,6 +189,42 @@ class ConversationTests(unittest.TestCase):
             self.assertEqual(engine.base.calls, ["warm"])
         self.assertTrue(engine.base.closed)
 
+    def test_fork_two_working_dialogues_without_changing_base(self):
+        engine = StubEngine()
+        with NativeConversationChat(engine, "TEMP PROMPT", ["tool"]) as chat:
+            base_length = chat.base_kv_tokens
+            a = chat._working
+            b = chat.fork_dialogue()
+            try:
+                self.assertIsNot(a, b)
+                self.assertEqual(chat.working_kv_tokens, base_length)
+                self.assertEqual(b.token_count, base_length)
+                self.assertEqual(chat.base_resident_kv_tokens, base_length)
+                chat.ask("A only")
+                a_after = chat.working_kv_tokens
+                self.assertEqual(b.token_count, base_length)
+                self.assertEqual(response_text(b.send_message("B only")), "answer: B only")
+                b_after = b.token_count
+                self.assertEqual(chat.working_kv_tokens, a_after)
+                chat.ask("A again")
+                self.assertEqual(b.token_count, b_after)
+                self.assertEqual(chat.base_resident_kv_tokens, base_length)
+                self.assertEqual(a.calls, ["warm", "A only", "A again"])
+                self.assertEqual(b.calls, ["warm", "B only"])
+                self.assertEqual(engine.base.calls, ["warm"])
+            finally:
+                b.close()
+            self.assertTrue(b.closed)
+            self.assertFalse(a.closed)
+        self.assertTrue(a.closed)
+
+    def test_fork_closed_dialogue_rejected(self):
+        engine = StubEngine()
+        chat = NativeConversationChat(engine, "TEMP PROMPT", [])
+        chat.close()
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            chat.fork_dialogue()
+
     def test_stock_litert_warm_turn_and_kv_inheritance(self):
         engine = WarmStubEngine(tokens=0)
         with self.assertLogs("litert_agent_tools.conversation", level="INFO") as events:
