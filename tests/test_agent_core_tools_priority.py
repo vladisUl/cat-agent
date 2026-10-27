@@ -299,22 +299,36 @@ class BackgroundIpcTests(unittest.TestCase):
         self.assertTrue(self.manager.entered.wait(2))
         client = self.server._human
         original_send = client.send
+        background_writes = []
 
         def send_with_disconnected_reader(payload):
+            if payload.get("type", "").startswith("background_"):
+                background_writes.append(payload["type"])
             if payload.get("type") == "background_progress":
                 raise BrokenPipeError(32, "test client disconnected")
             return original_send(payload)
 
         with patch.object(client, "send", side_effect=send_with_disconnected_reader):
             self.manager.resume.set()
-            for _ in range(150):
-                if self.manager.agent_chat.reset_count:
+            # Resetting the fake KV precedes final job bookkeeping. Wait for
+            # the terminal state, not merely for reset_count to change.
+            deadline = time.monotonic() + 3
+            while True:
+                self.send({"type": "background_status",
+                           "background_id": accepted["background_id"]})
+                status = self.receive()
+                self.assertEqual(status["type"], "background_status")
+                if status["job"]["state"] == "CANCELLED":
                     break
+                self.assertLess(time.monotonic(), deadline)
                 time.sleep(.01)
             self.assertEqual(self.manager.agent_chat.reset_count, 1)
             self.assertNotIn("step2", self.manager.events)
             self.assertEqual(self.manager.agent_chat.working_kv_tokens, 200)
-            self.assertEqual(self.request({"type": "snapshot"})["status"]["background_jobs"], [])
+            self.assertEqual(background_writes, ["background_progress"])
+            snapshot = self.request({"type": "snapshot"})
+            self.assertEqual(snapshot["type"], "snapshot")
+            self.assertEqual(snapshot["status"]["background_jobs"], [])
 
     def test_explicit_cancel_marks_job_and_disables_followup(self):
         accepted = self.request({

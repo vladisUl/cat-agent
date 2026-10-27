@@ -69,6 +69,7 @@ class _BackgroundJob:
     max_runtime_seconds: float = 120.0
     started_at: float = field(default_factory=time.monotonic)
     last_result: str = ""
+    delivery_failed: bool = False
 
     @property
     def deadline(self) -> float:
@@ -338,6 +339,10 @@ class CoreServer:
     def _notify_background_terminal(
         self, job: _BackgroundJob, *, ok: bool, result: str,
     ) -> None:
+        # A failed write means the transport cannot be trusted. Preserve the
+        # terminal state for diagnostics, but never write to that client again.
+        if job.delivery_failed:
+            return
         self._send_background_event(job, {
             "type": "background_completed",
             "background_id": job.job_id, "agent_id": job.agent_id,
@@ -382,6 +387,8 @@ class CoreServer:
 
         Caller holds _lock. The active native turn is never retried.
         """
+        if job.delivery_failed:
+            return False
         if self._human is not job.client or job.client.epoch != job.epoch:
             self._cancel_backgrounds(job.client, job.job_id)
             return False
@@ -393,6 +400,7 @@ class CoreServer:
                 "native-background CLIENT-GONE id=%s error=%s; cancelling remaining steps",
                 job.job_id, exc,
             )
+            job.delivery_failed = True
             self._cancel_backgrounds(job.client, job.job_id)
             return False
 
