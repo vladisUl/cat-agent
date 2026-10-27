@@ -7,6 +7,8 @@ from importlib import metadata
 import json
 import subprocess
 import sys
+from pathlib import Path
+import tempfile
 from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -15,6 +17,7 @@ from litert_agent_tools.clone import ConversationCloneError, clone_conversation
 from litert_agent_tools.config import MqttConfig
 from litert_agent_tools.conversation import NativeConversationChat, response_text
 from litert_agent_tools.mqtt_tools import TOPICS, create_mqtt_tools
+from litert_agent_tools.native_patch.enable_prefill import CHANGES, change_source
 
 
 class MqttToolTests(unittest.TestCase):
@@ -130,6 +133,33 @@ class StubEngine:
         return self.base
 
 
+class WarmStubConversation(StubConversation):
+    def __init__(self, messages, tools, *, tokens=275):
+        super().__init__(messages, tools)
+        self.token_count = tokens
+
+    def clone(self):
+        result = WarmStubConversation(self.messages, self.tools, tokens=self.token_count)
+        result.calls = list(self.calls)
+        return result
+
+    def get_benchmark_info(self):
+        return SimpleNamespace(last_prefill_token_count=7)
+
+
+class WarmStubEngine:
+    def __init__(self, tokens=275):
+        self.tokens = tokens
+        self.base = None
+        self.prefill_requested = False
+
+    def create_conversation(self, *, messages, tools, automatic_tool_calling,
+                            prefill_preface_on_init=False, **kwargs):
+        self.prefill_requested = prefill_preface_on_init
+        self.base = WarmStubConversation(messages, tools, tokens=self.tokens)
+        return self.base
+
+
 class ConversationTests(unittest.TestCase):
     def test_base_clone_reset_history_and_cleanup(self):
         engine = StubEngine()
@@ -145,6 +175,37 @@ class ConversationTests(unittest.TestCase):
             self.assertEqual(chat._working.calls, [])
             self.assertEqual(chat.ask("third"), "answer: third")
             self.assertEqual(engine.base.calls, [])
+        self.assertTrue(engine.base.closed)
+
+    def test_opt_in_native_prefill_measured_and_inherited_by_clone(self):
+        engine = WarmStubEngine(tokens=275)
+        with self.assertLogs("litert_agent_tools.conversation", level="INFO") as events:
+            with NativeConversationChat(engine, "TEMP PROMPT", ["tool"]) as chat:
+                self.assertTrue(engine.prefill_requested)
+                self.assertTrue(chat.base_prefilled)
+                self.assertEqual(chat.base_kv_tokens, 275)
+                self.assertEqual(chat._working.token_count, 275)
+                self.assertEqual(chat.ask("test"), "answer: test")
+                chat.new_dialogue()
+                self.assertEqual(chat._working.token_count, 275)
+        logs = "\n".join(events.output)
+        self.assertIn("prefill_supported=True kv_tokens=275", logs)
+        self.assertIn("BASE-CLONE kv_tokens=275 expected=275", logs)
+        self.assertIn("last_prefill_tokens=7", logs)
+
+    def test_prefill_request_rejects_empty_native_kv(self):
+        engine = WarmStubEngine(tokens=0)
+        with self.assertRaisesRegex(RuntimeError, "no resident KV"):
+            NativeConversationChat(engine, "TEMP PROMPT", [])
+        self.assertTrue(engine.base.closed)
+
+    def test_prefill_request_rejects_clone_with_missing_kv(self):
+        engine = WarmStubEngine(tokens=275)
+        with patch("litert_agent_tools.conversation.clone_conversation",
+                   return_value=WarmStubConversation([], [], tokens=0)) as cloned:
+            with self.assertRaisesRegex(RuntimeError, "does not match warmed BASE"):
+                NativeConversationChat(engine, "TEMP PROMPT", [])
+        self.assertEqual(cloned.call_count, 1)
         self.assertTrue(engine.base.closed)
 
     def test_reset_clone_error_does_not_destroy_active_dialogue(self):
@@ -214,6 +275,25 @@ class CloneAdapterTests(unittest.TestCase):
         self.assertEqual(native_clone.restype, ctypes.c_void_p)
         self.assertEqual(result.kwargs["tools_map"], {"tool": "object"})
         self.assertTrue(result.kwargs["automatic_tool_calling"])
+
+
+class NativeSourcePatchTests(unittest.TestCase):
+    def test_patch_is_checked_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as dirname:
+            root = Path(dirname)
+            for relative, changes in CHANGES.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("\n".join(before for before, _ in changes), encoding="utf-8")
+            before = (root / "c/conversation.cc").read_text(encoding="utf-8")
+            status = change_source(root, check=True)
+            self.assertTrue(all(line.startswith("PATCH") for line in status))
+            self.assertEqual((root / "c/conversation.cc").read_text(encoding="utf-8"), before)
+            change_source(root, check=False)
+            self.assertTrue(all(line.startswith("OK") for line in change_source(root, check=False)))
+            self.assertIn("SetPrefillPrefaceOnInit", (root / "c/conversation.cc").read_text(encoding="utf-8"))
+            self.assertIn("prefill_preface_on_init: bool = False",
+                          (root / "python/litert_lm/engine.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

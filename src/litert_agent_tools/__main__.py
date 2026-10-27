@@ -23,6 +23,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument(
+        "--require-prefilled-base", action="store_true",
+        help="Fail when the current native library lacks the prefilled Conversation API",
+    )
     args = parser.parse_args(argv)
     if args.max_context_tokens < 2 or args.max_output_tokens < 1:
         parser.error("Token limits must be positive")
@@ -62,7 +66,14 @@ def main(argv: list[str] | None = None) -> int:
             thinking_config=litert_lm.ThinkingConfig(enable_thinking=False),
         ) as chat:
             print("Native Conversation tools ready. /new resets dialogue, /exit quits.")
-            print("Note: cloned base is NOT prefilled in LiteRT-LM 0.18.x.")
+            print(f"BASE prefilled: {chat.base_prefilled}; BASE KV tokens: {chat.base_kv_tokens}")
+            if args.require_prefilled_base and not chat.base_prefilled:
+                print(
+                    "ERROR: This LiteRT-LM library cannot prefill a Conversation BASE. "
+                    "See src/litert_agent_tools/native_patch/README.md",
+                    file=sys.stderr,
+                )
+                return 2
             while True:
                 try:
                     question = input("You> ").strip()

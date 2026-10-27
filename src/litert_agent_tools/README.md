@@ -15,19 +15,28 @@ client, MCP, /work#, and TASK SYSTEM. None of their code or prompts is modified.
 - One BASE Conversation plus a disposable working clone. /new closes the old
   conversation and clones BASE, so its history and KV are independent.
 
-## IMPORTANT: BASE prefill limitation
+## Genuine BASE prefill (opt-in native source extension)
 
 LiteRT-LM 0.18.0 and 0.18.1 have native C Conversation.clone but no Python
-wrapper. clone.py exposes this API using its 0.18-specific signature; versions
-with a Python .clone() use that method instead.
+wrapper. clone.py exposes the 0.18-specific C signature. Newer releases
+implementing Conversation.clone() in Python use that method.
 
-In LiteRT-LM 0.18.x, Python create_conversation() does not expose a
-prefill-preface-on-init switch. BASE cloning works but the system prompt has
-NOT been prefilled yet when BASE is cloned. Accordingly this experiment does
-NOT claim that its independent turns already avoid reprocessing the system
-prompt. Proving a clean prefilled BASE with native Conversation remains a
-separate engineering milestone. We do not fabricate a dummy assistant exchange
-or silently modify the old Session checkpoint implementation.
+The STOCK 0.18.x C/Python API does not expose C++ SetPrefillPrefaceOnInit.
+Therefore a stock wheel can only clone an unprefilled BASE: no cache savings
+are claimed for the system prompt. At startup, BASE KV tokens are read from
+the native library; they are not inferred from prompt text.
+
+The optional minimal source patch under native_patch/ adds that missing C/Python
+binding WITHOUT changing the C++ prefill implementation and WITHOUT a synthetic
+dialogue. Rebuilding LiteRT-LM with the patch enables real BASE prefill; the
+standalone tool automatically detects the new Python argument and requests it.
+It then verifies that each clone has inherited the same positive KV length.
+
+See [native_patch/README.md](native_patch/README.md). Native rebuilding is
+required; Python code alone cannot enable the missing C ABI option.
+
+Run with --require-prefilled-base to fail explicitly if the installed library
+is not patched.
 
 ## WSL smoke test
 
@@ -67,3 +76,16 @@ of the subprocess execution:
 This is an example only; real numbers must be obtained from the broker.
 Clone events are also logged as native-conversation CLONE. If Gemma supplies
 a number but no CALL log appears, it did NOT invoke this Python MQTT tool.
+
+## Native KV counters
+
+At INFO level the console prints:
+
+    native-conversation BASE prefill_supported=False kv_tokens=0 elapsed=...
+    native-conversation BASE-CLONE kv_tokens=0 expected=0
+    native-conversation TURN kv_before=0 kv_after=... last_prefill_tokens=... elapsed=...
+
+The zero counts above are an illustrative STOCK 0.18 library case. With the
+patched native library, BASE and every fresh BASE-CLONE should be >0 and equal.
+The last_prefill_tokens metric covers only the last prefill operation of a
+turn; automatic tool calling may trigger multiple prefill operations.
