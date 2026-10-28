@@ -20,8 +20,8 @@ class RPC:
     def __init__(self, engine, peer="worker"):
         self.engine, self.peer = engine, peer
 
-    def call(self, target, method, *args, **kwargs):
-        value = self.engine.call(target, method, args, kwargs, peer=self.peer)
+    def call(self, target, operation, *args, **kwargs):
+        value = self.engine.call(target, operation, args, kwargs, peer=self.peer)
         return json.loads(json.dumps(
             value, default=lambda v: asdict(v) if is_dataclass(v) else v,
         ))

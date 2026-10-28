@@ -18,8 +18,8 @@ class TaskRpc:
     def __init__(self, engine):
         self.engine = engine
 
-    def call(self, target, method, *args, **kwargs):
-        result = self.engine.call(target, method, args, kwargs, peer="test-peer")
+    def call(self, target, operation, *args, **kwargs):
+        result = self.engine.call(target, operation, args, kwargs, peer="test-peer")
         return json.loads(json.dumps(
             result, default=lambda obj: asdict(obj) if is_dataclass(obj) else obj,
         ))
