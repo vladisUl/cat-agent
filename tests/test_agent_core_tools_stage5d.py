@@ -75,7 +75,7 @@ class WorkerFaultTests(unittest.TestCase):
         self.rpc.call("system", "run_task", task.task_id)
         return task
 
-    def run(self):
+    def run_record(self):
         return next(iter(self.engine.runs.values()))
 
     def await_state(self, predicate):
@@ -91,10 +91,10 @@ class WorkerFaultTests(unittest.TestCase):
         self.rpc.fail_after[("worker", "begin")] = 1
         self.assertTrue(self.worker.poll_once())
         self.await_state(lambda: self.worker.snapshot()["unacknowledged"] == 1)
-        self.assertEqual(self.run()["state"], "running")
+        self.assertEqual(self.run_record()["state"], "running")
         self.assertEqual(self.manager.events, [])
         self.assertFalse(self.worker.poll_once())  # FINISH only.
-        self.assertEqual(self.run()["state"], "interrupted")
+        self.assertEqual(self.run_record()["state"], "interrupted")
         self.assertEqual(self.manager.events, [])
         self.assertEqual(self.worker.snapshot()["unacknowledged"], 0)
 
@@ -103,10 +103,10 @@ class WorkerFaultTests(unittest.TestCase):
         self.rpc.fail_before[("worker", "begin")] = 1
         self.assertTrue(self.worker.poll_once())
         self.await_state(lambda: self.worker.snapshot()["unacknowledged"] == 1)
-        self.assertEqual(self.run()["state"], "offered")
+        self.assertEqual(self.run_record()["state"], "offered")
         self.assertEqual(self.manager.events, [])
         self.assertFalse(self.worker.poll_once())  # finish(offered) -> pending
-        self.assertEqual(self.run()["state"], "pending")
+        self.assertEqual(self.run_record()["state"], "pending")
         self.assertEqual(self.worker.snapshot()["unacknowledged"], 0)
         self.assertEqual(self.manager.events, [])
 
@@ -117,7 +117,7 @@ class WorkerFaultTests(unittest.TestCase):
         self.await_state(lambda: self.worker.snapshot()["unacknowledged"] == 1)
         self.assertEqual(self.manager.events, [])
         self.assertFalse(self.worker.poll_once())
-        self.assertEqual(self.run()["state"], "interrupted")
+        self.assertEqual(self.run_record()["state"], "interrupted")
 
     def test_query_waits_for_rpc_and_only_retries_manager_boundary(self):
         self.task(method="query")
@@ -136,12 +136,12 @@ class WorkerFaultTests(unittest.TestCase):
             self.await_state(lambda: self.worker.snapshot()["pending_query_validations"] == 1)
             self.assertEqual(self.manager.events, ["ACTION_STAGE5D"])
             self.assertEqual(self.worker.snapshot()["query_continuations"], 1)
-            self.assertEqual(self.run()["state"], "running")
+            self.assertEqual(self.run_record()["state"], "running")
             self.assertFalse(self.worker.poll_once())  # retries validation
             self.await_state(lambda: self.worker.snapshot()["unacknowledged"] == 1)
             self.assertEqual(self.manager.events, ["ACTION_STAGE5D", "QUERY_MANAGER"])
             self.assertFalse(self.worker.poll_once())  # persist and finish
-        self.assertEqual(self.run()["state"], "done")
+        self.assertEqual(self.run_record()["state"], "done")
         self.assertEqual(self.manager.events.count("ACTION_STAGE5D"), 1)
         self.assertEqual(self.manager.events.count("QUERY_MANAGER"), 1)
         items = self.rpc.call("notifications", "list")
@@ -167,7 +167,7 @@ class WorkerFaultTests(unittest.TestCase):
             self.await_state(lambda: self.worker.snapshot()["unacknowledged"] == 1)
             self.assertFalse(self.worker.poll_once())
         self.assertEqual(self.manager.events, ["ACTION_STAGE5D"])
-        self.assertEqual(self.run()["state"], "cancelled")
+        self.assertEqual(self.run_record()["state"], "cancelled")
         self.assertEqual(self.rpc.call("notifications", "list"), [])
 
     def test_shutdown_discards_queued_query_without_replaying_agent(self):
@@ -193,7 +193,7 @@ class WorkerFaultTests(unittest.TestCase):
         self.assertFalse(closer.is_alive())
         self.worker.close()  # No manager execution; FINISH(interrupted).
         self.assertEqual(self.manager.events, ["ACTION_STAGE5D"])
-        self.assertEqual(self.run()["state"], "interrupted")
+        self.assertEqual(self.run_record()["state"], "interrupted")
         self.assertEqual(self.worker.snapshot()["unacknowledged"], 0)
         self.assertEqual(self.worker.snapshot()["query_continuations"], 0)
         self.assertEqual(self.rpc.call("notifications", "list"), [])
@@ -207,7 +207,7 @@ class WorkerFaultTests(unittest.TestCase):
         self.assertTrue(entered.wait(2))
         self.task()
         self.assertTrue(self.worker.poll_once())
-        self.assertEqual(self.run()["state"], "offered")
+        self.assertEqual(self.run_record()["state"], "offered")
         self.assertEqual(self.manager.events, [])
         closer = threading.Thread(target=self.scheduler.close)
         closer.start()
@@ -216,7 +216,7 @@ class WorkerFaultTests(unittest.TestCase):
         closer.join(2)
         self.assertFalse(closer.is_alive())
         self.worker.close()  # OFFLINE relinquishes unstarted offer.
-        self.assertEqual(self.run()["state"], "pending")
+        self.assertEqual(self.run_record()["state"], "pending")
         self.assertEqual(self.manager.events, [])
         self.assertEqual(self.rpc.call("notifications", "list"), [])
 
@@ -224,12 +224,12 @@ class WorkerFaultTests(unittest.TestCase):
         self.task()
         self.rpc.fail_before[("worker", "pull")] = 1
         self.assertFalse(self.worker.poll_once())
-        self.assertEqual(self.run()["state"], "pending")
+        self.assertEqual(self.run_record()["state"], "pending")
         self.assertEqual(self.manager.events, [])
         self.assertTrue(self.worker.poll_once())
         self.await_state(lambda: self.worker.snapshot()["unacknowledged"] == 1)
         self.assertFalse(self.worker.poll_once())
-        self.assertEqual(self.run()["state"], "done")
+        self.assertEqual(self.run_record()["state"], "done")
         self.assertEqual(self.manager.events.count("ACTION_STAGE5D"), 1)
 
 
