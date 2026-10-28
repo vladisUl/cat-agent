@@ -51,9 +51,29 @@ class OllamaUsageProbe:
         except Exception:
             return CheckResult(False, 'usage_network_error')
         try:
-            usage = data['limits']['monthly']['usage']
-            if isinstance(usage, bool) or not isinstance(usage, (int, float)) or not math.isfinite(usage) or usage < 0:
-                raise ValueError('invalid usage')
+            limits = data['limits']
+            if not isinstance(limits, dict):
+                raise ValueError('invalid limits')
+            # Older accounts exposed a monthly fraction. Newer responses
+            # use independent session and weekly usage fractions instead.
+            # If either newer window is present, BOTH are mandatory.
+            windows = []
+            if 'monthly' in limits:
+                windows.append('monthly')
+            if 'session' in limits or 'weekly' in limits:
+                if 'session' not in limits or 'weekly' not in limits:
+                    raise ValueError('incomplete usage windows')
+                windows.extend(('session', 'weekly'))
+            if not windows:
+                raise ValueError('missing usage windows')
+            usages = []
+            for window in windows:
+                usage = limits[window]['usage']
+                if (isinstance(usage, bool) or not isinstance(usage, (int, float))
+                        or not math.isfinite(usage) or usage < 0):
+                    raise ValueError('invalid usage')
+                usages.append(usage)
         except (KeyError, TypeError, ValueError, OverflowError):
             return CheckResult(False, 'usage_invalid_response')
-        return CheckResult(False, 'quota_exhausted') if usage >= 1.0 else CheckResult(True)
+        # Reaching ANY reported limit means NOT_READY; never fail open.
+        return CheckResult(False, 'quota_exhausted') if any(value >= 1.0 for value in usages) else CheckResult(True)
