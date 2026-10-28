@@ -51,6 +51,19 @@ def main(argv: list[str] | None = None) -> int:
     if bool(args.model) != bool(args.system_file):
         parser.error('--model and --system-file must be used together')
     logging.basicConfig(level=getattr(logging, args.log_level))
+    if args.enable_task_worker:
+        # Check the shared service BEFORE loading and warming the LiteRT
+        # Engine. A second local Task SYSTEM must never be started as fallback.
+        from task_system.client import TaskRPC
+        from orchestration.tasks import TaskStoreError
+        try:
+            result = TaskRPC(args.task_socket).call('system', 'ping')
+            if result != 'TASK_SYSTEM_READY':
+                raise TaskStoreError('unexpected TASK SYSTEM handshake')
+        except TaskStoreError as exc:
+            print(f'Shared TASK SYSTEM unavailable at {args.task_socket}: {exc}',
+                  file=sys.stderr)
+            return 2
     manager = None
     if args.model:
         from orchestration_tools.litert_runtime import build_native_manager

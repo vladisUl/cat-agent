@@ -106,3 +106,23 @@ CORE, им нужны разные HTTP/WS-порты. Выбор CORE разд�
 
 Обычная домашняя конфигурация запускает один Web gateway и выбирает нужный CORE
 через стандартный launcher.
+
+## Новый native LiteRT CORE рядом с OpenAI
+
+Отдельная native-реализация работает параллельно со старым OpenAI CORE,
+подключаясь к **тому же** TASK SYSTEM, но к собственному IPC:
+
+```text
+OpenAI CORE:         /run/cat-agent/openai.sock
+Native LiteRT CORE:  /run/cat-agent/litert-tools.sock
+Shared TASK SYSTEM:  /run/cat-agent/tasks.sock
+```
+
+`./start_native_core.sh` запускает native CORE по активному CPU-профилю
+`litert` из `cat-agent.yaml`. Его терминал — `./start_tui_tools.sh`.
+Старый `./start_tui.sh litert` **не переключается** на native CORE:
+он продолжает обращаться к прежнему LiteRT-порту
+`/run/cat-agent/litert.sock`. Для совместного режима сейчас
+запускайте OpenAI и **только один** LiteRT CORE (native или старый).
+
+Полная схема, ограничения и команды: [shared-native-core.md](shared-native-core.md).
