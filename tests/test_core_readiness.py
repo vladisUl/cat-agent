@@ -96,6 +96,37 @@ class OllamaReadinessTest(unittest.TestCase):
         quota.check.return_value = CheckResult(False, 'quota_exhausted')
         self.assertEqual(probe.check().reason, 'quota_exhausted')
 
+    def test_ollama_detects_configured_cloud_model_missing_before_usage(self):
+        quota = Mock()
+        quota.check.return_value = CheckResult(True)
+        fetch = Mock(return_value={'models': [
+            {'name': 'beam:cloud', 'model': 'beam:cloud'},
+            {'name': 'glm-5.3-flash:cloud', 'model': 'glm-5.3-flash:cloud'},
+        ]})
+        probe = OpenAIReadiness(
+            'http://127.0.0.1:11434/v1', mode='ollama',
+            model='gemma4:31b-cloud', fetch=fetch, usage=quota,
+        )
+        self.assertEqual(probe.check(), CheckResult(False, 'openai_model_unavailable'))
+        quota.check.assert_not_called()
+
+        probe.model = 'glm-5.3-flash:cloud'
+        self.assertEqual(probe.check(), CheckResult(True))
+        quota.check.assert_called_once_with()
+
+    def test_ollama_checks_model_name_and_model_alias(self):
+        quota = Mock()
+        quota.check.return_value = CheckResult(True)
+        probe = OpenAIReadiness(
+            'http://127.0.0.1:11434/v1', mode='ollama',
+            model='beam:cloud',
+            fetch=Mock(return_value={'models': [
+                {'name': 'display-only', 'model': 'beam:cloud'},
+            ]}),
+            usage=quota,
+        )
+        self.assertEqual(probe.check(), CheckResult(True))
+
     def test_local_ollama_unavailable_even_if_quota_ok(self):
         quota = Mock()
         probe = OpenAIReadiness('http://localhost:11434/v1', fetch=Mock(side_effect=TimeoutError()), usage=quota)

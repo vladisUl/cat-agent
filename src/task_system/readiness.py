@@ -33,8 +33,17 @@ class OpenAIReadiness:
                 data = self.fetch(self.url, timeout=HTTP_TIMEOUT)
             except Exception:
                 return CheckResult(False, 'ollama_unavailable')
-            if not isinstance(data, dict) or not isinstance(data.get('models'), list):
+            models = data.get('models') if isinstance(data, dict) else None
+            if not isinstance(models, list):
                 return CheckResult(False, 'ollama_invalid_response')
+            # A running Ollama API does not imply that the configured model
+            # exists. Avoid claiming READY for a stale cat-agent.yaml model.
+            if self.model and not any(
+                isinstance(item, dict)
+                and self.model in (item.get('name'), item.get('model'))
+                for item in models
+            ):
+                return CheckResult(False, 'openai_model_unavailable')
             return self.usage.check()
 
         try:
