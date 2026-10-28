@@ -32,10 +32,10 @@ not the OS `HOME` environment variable.
 
 ```sh
 cd /opt/cat-agent
-PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
+PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
   -m litert_agent_tools \
   --model /storage/models/litert/gemma-4-E4B-it.litertlm \
-  --system-file /opt/prompt/sys_prompt_manager.md \
+  --system-file /opt/cat-agent/prompts_tools/manager.md \
   --enable-shell \
   --shell-timeout 15 \
   --shell-max-output 16384
@@ -94,9 +94,9 @@ CPU-supported .litertlm model. The WSL host must reach the MQTT broker.
 
   cd /opt/cat-agent
   export PYTHONPATH=/opt/cat-agent/src
-  /opt/litert/litert_env/bin/python3 -m litert_agent_tools \
+  /opt/litert-lm-venv/bin/python3 -m litert_agent_tools \
       --model /storage/models/litert/gemma-4-E4B-it.litertlm \
-      --system-file /opt/prompt/sys_prompt_manager.md
+      --system-file /opt/cat-agent/prompts_tools/manager.md
 
 Override MQTT broker/port with CAT_AGENT_MQTT_HOST, CAT_AGENT_MQTT_PORT,
 and LITERT_TOOLS_MQTT_WAIT (default 5 s).
@@ -107,7 +107,7 @@ while retaining the service warm/response exchange. /exit closes everything.
 ## Tests (do not require LiteRT or MQTT broker)
 
   cd /opt/cat-agent
-  PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
+  PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
       -m unittest discover -s tests -p 'test_litert_agent_tools*.py' -v
 
 End-to-end native cloning, actual MQTT and KV prefill performance require a
@@ -153,10 +153,10 @@ The standard `native-tool CALL name=shell` appears only for valid commands.
 
 Test command:
 ```sh
-PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
+PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
   -m litert_agent_tools \
   --model /storage/models/litert/gemma-4-E4B-it.litertlm \
-  --system-file /opt/prompt/sys_prompt_manager.md \
+  --system-file /opt/cat-agent/prompts_tools/manager.md \
   --enable-shell --trace-native-json
 ```
 

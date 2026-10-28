@@ -69,12 +69,13 @@ CAT_AGENT_CORE_SOCKET=/run/cat-agent/<backend>.sock
 Это предназначено для тестов, отладки и административных запусков:
 
 ```sh
-CAT_AGENT_CORE_SOCKET=/tmp/debug.sock ./start_openai_agent.sh
 CAT_AGENT_CORE_SOCKET=/tmp/debug.sock ./start_tui.sh openai
 ```
 
-Override должен совпадать у CORE и интерфейса. Один и тот же путь нельзя
-одновременно отдавать двум работающим CORE.
+Override задаёт адрес подключения интерфейса. Рабочий OpenAI CORE в
+`start_openai_agent.sh` использует фиксированный `openai.sock`;
+эта переменная не меняет его путь. Один адрес нельзя одновременно
+отдавать двум работающим CORE.
 
 CORE блокирует адрес через `<socket>.lock`, удаляет при остановке только свой
 Unix socket и допускает повторный запуск после аварии, если оставшийся socket

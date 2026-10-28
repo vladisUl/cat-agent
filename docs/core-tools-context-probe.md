@@ -1,9 +1,8 @@
 # Проверка нескольких Conversation на одном LiteRT Engine
 
-Эта проверка необходима **до создания пула агентов**. До неё мы
-подтвердили лишь успешное клонирование прогретого BASE и работу одного
-рабочего диалога. Даже одинаковые значения `token_count` сами по себе
-не доказывают независимость хранимого состояния.
+Это самостоятельная **регрессионная проверка изоляции KV** двух живых
+Conversation на одном LiteRT Engine. Одинаковые значения `token_count`
+сами по себе не доказывают независимость хранимого состояния.
 
 ## Как устроен эксперимент
 
@@ -30,14 +29,14 @@
 cd /opt/cat-agent
 git pull --ff-only
 
-PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
+PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
   -m unittest discover -s tests \
   -p 'test_litert_agent_tools*.py' -v
 
-PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
+PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
   -m orchestration_tools.probe_contexts \
   --model /storage/models/litert/gemma-4-E4B-it.litertlm \
-  --system-file /opt/prompt/sys_prompt_manager.md
+  --system-file /opt/cat-agent/prompts_tools/manager.md
 ```
 
 Не нужно задавать `--enable-shell`: в этом пробнике он намеренно

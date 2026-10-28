@@ -1,203 +1,129 @@
-# Совместный TASK SYSTEM: старый OpenAI CORE + native LiteRT CORE (этап 7A)
+# Новый native LiteRT CORE и общий TASK SYSTEM
 
-## Схема
+## Что переделано (октябрь 2026)
 
-Один экземпляр **штатного** `task_system.main`:
+Для `cat-agent` создан **второй, независимый LiteRT CORE** с нативным
+`Conversation` / Tool Calling вместо текстовых команд `/work#`.
+Старые OpenAI CORE и LiteRT CORE не заменены; OpenAI продолжает работать
+с облачными моделями через OpenAI-compatible API.
+
+- `litert_agent_tools` — LiteRT Engine, прогретый BASE, независимые
+  Conversation/KV и Python-инструменты, вызываемые моделью нативно.
+- `orchestration_tools` — MANAGER, отдельные AGENT с собственными промптами,
+  BASE и наборами разрешённых инструментов; `delegate_task` не запускает
+  вложенный инференс прямо из tool callback.
+- `agent_core_tools` — отдельный Unix IPC, один последовательный исполнитель
+  модели, приоритетный scheduler (control / human / hardware / background)
+  и обработчик заданий общего TASK SYSTEM.
+- `TASK SYSTEM` — **один процесс и одна SQLite** для TASK, RUN, таймеров,
+  MQTT-событий, готовности CORE и доставляемых QUERY-результатов.
+  Native worker зарегистрирован как `executor=litert`, облачный —
+  как `executor=openai`.
+- `start_tui_tools.sh` — отдельный TUI для native CORE. QUERY-уведомления
+  сохраняются в общей базе, показываются при подключении и подтверждаются
+  идемпотентным ACK через native CORE.
+
+Старые `tools/*.md`, `/work#` и старые агенты относятся к **прежнему CORE**.
+Не следует считать их протоколом нового native CORE.
+
+## Рабочая схема и запуск
 
 ```text
-                         /run/cat-agent/tasks.sock
-                   TASK SYSTEM / одна SQLite / MQTT / RUN
-                         /                 \
-             worker=openai                 worker=litert
-                    /                         \
-   OpenAI CORE (без изменений)          native LiteRT CORE
-   /run/cat-agent/openai.sock            /run/cat-agent/litert-tools.sock
-          |                                       |
-    старый Web/TUI                           start_tui_tools.sh
+./start_tui.sh openai  -> /run/cat-agent/openai.sock
+                         OpenAI CORE (Ollama Cloud /v1)
+                                     \
+                                      \ executor=openai
+                                       \
+                     /run/cat-agent/tasks.sock
+                        один TASK SYSTEM + SQLite
+                                       /
+                                      / executor=litert
+./start_tui_tools.sh -> /run/cat-agent/litert-tools.sock
+                         native LiteRT CORE (CPU, native tools)
 ```
 
-- Сервис запускается **один раз**: `./start_task_system.sh`.
-- Старый OpenAI CORE запускается **без изменений**: `./start_openai_agent.sh`.
-- Новый native CORE запускается `./start_native_core.sh` и подключается
-  к *этому же* `/run/cat-agent/tasks.sock`. У него **нет** своей SQLite,
-  таймеров, MQTT-monitor и списка TASK.
-- Оба CORE работают независимо; native CORE имеет свой один LiteRT Engine
-  и собственный сериализованный scheduler.
-- База существующего TASK SYSTEM остаётся
-  `/var/lib/cat-agent/task-system.sqlite3`.
-  Этап не изменяет её схему и **не** импортирует тестовую БД из `/tmp`.
-- Старые `start_litert_agent.sh` и `start_litert_agent_tools.sh`
-  не изменены. Первый запускает **старый** LiteRT CORE,
-  второй остаётся низкоуровневым запускателем нового CORE с явными
-  `--model`, `--socket`, `--task-socket` для экспериментов.
-
-## Запуск (разные терминалы)
-
-Перед подключением к рабочему TASK SYSTEM **убедиться**, что его
-реальная SQLite и сохранённые TASK соответствуют ожиданиям:
-при READY-исполнителях существующие периодические и MQTT-задания
-могут автоматически начать выполняться. Не запускать параллельно
-второй TASK SYSTEM на той же базе или том же сокете.
-
-Остановить тестовый CORE и тестовый TASK SYSTEM на сокетах из `/tmp`.
-Их база остаётся нетронутой; удалять её необязательно.
-
-Терминал 1 (только если штатный сервис ещё не запущен):
+Из `/opt/cat-agent` запустить в отдельных терминалах, **если процессы
+ещё не запущены**:
 
 ```bash
-cd /opt/cat-agent
-git pull --ff-only
 ./start_task_system.sh
-```
-
-Ожидаем `TASK_SYSTEM_READY: /run/cat-agent/tasks.sock`.
-Не запускать второй экземпляр сервиса.
-
-Терминал 2:
-
-```bash
-cd /opt/cat-agent
 ./start_openai_agent.sh
-```
-
-Native CORE выполняет проверку `system.ping` общего TASK SYSTEM **до**
-загрузки модели. Если штатный сервис отсутствует, запуск прерывается
-без прогрева LiteRT.
-
-Терминал 3:
-
-```bash
-cd /opt/cat-agent
 ./start_native_core.sh
 ```
 
-Эта команда читает выбранный `litert.active_profile` из
-`cat-agent.yaml` через **существующий** `orchestration.config_env`.
-Native runtime поддерживает здесь **CPU**; GPU-профиль отклоняется
-до запуска модели. Настройки speculative и YNNPACK старого runtime
-не переносятся в native и не заявляются как поддержанные.
-
-Параметры по умолчанию:
-
-| Параметр | Значение |
-|---|---|
-| Native socket | `/run/cat-agent/litert-tools.sock` |
-| TASK SYSTEM socket | `/run/cat-agent/tasks.sock` |
-| Model | `litert.profiles.<active>.model` |
-| CPU threads | `litert.profiles.<active>.cpu_threads`, если задано |
-| MANAGER prompt | `prompts_tools/manager.md` |
-| Agents | `config/native_agents.example.json` |
-| Shell CWD | `runtime.workspace` из `cat-agent.yaml` |
-| Tools | `shell`, native `delegate_task`; MQTT tool пока отключён |
-| Worker | `--enable-task-worker`, executor=`litert` |
-
-Если модель на WSL физически расположена не по пути,
-указанному в `cat-agent.yaml`, **не нужно** ради этого
-менять путь старому CORE; используйте:
+Подключение TUI:
 
 ```bash
-CAT_AGENT_NATIVE_MODEL_PATH=/storage/models/litert/gemma-4-E4B-it.litertlm \
- ./start_native_core.sh
-```
-
-Значение выше приведено из тестовых инструкций 5A/5C: фактическое
-расположение файла должно совпадать с данным компьютером.
-Изменяемые параметры среды:
-`CAT_AGENT_NATIVE_MODEL_PATH`, `CAT_AGENT_NATIVE_CORE_SOCKET`,
-`CAT_AGENT_NATIVE_MANAGER_PROMPT`, `CAT_AGENT_NATIVE_AGENT_CONFIG`,
-`CAT_AGENT_NATIVE_SHELL_CWD`, `CAT_AGENT_TASK_SOCKET`,
-`CAT_AGENT_TOOLS_PYTHON`. При ошибке отсутствующего файла
-native CORE не запускается. Конфликт его сокета с
-`/run/cat-agent/openai.sock`, `/run/cat-agent/litert.sock`
-или TASK SYSTEM отклоняется.
-
-Терминал 4 — новый чат, отдельно от OpenAI TUI:
-
-```bash
-cd /opt/cat-agent
+./start_tui.sh openai
 ./start_tui_tools.sh
 ```
 
-Старый `./start_tui.sh` и selector `scripts/select_core.sh`
-сейчас **не выбирают native CORE**: имя `litert` там означает
-прежний LiteRT CORE и сокет `/run/cat-agent/litert.sock`.
-Не перенаправлять туда Web/Voice, пока их IPC-функции не
-адаптированы. Старый OpenAI интерфейс можно запустить отдельно:
-`./start_tui.sh openai` (но только один TUI-владелец на CORE).
-
-## Распределение TASK
-
-Проверить регистрации:
+Проверка общего состояния и очереди:
 
 ```bash
-cd /opt/cat-agent
 ./task_system.sh cores
+./task_system.sh list
+./task_system.sh runs
 ```
 
-При доступности обеих моделей:
+`./start_tui.sh litert` — **старый** LiteRT CORE на `litert.sock`, а
+**не** новый native CORE. Не запускайте старый и новый LiteRT workers
+одновременно под одним `executor=litert`.
 
-```text
-openai READY
-litert READY
+`start_native_core.sh` берёт CPU-профиль из `cat-agent.yaml`
+(`litert.active_profile`), `prompts_tools/manager.md`, 
+`config/native_agents.example.json` и каталог работы `runtime.workspace`.
+Для другой модели можно указать `CAT_AGENT_NATIVE_MODEL_PATH`, для другого
+Python — `CAT_AGENT_TOOLS_PYTHON`. Рабочее Python-окружение WSL:
+`/opt/litert-lm-venv/bin/python3`.
+
+## Режим готовности облачного CORE
+
+Текущий профиль `openai.profiles.cloud` использует:
+
+```yaml
+base_url: http://127.0.0.1:11434/v1
+model: gemma4:31b-cloud
+readiness: openai
 ```
 
-Политика существующего TASK SYSTEM не меняется:
+`readiness: openai` проверяет `/v1/models` и наличие модели,
+**но не проверяет квоту**. `readiness: ollama` дополнительно проверяет
+`/api/tags` и облачную квоту через недокументированный `/api/usage`;
+изменение его схемы может дать `usage_invalid_response`.
+`executor=auto` предпочитает OpenAI при READY, затем LiteRT. Поэтому при
+`readiness: openai` исчерпание облачной квоты само по себе **не**
+переведёт задания на LiteRT.
 
-- `executor=auto`: выбирает READY OpenAI, иначе READY LiteRT.
-  При отсутствии READY оба оставляют RUN в `pending`.
-- `executor=litert`: исполняет native CORE, **если только**
-  старый LiteRT CORE не запущен параллельно. Оба зарегистрировались
-  бы под одним backend `litert`. Пока для миграции запускайте
-  только **один** из двух LiteRT CORE.
-- `executor=openai`: только старый OpenAI CORE.
-- `offered` может переиздаваться после исчезновения executor;
-  начатый `running` не переигрывается после падения CORE.
-- Старые TASK с фиксированным `executor=litert` не переписываются
-  автоматически. Native AGENT принимает лишь skills, разрешённые
-  в его JSON-конфигурации; неподдерживаемые задания отложит.
+## Нынешние границы / недоделки
 
-Проверка без опасных side effects: сначала посмотреть
-`./task_system.sh list`, затем на **разовом безопасном**
-`shell pwd` создать отдельный TASK (с удалением/остановкой
-по окончании). Не менять исполнителей существующих рабочих задач
-ради проверки.
+- Native CORE поддерживает **только CPU**; GPU, YNNPACK и speculative
+  режимы старого LiteRT CORE в него не перенесены.
+- Один Engine исполняет вызовы последовательно. Начатый
+  `Conversation.send_message()` и его native tool-chain не прерываются
+  планировщиком посередине.
+- Рабочий native launcher включает `shell` и `delegate_task`, но
+  запускается с `--disable-mqtt`; MQTT инструменты native CORE по
+  умолчанию недоступны. `shell` выполняется с правами процесса, не sandbox.
+- Web и Voice пока используют старые CORE и их IPC. Переноса истории
+  человеческого диалога между CORE нет.
+- Старый OpenAI TUI/Web не читает автоматически новый QUERY inbox.
+  Native QUERY надо смотреть в `start_tui_tools.sh`.
+- Прохождение unit-тестов не доказывает поведение реальной Gemma:
+  переключение KV, вызовы инструментов, TASK/QUERY и отказы ещё нужно
+  проверять на целевой машине.
 
-## Уведомления и границы
-
-Native QUERY-отчёты сохраняются в **общей** SQLite TASK SYSTEM.
-Новый `start_tui_tools.sh` получает их через native CORE и
-подтверждает `task_query_ack` по `run_id`.
-
-**Пока старый OpenAI TUI/Web не получает автоматически**
-`notifications.list` из этого нового общего QUERY inbox. Поэтому
-native-уведомления следует читать через native TUI или через RPC.
-Это ограничение интерфейса, а не разделение SQLite.
-
-Звук, Web и автоматическое переключение пользовательской сессии
-между двумя CORE в 7A не реализуются. Связь TASK SYSTEM не
-передаёт контекст личного диалога между моделями.
-
-## Автоматические тесты
+## Проверка после изменений
 
 ```bash
 cd /opt/cat-agent
 git pull --ff-only
-PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
- -m unittest discover -s tests -p 'test_shared_native_core.py' -v
-
-PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
- -m unittest discover -s tests -p 'test_agent_core_tools*.py' -v
-
-PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
- -m unittest discover -s tests -p 'test_task_system*.py' -v
+PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
+  -m unittest discover -s tests -v
 ```
 
-`test_shared_native_core.py`: совместное состояние READY,
-приоритет `auto`, закрепление `litert`, fallback при
-NOT_READY OpenAI и общий SQLite QUERY inbox; также проверка
-разбора параметров запускателя, CPU-only, раннего TASK SYSTEM ping
-и запрета конфликтующих сокетов. Все тесты используют фальшивую модель и временную
-SQLite, **никакого** рабочего сервиса не запускают.
-
-Работоспособность обоих реальных CORE на одной машине и
-доставка живых QUERY проверяются отдельно на WSL после тестов.
+Дополнительные документы: [Task SYSTEM](task-system.md),
+[выбор CORE](core-selection.md),
+[проверка изоляции KV](core-tools-context-probe.md).
+Промежуточные отчёты по этапам удалены из рабочего `docs/`, но остаются
+в истории Git.

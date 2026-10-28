@@ -35,7 +35,7 @@ Use a SEPARATE Google LiteRT-LM source checkout at **v0.18.0**:
     python3 src/litert_agent_tools/native_patch/enable_prefill.py /path/to/LiteRT-LM
 
 This edits that specified LiteRT-LM source checkout only. It does NOT modify
-the installed /opt/litert/litert_env package, and installing a plain upstream
+the installed /opt/litert-lm-venv package, and installing a plain upstream
 0.18 wheel again will remove the capability. Rebuild and reinstall a matched
 native library + Python binding into the test environment using the LiteRT-LM
 project's build process. A Python-only edit will NOT work: the new C symbol
@@ -47,10 +47,10 @@ the native package separately. No rebuilt binary is included here.
 ### Verification after rebuilding
 
     cd /opt/cat-agent
-    PYTHONPATH=/opt/cat-agent/src /opt/litert/litert_env/bin/python3 \
+    PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
       -m litert_agent_tools \
       --model /storage/models/litert/gemma-4-E4B-it.litertlm \
-      --system-file /opt/prompt/sys_prompt_manager.md \
+      --system-file /opt/cat-agent/prompts_tools/manager.md \
       --require-prefilled-base
 
 Expected log sequence when the native patch is truly active:

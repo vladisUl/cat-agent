@@ -13,7 +13,21 @@ The current deployment is centered on ARM64 hardware and uses fixed paths such
 as `/opt/cat-agent` and `/opt/model`. Those paths are part of the deployment
 today, not a portability promise.
 
-## Architecture
+## Native LiteRT CORE (October 2026)
+
+The native-tools implementation is **separate** from the legacy LiteRT
+architecture illustrated below. It adds a second LiteRT CORE with native
+`Conversation` tool calling, isolated MANAGER/AGENT KV, priority scheduling,
+shared TASK SYSTEM and a dedicated terminal. It does **not** use `/work#`.
+For current WSL launch commands, sockets, behavior and limitations see
+[docs/shared-native-core.md](docs/shared-native-core.md).
+
+- Cloud/OpenAI terminal: `./start_tui.sh openai`.
+- Native LiteRT terminal: `./start_tui_tools.sh`.
+- Native LiteRT CORE: `./start_native_core.sh` (CPU only).
+- `./start_tui.sh litert` still connects to the **legacy** LiteRT CORE.
+
+## Architecture (legacy CORE and shared services)
 
 ```text
                          human interfaces

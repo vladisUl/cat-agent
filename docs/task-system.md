@@ -149,7 +149,9 @@ Task SYSTEM не восстанавливает READY из SQLite после с�
 нужно новое подтверждение работающего CORE.
 
 LiteRT READY означает, что загрузка модели и инициализация runtime завершены.
-Для OpenAI дополнительно каждые 30 секунд проверяются:
+Для OpenAI CORE каждые 30 секунд выполняется проверка, зависящая от
+`openai.profiles.<active>.readiness` в `cat-agent.yaml`.
+В режиме `ollama` проверяются:
 
 1. Локальный Ollama: GET `/api/tags` на сервере из `CAT_AGENT_API_BASE_URL`
    (например, `http://localhost:11434/v1` → `http://localhost:11434/api/tags`).
@@ -157,9 +159,19 @@ LiteRT READY означает, что загрузка модели и иниц�
 2. Облачная квота: GET `https://ollama.com/api/usage` с Bearer-ключом из
    **environment процесса OpenAI CORE**, переменная `OLLAMA_API_KEY`.
 
+В режиме `openai` выполняется только запрос `GET /v1/models` и проверка
+точного идентификатора модели, **без проверки квоты**. Это подходит
+для текущей конфигурации Ollama Cloud, но исчерпание облачной квоты
+не переключит auto-TASK на LiteRT, пока `/v1/models` продолжает
+отвечать.
+
 Адаптер недокументированного usage endpoint изолирован в `ollama_usage.py`.
-Текущая схема — `limits.monthly.usage`: число меньше 1 означает доступную квоту,
-от 1 включительно — `quota_exhausted`. Ответы 401/403 дают `credentials_invalid`.
+Поддерживаются поля `limits.monthly.usage` (старые аккаунты) и пара
+`limits.session.usage` + `limits.weekly.usage` (новые ответы).
+Для готовности каждое сообщённое значение должно быть конечным числом
+от 0 включительно до 1 не включительно; достижение любого лимита даёт
+`quota_exhausted`. Неполная пара session/weekly даёт
+`usage_invalid_response`. Ответы 401/403 дают `credentials_invalid`.
 Ошибка сети/API, некорректный JSON или новая неизвестная схема дают NOT_READY.
 Пропущенное поле, строка вместо числа, отрицательное значение и NaN не считаются
 подтверждением доступной квоты. При отсутствии ключа причина — `missing_api_key`.
