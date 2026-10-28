@@ -26,6 +26,8 @@ class LocalRPC:
         self.engine = engine
         self.peer = peer
         self.fail_finish_once = False
+        self.fail_publish_once = False
+        self.fail_publish_reply_once = False
         self.requests = []
 
     def call(self, target, operation, *args, **kwargs):
@@ -33,7 +35,13 @@ class LocalRPC:
         if target == "worker" and operation == "finish" and self.fail_finish_once:
             self.fail_finish_once = False
             raise TaskStoreError("test RPC timeout after inference")
+        if target == "worker" and operation == "publish_result" and self.fail_publish_once:
+            self.fail_publish_once = False
+            raise TaskStoreError("test QUERY store unavailable before write")
         response = self.engine.call(target, operation, args, kwargs, peer=self.peer)
+        if target == "worker" and operation == "publish_result" and self.fail_publish_reply_once:
+            self.fail_publish_reply_once = False
+            raise TaskStoreError("test QUERY store response lost AFTER commit")
         return json.loads(json.dumps(
             response,
             default=lambda obj: asdict(obj) if is_dataclass(obj) else obj,
@@ -182,15 +190,57 @@ class TaskWorkerTests(unittest.TestCase):
         self.manager.process_task_query = report
         self.make_task(method="query")
         self.assertTrue(self.worker.poll_once())
-        deadline = time.monotonic() + 3
-        while not summaries and time.monotonic() < deadline:
-            time.sleep(.005)
+        self.wait_model_done()
+        self.assertEqual(summaries, [])  # No IPC hint before durable commit.
+        self.assertFalse(self.worker.poll_once())  # STORE, notify, FINISH.
         self.assertEqual(len(summaries), 1)
         self.assertEqual(self.manager.events, ["TASK_TEST_ACTION", "query-manager"])
         self.assertEqual(summaries[0]["task_id"], 1)
         self.assertIn("TASK QUERY summary", summaries[0]["text"])
         self.assertEqual(self.manager.agent_chat.working_kv_tokens, 200)
         self.assertFalse(self.worker.poll_once())  # Flush finish, no new RUN.
+        self.assertEqual(next(iter(self.engine.runs.values()))["state"], "done")
+
+    def test_query_store_outage_does_not_publish_or_rerun_model(self):
+        from orchestration_tools.contracts import ManagerTurn
+        events = []
+        self.worker.on_query_result = events.append
+        self.manager.process_task_query = (
+            lambda _id, _text, **_kw: ManagerTurn("reply", "Сводка QUERY")
+        )
+        self.rpc.fail_publish_once = True
+        self.make_task(method="query")
+        self.assertTrue(self.worker.poll_once())
+        self.wait_model_done()
+        self.assertFalse(self.worker.poll_once())  # Failed to persist.
+        self.assertEqual(events, [])
+        self.assertEqual(self.worker.snapshot()["pending_query_stores"], 1)
+        self.assertEqual(self.rpc.call("notifications", "list"), [])
+        self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 1)
+        self.assertFalse(self.worker.poll_once())  # Exactly one retry of STORE.
+        self.assertEqual(len(events), 1)
+        self.assertEqual(len(self.rpc.call("notifications", "list")), 1)
+        self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 1)
+        self.assertEqual(next(iter(self.engine.runs.values()))["state"], "done")
+
+    def test_lost_query_store_reply_is_idempotent(self):
+        from orchestration_tools.contracts import ManagerTurn
+        notifications = []
+        self.worker.on_query_result = notifications.append
+        self.manager.process_task_query = (
+            lambda _id, _text, **_kw: ManagerTurn("reply", "Сводка QUERY")
+        )
+        self.rpc.fail_publish_reply_once = True
+        self.make_task(method="query")
+        self.assertTrue(self.worker.poll_once())
+        self.wait_model_done()
+        self.assertFalse(self.worker.poll_once())  # Persisted, reply lost.
+        self.assertEqual(notifications, [])
+        self.assertEqual(len(self.rpc.call("notifications", "list")), 1)
+        self.assertFalse(self.worker.poll_once())  # Same RUN, same immutable data.
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(len(self.rpc.call("notifications", "list")), 1)
+        self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 1)
         self.assertEqual(next(iter(self.engine.runs.values()))["state"], "done")
 
     def test_query_yields_to_human_between_agent_and_manager(self):

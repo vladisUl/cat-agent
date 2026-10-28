@@ -1,4 +1,4 @@
-"""Native CORE -> authoritative Task SYSTEM RPC worker (stage 5A).
+"""Native CORE -> authoritative Task SYSTEM RPC worker (stages 5A–5C).
 
 The shared service owns schedules, MQTT and durable RUN state. This adapter
 only heartbeats, claims offered TASKs, and executes authorized single-turn
@@ -53,6 +53,10 @@ class NativeTaskWorker:
         self._seen: set[str] = set()
         self._reserved: set[str] = set()
         self._pending_finishes: OrderedDict[str, tuple[dict, str]] = OrderedDict()
+        # A QUERY is never finished before its result is durably acknowledged.
+        # During transient outages, retry publishing this immutable payload;
+        # never replay either model invocation or a native tool call.
+        self._pending_results: dict[str, dict] = {}
         self._deferred: dict[str, float] = {}
         self._pending_defers: OrderedDict[str, dict] = OrderedDict()
         self._lock = threading.RLock()
@@ -94,6 +98,34 @@ class NativeTaskWorker:
         with self._lock:
             entries = tuple(self._pending_finishes.items())
         for token, (event, outcome) in entries:
+            with self._lock:
+                result = self._pending_results.get(token)
+            if result is not None:
+                try:
+                    persisted = self._rpc(
+                        "publish_result", run_id=event["run_id"],
+                        offer_id=event["offer_id"], result=result,
+                    )
+                except TaskStoreError as exc:
+                    LOGGER.warning("native-task QUERY STORE pending run=%s: %s",
+                                   event["run_id"], exc)
+                    return False
+                if not persisted:
+                    # The authoritative RUN may have been revoked between
+                    # inference and commit. Never claim the result was saved.
+                    LOGGER.warning("native-task QUERY STORE rejected run=%s",
+                                   event["run_id"])
+                    outcome = "cancelled"
+                else:
+                    LOGGER.info("native-task QUERY STORED run=%s", event["run_id"])
+                    if self.on_query_result is not None:
+                        try:
+                            self.on_query_result(dict(result))
+                        except Exception:
+                            LOGGER.exception("native-task QUERY live notification failed")
+                with self._lock:
+                    self._pending_results.pop(token, None)
+                    self._pending_finishes[token] = (event, outcome)
             try:
                 acknowledged = self._rpc(
                     "finish", run_id=event["run_id"],
@@ -172,22 +204,28 @@ class NativeTaskWorker:
             if turn.kind not in ("reply", "silent"):
                 raise RuntimeError("QUERY manager returned invalid kind")
             outcome = "error" if agent_failed else "done"
-            if turn.kind == "reply" and turn.text.strip() and self.on_query_result:
-                try:
-                    self.on_query_result({
-                        "type": "task_query_result", "task_id": event["task_id"],
-                        "run_id": event["run_id"], "source": event.get("source", ""),
-                        "text": turn.text[:4096], "agent_id": agent_id,
-                        "agent_ok": not agent_failed,
-                    })
-                except Exception:
-                    LOGGER.exception("native-task QUERY result delivery failed run=%s",
-                                     event["run_id"])
+            text = (turn.text[:4096] if turn.kind == "reply" and turn.text.strip()
+                    else f"TASK {event['task_id']}: менеджер не сформировал отчёт")
+            notice = {
+                "type": "task_query_result", "task_id": event["task_id"],
+                "run_id": event["run_id"], "source": event.get("source", ""),
+                "text": text, "agent_id": agent_id,
+                "agent_ok": not agent_failed,
+            }
+            with self._lock:
+                self._pending_results[token] = notice
             LOGGER.info("native-task QUERY MANAGER run=%s kind=%s outcome=%s",
                         event["run_id"], turn.kind, outcome)
         except Exception:
             LOGGER.exception("native-task QUERY manager failed run=%s",
                              event["run_id"])
+            with self._lock:
+                self._pending_results[token] = {
+                    "type": "task_query_result", "task_id": event["task_id"],
+                    "run_id": event["run_id"], "source": event.get("source", ""),
+                    "text": f"TASK {event['task_id']}: ошибка формирования QUERY-отчёта",
+                    "agent_id": agent_id, "agent_ok": False,
+                }
         finally:
             self._finish_started(token, event, agent_id, outcome)
 
@@ -368,6 +406,12 @@ class NativeTaskWorker:
             except Exception:
                 LOGGER.exception("native-task polling failed")
 
+    def list_results(self, *, limit: int = 100) -> list[dict]:
+        return self.rpc.call("notifications", "list", limit=limit)
+
+    def ack_result(self, run_id: str) -> bool:
+        return self.rpc.call("notifications", "ack", run_id)
+
     def is_reserved(self, agent_id: str) -> bool:
         with self._lock:
             return agent_id in self._reserved
@@ -378,6 +422,7 @@ class NativeTaskWorker:
                 "enabled": True, "ready": self._ready,
                 "reserved_agents": sorted(self._reserved),
                 "unacknowledged": len(self._pending_finishes),
+                "pending_query_stores": len(self._pending_results),
                 "offered": len(self._seen),
                 "deferred": len(self._deferred),
                 "pending_defers": len(self._pending_defers),

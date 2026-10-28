@@ -243,14 +243,15 @@ class CoreServer:
                 status["agents"] = self._manager.agent_status()
             if self._task_worker is not None:
                 status["task_worker"] = self._task_worker.snapshot()
-                status["task_query_result_count"] = len(self._query_results)
+                status["task_query_recent_cache"] = len(self._query_results)
             return status
 
     def _publish_task_query_result(self, item: dict) -> None:
-        """Store bounded QUERY output; notify the live human if present.
+        """Send a LIVE hint only after the TASK SYSTEM commits the result.
 
-        Invoked only from the serialized native model worker. The independent
-        tool-free query manager did not touch the human dialogue's KV.
+        The per-process 32-entry cache is diagnostic only: `task_query_results`
+        reads authoritative SQLite and survives a native CORE restart.
+        The independent tool-free query manager did not touch human KV.
         """
         with self._lock:
             run_id = item["run_id"]
@@ -719,16 +720,43 @@ class CoreServer:
                     self._schedule_release(client.session_id)
             client.send({"type": "released"})
             return
-        if message_type == "task_query_results":
+        if message_type in ("task_query_results", "task_query_ack"):
             with self._lock:
                 if self._human is not client:
                     client.send({"type": "busy",
                                  "owner": self._human.name if self._human else None})
                     return
-                client.send({
-                    "type": "task_query_results",
-                    "items": list(self._query_results.values()),
-                })
+            if message_type == "task_query_results":
+                if self._task_worker is None:
+                    items = list(self._query_results.values())
+                else:
+                    try:
+                        items = self._task_worker.list_results()
+                    except Exception as exc:
+                        LOGGER.warning("QUERY inbox unavailable: %s", exc)
+                        client.send({"type": "error", "error": "Task SYSTEM inbox unavailable"})
+                        return
+                client.send({"type": "task_query_results", "items": items})
+                return
+            run_id = message.get("run_id")
+            if not isinstance(run_id, str) or not 0 < len(run_id) <= 128:
+                raise ValueError("task_query_ack requires run_id")
+            if self._task_worker is None:
+                client.send({"type": "error", "error": "TASK inbox not enabled"})
+                return
+            try:
+                acknowledged = self._task_worker.ack_result(run_id)
+            except Exception as exc:
+                LOGGER.warning("QUERY inbox ACK unavailable: %s", exc)
+                client.send({"type": "error", "error": "Task SYSTEM inbox unavailable"})
+                return
+            if acknowledged:
+                with self._lock:
+                    self._query_results.pop(run_id, None)
+            client.send({
+                "type": "task_query_acked", "run_id": run_id,
+                "acknowledged": bool(acknowledged),
+            })
             return
         if message_type == "hardware_probe":
             self._submit_hardware_probe(client, message)

@@ -19,6 +19,9 @@ from orchestration.system_events import SystemRuntime, SystemEvent, TaskTimerSpe
 LOGGER = logging.getLogger(__name__)
 
 TERMINAL = {"done", "error", "cancelled", "interrupted"}
+MAX_QUERY_TEXT = 4096
+MAX_PENDING_QUERY_RESULTS = 1024
+MAX_ACKED_QUERY_RESULTS = 128
 
 
 def process_identity(pid: int) -> str:
@@ -98,6 +101,7 @@ class TaskEngine:
             self.events = OwnedEvents(Path(event_file), import_legacy=row is None)
             self.runtime = SystemRuntime(self.tasks)
             self.runs = {}
+            self.query_results = {}  # RUN-keyed, durable in the existing state row.
             if row is not None:
                 self._restore(json.loads(row[0]))
             else:
@@ -126,7 +130,8 @@ class TaskEngine:
         return dict(tasks=[asdict(t) for t in self.tasks.list()],
                     events=[asdict(e) for e in self.events.snapshot()],
                     timers=timers(self.runtime.task_timer_snapshot()),
-                    legacy_timers=timers(self.runtime.timer_snapshot()), runs=self.runs)
+                    legacy_timers=timers(self.runtime.timer_snapshot()), runs=self.runs,
+                    query_results=self.query_results)
 
     def _save(self):
         body = json.dumps(self._snapshot(), ensure_ascii=False, allow_nan=False)
@@ -150,6 +155,7 @@ class TaskEngine:
         self.runtime._task_timers = timers(data['timers'], TaskTimerSpec, 'task_id')
         self.runtime._timers = timers(data.get('legacy_timers', []), TimerSpec, 'name')
         self.runs = data['runs']
+        self.query_results = data.get("query_results", {})
 
     def _current(self, run):
         task = self.tasks.get(run['event']['task_id'])
@@ -282,6 +288,25 @@ class TaskEngine:
                 return self._queue(SystemEvent(source, name, value or '', time.monotonic(), task.task_id, task.generation))
             if method == 'submit_event':
                 return self._queue(SystemEvent(**args[0]))
+        if target == 'notifications':
+            if method == 'list':
+                limit = kwargs.get('limit', 100)
+                if type(limit) is not int or not 1 <= limit <= 100:
+                    raise TaskStoreError('invalid notification list limit')
+                return [
+                    dict(item['payload'])
+                    for item in self.query_results.values()
+                    if not item['acked']
+                ][:limit]
+            if method == 'ack':
+                if len(args) != 1 or not isinstance(args[0], str):
+                    raise TaskStoreError('ack requires run_id')
+                record = self.query_results.get(args[0])
+                if record is None:
+                    return False
+                record['acked'] = True
+                self._prune_query_results()
+                return True
         if target == 'worker':
             return self._worker(method, kwargs, peer)
         raise TaskStoreError(f"unsupported Task SYSTEM operation: {target}.{method}")
@@ -353,6 +378,64 @@ class TaskEngine:
         if self._policy(run) == 'auto':
             run['executor'] = None
 
+    def _prune_query_results(self):
+        """Only ACKED records may be evicted; unacked records never expire."""
+        acked = [key for key, value in self.query_results.items() if value['acked']]
+        for key in acked[:-MAX_ACKED_QUERY_RESULTS]:
+            del self.query_results[key]
+
+    def _publish_query_result(self, kw, peer):
+        run_id = kw.get('run_id')
+        offer_id = kw.get('offer_id')
+        owner = kw.get('owner')
+        payload = kw.get('result')
+        if not isinstance(run_id, str) or not run_id or not isinstance(offer_id, str):
+            raise TaskStoreError('publish_result requires RUN and offer IDs')
+        if not isinstance(payload, dict) or set(payload) != {
+                'type', 'run_id', 'task_id', 'source', 'agent_id', 'agent_ok', 'text'}:
+            raise TaskStoreError('invalid QUERY result fields')
+        if (payload['type'] != 'task_query_result' or payload['run_id'] != run_id
+                or type(payload['task_id']) is not int
+                or not isinstance(payload['source'], str)
+                or not isinstance(payload['agent_id'], str) or not payload['agent_id']
+                or type(payload['agent_ok']) is not bool
+                or not isinstance(payload['text'], str)
+                or not payload['text'].strip()
+                or len(payload['text']) > MAX_QUERY_TEXT):
+            raise TaskStoreError('invalid QUERY result payload')
+        # Reject invalid Unicode before the transaction/Unix JSON boundary.
+        try:
+            for value in (payload['text'], payload['source'], payload['agent_id']):
+                value.encode('utf-8', errors='strict')
+        except UnicodeError as exc:
+            raise TaskStoreError('invalid QUERY result Unicode') from exc
+        # Immutable after the first commit, including after FINISH or ACK.
+        existing = self.query_results.get(run_id)
+        if existing is not None:
+            if (existing['owner'] != owner or existing['peer'] != peer
+                    or existing['offer_id'] != offer_id):
+                return False
+            if existing['payload'] != payload:
+                raise TaskStoreError('conflicting QUERY result for same RUN')
+            return True
+        run = self.runs.get(run_id)
+        if (run is None or run['owner'] != owner or run['peer'] != peer
+                or run['event'].get('offer_id') != offer_id
+                or run['state'] != 'running' or not self._current(run)
+                or payload['task_id'] != run['event']['task_id']
+                or payload['source'] != run['event']['source']):
+            return False
+        task = self.tasks.get(payload['task_id'])
+        if task is None or task.method != 'query':
+            return False
+        if sum(not item['acked'] for item in self.query_results.values()) >= MAX_PENDING_QUERY_RESULTS:
+            raise TaskStoreError('QUERY notification store full; acknowledge old results')
+        self.query_results[run_id] = dict(
+            owner=owner, peer=peer, offer_id=offer_id,
+            payload=dict(payload), acked=False,
+        )
+        return True
+
     def _worker(self, method, kw, peer):
         owner = kw['owner']
         if not peer or not owner:
@@ -377,6 +460,8 @@ class TaskEngine:
                 worker.update(ready=False, reason='stopping', last_seen=self.clock() - self.lease_seconds)
             self._reconcile()
             return True
+        if method == 'publish_result':
+            return self._publish_query_result(kw, peer)
         if method == 'pull':
             executor = kw['executor']
             if executor not in {'litert', 'openai'}:
