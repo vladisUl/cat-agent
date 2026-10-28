@@ -335,7 +335,12 @@ class TaskWorkerTests(unittest.TestCase):
         self.assertEqual(self.manager.events, [])
         # Offer is allowed to return to the next pull, since no model ran.
         self.assertEqual(self.worker.snapshot()["reserved_agents"], [])
+        # An unanswered BEGIN may have committed server-side. The uncertain
+        # grant is held for a FINISH-only cleanup, not treated as never seen.
+        self.assertEqual(self.worker.snapshot()["unacknowledged"], 1)
+        self.assertFalse(self.worker.poll_once())
         self.assertEqual(self.worker.snapshot()["offered"], 0)
+        self.assertEqual(next(iter(self.engine.runs.values()))["state"], "pending")
 
 
 class TaskWorkerUnixTests(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""Native CORE -> authoritative Task SYSTEM RPC worker (stages 5A–5C).
+"""Native CORE -> authoritative Task SYSTEM RPC worker (stages 5A–5D).
 
 The shared service owns schedules, MQTT and durable RUN state. This adapter
 only heartbeats, claims offered TASKs, and executes authorized single-turn
@@ -57,6 +57,12 @@ class NativeTaskWorker:
         # During transient outages, retry publishing this immutable payload;
         # never replay either model invocation or a native tool call.
         self._pending_results: dict[str, dict] = {}
+        # One immutable AGENT result per started QUERY. While the second
+        # model boundary waits for Task SYSTEM, we retain only this result
+        # in RAM; neither AGENT nor its tool calls are ever repeated.
+        self._query_inflight: dict[str, tuple[dict, str, str, bool]] = {}
+        self._query_waiting: set[str] = set()
+        self._query_scheduled: set[str] = set()
         self._deferred: dict[str, float] = {}
         self._pending_defers: OrderedDict[str, dict] = OrderedDict()
         self._lock = threading.RLock()
@@ -184,15 +190,23 @@ class NativeTaskWorker:
         """Second model boundary: QUERY manager is distinct from human chat."""
         token = event["offer_id"]
         outcome = "error"
+        wait_for_rpc = False
         try:
+            if not self._can_run():
+                outcome = "interrupted"
+                return
             # TASK SYSTEM is authoritative on every cooperative model boundary.
-            # A stopped/reassigned TASK must not generate a fresh report.
+            # An RPC outage is UNKNOWN, not revocation. Defer only the
+            # validation + manager step, never replay AGENT or native tools.
             try:
                 still_valid = self._rpc(
                     "valid", run_id=event["run_id"], offer_id=token,
                 )
-            except TaskStoreError:
-                still_valid = False  # Fail closed on unavailable RPC.
+            except TaskStoreError as exc:
+                LOGGER.warning("native-task QUERY VALID unavailable run=%s: %s",
+                               event["run_id"], exc)
+                wait_for_rpc = True
+                return
             if not still_valid:
                 outcome = "cancelled"
                 LOGGER.info("native-task QUERY revoked before manager run=%s",
@@ -227,7 +241,41 @@ class NativeTaskWorker:
                     "agent_id": agent_id, "agent_ok": False,
                 }
         finally:
-            self._finish_started(token, event, agent_id, outcome)
+            with self._lock:
+                self._query_scheduled.discard(token)
+                if wait_for_rpc:
+                    self._query_waiting.add(token)
+                else:
+                    self._query_inflight.pop(token, None)
+                    self._query_waiting.discard(token)
+            if not wait_for_rpc:
+                self._finish_started(token, event, agent_id, outcome)
+
+    def _retry_query_boundaries(self) -> None:
+        """Schedule retry on the model worker; never infer on the RPC thread."""
+        with self._lock:
+            pending = [
+                (token, self._query_inflight[token])
+                for token in self._query_waiting
+                if token not in self._query_scheduled and token in self._query_inflight
+            ]
+            for token, _ in pending:
+                self._query_scheduled.add(token)
+        for token, (event, agent_id, result_text, agent_failed) in pending:
+            try:
+                self.scheduler.submit(
+                    "hardware" if event.get("source") == "mqtt" else "background",
+                    lambda event=event, agent_id=agent_id, result_text=result_text,
+                           agent_failed=agent_failed: self._complete_query(
+                               event, agent_id, result_text, agent_failed,
+                           ),
+                    continuation=True,
+                )
+            except RuntimeError:
+                with self._lock:
+                    self._query_scheduled.discard(token)
+                LOGGER.info("native-task QUERY retry not admitted during CORE shutdown")
+                return
 
     def _select_agent(self, task: dict) -> str | None:
         required = task.get("skills")
@@ -262,6 +310,7 @@ class NativeTaskWorker:
             return False
         if not self._finish_pending() or not self._flush_defers():
             return False  # No new execution behind unacknowledged RPC replies.
+        self._retry_query_boundaries()
         with self._lock:
             if len(self._seen) >= MAX_UNACKNOWLEDGED:
                 return False
@@ -341,25 +390,40 @@ class NativeTaskWorker:
             if self._select_agent_for_reserved(agent_id) is False:
                 LOGGER.info("native-task AGENT BUSY run=%s; not beginning", event["run_id"])
                 return
+            # BEGIN can commit on the server even when its reply is lost.
+            # Record uncertain admission BEFORE RPC. FINISH(offered) requeues
+            # an unstarted offer; FINISH(running) marks it interrupted.
+            started = True
             try:
                 allowed = self._rpc(
                     "begin", run_id=event["run_id"], offer_id=token,
                 )
             except TaskStoreError:
-                LOGGER.warning("native-task BEGIN unavailable run=%s; not executing", event["run_id"])
+                outcome = "interrupted"
+                # If BEGIN never committed, FINISH(offered) requeues the RUN.
+                # Do not immediately reclaim that same uncertain offer in
+                # the poll cycle that flushes FINISH.
+                with self._lock:
+                    self._deferred[event["run_id"]] = self.clock() + 2.0
+                LOGGER.warning("native-task BEGIN reply unknown run=%s; no model call",
+                               event["run_id"])
                 return
             if not allowed:
+                outcome = "cancelled"
                 LOGGER.info("native-task REVOKED before start run=%s", event["run_id"])
                 return
-            started = True
             try:
                 valid = self._rpc(
                     "valid", run_id=event["run_id"], offer_id=token,
                 )
             except TaskStoreError:
-                valid = False  # Fail closed: NEVER act without authoritative validity.
+                outcome = "interrupted"
+                LOGGER.warning("native-task VALID reply unknown run=%s; no model call",
+                               event["run_id"])
+                return
             if not valid:
-                LOGGER.info("native-task revoked/unverifiable before model run=%s",
+                outcome = "cancelled"
+                LOGGER.info("native-task revoked before model run=%s",
                             event["run_id"])
                 return
             instruction = task["text"]
@@ -372,14 +436,24 @@ class NativeTaskWorker:
                         event["run_id"], agent_id, outcome)
             if task["method"] == "query":
                 # Yield to interactive requests BEFORE the second model call.
-                # A started RUN stays reserved until QUERY manager completes.
-                self.scheduler.submit(
-                    "hardware" if event.get("source") == "mqtt" else "background",
-                    lambda: self._complete_query(
+                # Track queued continuations: shutdown may discard the queue
+                # before the manager callback starts.
+                with self._lock:
+                    self._query_inflight[token] = (
                         event, agent_id, result.text[:4096], agent_failed,
-                    ),
-                    continuation=True,
-                )
+                    )
+                try:
+                    self.scheduler.submit(
+                        "hardware" if event.get("source") == "mqtt" else "background",
+                        lambda: self._complete_query(
+                            event, agent_id, result.text[:4096], agent_failed,
+                        ),
+                        continuation=True,
+                    )
+                except Exception:
+                    with self._lock:
+                        self._query_inflight.pop(token, None)
+                    raise
                 handed_off = True
         except Exception:
             LOGGER.exception("native-task FAILED run=%s (never automatically replay)",
@@ -423,6 +497,8 @@ class NativeTaskWorker:
                 "reserved_agents": sorted(self._reserved),
                 "unacknowledged": len(self._pending_finishes),
                 "pending_query_stores": len(self._pending_results),
+                "pending_query_validations": len(self._query_waiting),
+                "query_continuations": len(self._query_inflight),
                 "offered": len(self._seen),
                 "deferred": len(self._deferred),
                 "pending_defers": len(self._pending_defers),
@@ -433,7 +509,16 @@ class NativeTaskWorker:
         if self._thread is not None:
             self._thread.join()
             self._thread = None
-        # Called after scheduler.join(): no native side effects still in flight.
+        # Called after scheduler.join(): no native side effects still in
+        # flight. Any discarded QUERY continuation is terminal: NEVER replay
+        # the AGENT, even across graceful shutdown or process restart.
+        with self._lock:
+            orphaned = tuple(self._query_inflight.items())
+            self._query_inflight.clear()
+            self._query_waiting.clear()
+            self._query_scheduled.clear()
+        for token, (event, agent_id, _text, _failed) in orphaned:
+            self._finish_started(token, event, agent_id, "interrupted")
         self._finish_pending()
         self._flush_defers()
         try:
