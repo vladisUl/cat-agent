@@ -460,8 +460,8 @@ Subsystem notes are kept separate from this overview:
 - [Tool scenarios / legacy skill scripts](docs/skill-scripts.md)
 - [Image input](docs/read-pic.md)
 - [MCP](docs/mcp.md)
-- [LiteRT session warmup](docs/7-sept-session-warmup.md)
-- [Earlier September runtime rollout](docs/6-sept.md)
+- [Native LiteRT CORE and WSL launch](docs/shared-native-core.md)
+- [Native Conversation/KV isolation probe](docs/core-tools-context-probe.md)
 
 ## Project status
 
