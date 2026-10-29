@@ -113,6 +113,12 @@ class CoreManagerTests(unittest.TestCase):
         self.query(sock,payload)
         return self.recv(reader)
 
+    def test_acquire_reports_selected_gpu_backend(self):
+        self.manager.backend_name = 'GPU'
+        sock, reader = self.connect()
+        acquired = self.recv_after_query(sock, reader, {'type': 'acquire', 'client': 'tui'})
+        self.assertEqual(acquired['core']['backend'], 'GPU')
+
     def test_release_resets_context_before_next_owner(self):
         a, r1 = self.connect()
         b, r2 = self.connect()
