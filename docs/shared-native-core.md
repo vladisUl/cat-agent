@@ -100,8 +100,9 @@ readiness: openai
 - Native CORE выбирает **CPU или GPU** из `litert.active_profile`.
   GPU и speculative передаются в LiteRT Engine согласно YAML; реальная
   работоспособность GPU, в том числе `Conversation.clone()`, требует
-  проверки с моделью и подходящим драйвером. YNNPACK принудительно
-  отключён из-за UNIMPLEMENTED на проверенном CPU-пути.
+  проверки с моделью и подходящим драйвером. Для CPU передаётся
+  `enable_ynnpack=False` из-за UNIMPLEMENTED на проверенном CPU-пути;
+  для GPU параметр YNNPACK в Engine **не передаётся**.
 - Один Engine исполняет вызовы последовательно. Начатый
   `Conversation.send_message()` и его native tool-chain не прерываются
   планировщиком посередине.
@@ -158,27 +159,27 @@ PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \\
   -m unittest discover -s tests -p 'test_shared_native_core.py' -v
 ```
 
-## Диагностика Tool Calling на E2B GPU (29 октября 2026)
+## Диагностика E2B GPU на llvmpipe (29 октября 2026)
 
-На LiteRT-LM 0.18.0 с `llvmpipe` и профилем E2B GPU зафиксировано:
-MANAGER BASE прогревается (`warm -> OK`, 755 KV), `ctypes`-clone
-сохраняет все 755 токенов. При следующем прогреве AGENT_1 модель
-попыталась вызвать `shell('echo "warm"')` и процесс завершился `SIGSEGV`
-сразу после лога `native-tool DISPATCH`. Сбой воспроизведён и при
-`speculative: false`; speculative не является необходимым условием.
+На LiteRT-LM 0.18.0 с программным Vulkan `llvmpipe` зафиксированы
+нестабильные `Conversation.send_message("warm")` и `SIGSEGV`.
+MANAGER BASE хотя бы в одном запуске прогрелся (`warm -> OK`, 755 KV),
+а `ctypes`-clone сохранил 755 токенов. Однако минимальный тест
+**без cat-agent, инструментов, clone, speculative decoding и без
+нескольких Conversation** также завершился SIGSEGV на первом сообщении.
+Это исключает Tool Calling и clone как необходимые условия сбоя.
+Ранее добавленные изменения прогрева и промпта AGENT_1 отменены.
 
-Чтобы во время **служебного прогрева** не запускались инструменты,
-`NativeConversationChat` временно устанавливает
-`automatic_tool_calling=False` и восстанавливает `True` до клонирования.
-Если модель всё же возвращает `tool_calls` на `warm`, запуск прерывается
-с диагностическим исключением, а не продолжает исполнение tool-chain.
-В `prompts_tools/agent_1.md` добавлена инструкция `warm -> OK` без вызовов.
-
-Это ограничение на время прогрева, **не исправление падения при настоящем
-Tool Calling**. После запуска CORE требуется проверить живой вызов простого
-`shell` через TUI и посмотреть, выдерживает ли GPU продолжение генерации
-после возврата результата. Если снова `SIGSEGV`, нужен native backtrace;
-не следует считать GPU tools исправленными только потому, что CORE стартовал.
+В журнале `gdb` зафиксирован SIGSEGV в нативном потоке по адресу
+`0x0`, без информативных символов стека. Нельзя уверенно назвать
+отказавшую библиотеку на основании этого backtrace. Кроме того,
+в журнале явно присутствует `Expected CpuConfig, got GpuArtisanConfig`
+при передаче `enable_ynnpack=False` в GPU Engine. Параметр теперь
+передаётся **только при backend=cpu** (также исправлены старый
+LiteRT CORE и LiteRT server). Нужно повторить минимальный тест и
+Native CORE без этого параметра, прежде чем делать вывод о причине
+SIGSEGV. Фактический GPU-адаптер в этих опытах — `llvmpipe` (CPU /
+Software), не аппаратный GPU.
 
 ## Проверка после изменений
 
