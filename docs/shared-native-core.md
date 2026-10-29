@@ -118,68 +118,71 @@ readiness: openai
   проверять на целевой машине.
 
 
-## Проверка GPU-профиля E2B
+## Проверенная конфигурация WSL2 / RTX 3050 (29 октября 2026)
 
-В `cat-agent.yaml` уже имеется `litert.profiles.e2b` с GPU-моделью
-`/storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm`, `backend: gpu`,
-`activation_dtype: fp32`, `vision_backend: none`, `speculative: true`.
-После помещения файла модели для проверки смените только
-`litert.active_profile: e4b` на `e2b`. Запустите `./start_native_core.sh`
-обычным способом: launcher передаст GPU, FP32 и speculative в Engine, но **не**
-создаст vision executor, так как E2B GPU-модель не содержит секции
-`tf_lite_vision_encoder`. Без `vision_backend: none` LiteRT 0.18.0 падает при
-`create_conversation()` с `tf_lite_vision_encoder not found`.
-Обратный переход — `active_profile: e4b` (CPU).
-Никакого автоматического отката на CPU при ошибке GPU нет.
-Для первичной диагностики GPU отдельно от speculative можно временно
-выставить `speculative: false` в профиле E2B.
+Проверена работа Gemma 4 E2B через LiteRT-LM 0.18.0, GpuArtisan,
+Dawn/WebGPU и аппаратную NVIDIA GeForce RTX 3050 Laptop GPU (4 ГБ)
+в WSL2. Использована Mesa Dozen 26.0.8, собранная отдельно в
+`/opt/mesa-dozen-dawn-test`; системная Mesa не заменялась.
 
-**Внимание к фактическому GPU:** запись `Selected adapter: llvmpipe ...\nadapterType=CPU / Software` означает программный Vulkan на CPU, а не
-аппаратное GPU-ускорение. Успешный запуск Native CORE с backend=gpu
-сам по себе не доказывает работу на физическом GPU. Для ускорения нужен
-доступный аппаратный Vulkan/WebGPU-адаптер и его драйвер.
+**Ограничение:** в исходном Dozen `fullDrawIndexUint32=false`.
+Dawn отказался создавать Vulkan adapter:
+`Warning: Vulkan fullDrawIndexUint32 feature required` и
+`INTERNAL: No adapters found`. Для эксперимента в
+`src/microsoft/vulkan/dzn_device.c` флаг был изменён на `true`,
+после чего Dozen пересобран. Это **обход проверки**, а не реализация
+возможности и не подтверждение Vulkan conformance; драйвер пригоден
+пока только для тестов.
 
-Отладка в случае ошибки:
+Успешно выполнены следующие проверки:
+
+- Vulkan выбрал `Microsoft Direct3D12 (NVIDIA GeForce RTX 3050 Laptop GPU)`,
+  `arch=ampere`, `backend=Vulkan`, `adapterType=Discrete GPU`.
+- Минимальный Engine/Conversation: `warm -> OK`.
+- Три независимых BASE и три рабочих клона в одном GPU Engine:
+  MANAGER 400, AGENT_1 183, QUERY MANAGER 153 KV-токенов.
+  После работы клонов исходные BASE KV не изменились.
+- Native Python Tool Calling на клоне: реальный вызов `gpu_probe`,
+  модель вернула контрольный код `RTX3050_TOOL_OK`.
+- Native CORE и TUI: обычный диалог, ответ об уличной температуре
+  12,53 °C / влажности 59,87%; запрос делегирования AGENT_1 команды
+  `pwd` дал ответ `/opt/model`. Последний факт — наблюдение
+  ответа модели; для самостоятельного доказательства выполнения
+  команды нужен `native-tool RESULT name=shell` в журнале CORE.
+
+Профиль `litert.profiles.e2b-wsl3050` в `cat-agent.yaml`
+выбран как активный. Он включает GPU, `vision_backend: none`,
+FP16 по умолчанию (без `activation_dtype`), отключённый speculative
+decoding и выбор драйвера из
+`vulkan_icd_dir: /opt/mesa-dozen-dawn-test/share/vulkan/icd.d`
+с `d3d12_adapter: NVIDIA`. Запуск при работающем TASK SYSTEM:
 
 ```bash
 cd /opt/cat-agent
-git pull --ff-only
 ./start_native_core.sh
 ```
 
-После изменения конфигурации или кода перезапустите Native CORE.
-
-Проверки без модели:
+В другом терминале:
 
 ```bash
 cd /opt/cat-agent
-PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \\
-  -m unittest discover -s tests -p 'test_native_backend_selection.py' -v
-PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \\
-  -m unittest discover -s tests -p 'test_shared_native_core.py' -v
+./start_tui_tools.sh
 ```
 
-## Диагностика E2B GPU на llvmpipe (29 октября 2026)
+Launcher сам выбирает единственный JSON-файл ICD из каталога
+(`VK_DRIVER_FILES`) и экспортирует
+`MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`. При отсутствующем или
+неоднозначном ICD процесс завершается до запуска модели.
+Никакие предварительные `export` или длинные CLI-аргументы не нужны.
+При переключении на CPU-профиль старые GPU-overrides удаляются из
+окружения дочернего процесса. Для CPU выберите `litert.active_profile: e4b`
+и перезапустите CORE. Профиль `e2b` остаётся самостоятельным,
+без WSL-специфичного драйвера.
 
-На LiteRT-LM 0.18.0 с программным Vulkan `llvmpipe` зафиксированы
-нестабильные `Conversation.send_message("warm")` и `SIGSEGV`.
-MANAGER BASE хотя бы в одном запуске прогрелся (`warm -> OK`, 755 KV),
-а `ctypes`-clone сохранил 755 токенов. Однако минимальный тест
-**без cat-agent, инструментов, clone, speculative decoding и без
-нескольких Conversation** также завершился SIGSEGV на первом сообщении.
-Это исключает Tool Calling и clone как необходимые условия сбоя.
-Ранее добавленные изменения прогрева и промпта AGENT_1 отменены.
-
-В журнале `gdb` зафиксирован SIGSEGV в нативном потоке по адресу
-`0x0`, без информативных символов стека. Нельзя уверенно назвать
-отказавшую библиотеку на основании этого backtrace. Кроме того,
-в журнале явно присутствует `Expected CpuConfig, got GpuArtisanConfig`
-при передаче `enable_ynnpack=False` в GPU Engine. Параметр теперь
-передаётся **только при backend=cpu** (также исправлены старый
-LiteRT CORE и LiteRT server). Нужно повторить минимальный тест и
-Native CORE без этого параметра, прежде чем делать вывод о причине
-SIGSEGV. Фактический GPU-адаптер в этих опытах — `llvmpipe` (CPU /
-Software), не аппаратный GPU.
+Предупреждения `dzn is not a conformant Vulkan implementation` и
+`GetProfileSummary UNIMPLEMENTED` наблюдались даже при успешной
+генерации. Длительная стабильность, точность вычислений в разных
+сценариях и реальная производительность пока не проверены.
 
 ## Проверка после изменений
 
