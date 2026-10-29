@@ -21,10 +21,13 @@ architecture illustrated below. It adds a second LiteRT CORE with native
 shared TASK SYSTEM and a dedicated terminal. It does **not** use `/work#`.
 For current WSL launch commands, sockets, behavior and limitations see
 [docs/shared-native-core.md](docs/shared-native-core.md).
+The verified WSL2 RTX 3050 profile is `e2b-wsl3050`; it selects patched Mesa
+Dozen from YAML, without manual Vulkan environment exports or long CLI flags.
+
 
 - Cloud/OpenAI terminal: `./start_tui.sh openai`.
 - Native LiteRT terminal: `./start_tui_tools.sh`.
-- Native LiteRT CORE: `./start_native_core.sh` (CPU only).
+- Native LiteRT CORE: `./start_native_core.sh` (CPU/GPU from `litert.active_profile` in `cat-agent.yaml`).
 - `./start_tui.sh litert` still connects to the **legacy** LiteRT CORE.
 
 ## Architecture (legacy CORE and shared services)
