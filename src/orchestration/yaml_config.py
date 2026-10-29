@@ -85,6 +85,8 @@ class LiteRTProfile:
     cpu_threads: int | None
     speculative: bool
     ynnpack: bool
+    vulkan_icd_dir: str | None
+    d3d12_adapter: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +197,8 @@ def _parse_litert(data: Any) -> LiteRTConfig:
         "cpu_threads",
         "speculative",
         "ynnpack",
+        "vulkan_icd_dir",
+        "d3d12_adapter",
     }
     for profile_name, raw in raw_profiles.items():
         if not isinstance(profile_name, str) or not profile_name.strip():
@@ -225,6 +229,17 @@ def _parse_litert(data: Any) -> LiteRTConfig:
             if isinstance(cpu_threads, bool) or not isinstance(cpu_threads, int) or cpu_threads <= 0:
                 raise ValueError(f"{name}.cpu_threads must be a positive integer")
 
+        vulkan_icd_dir = item.get("vulkan_icd_dir")
+        d3d12_adapter = item.get("d3d12_adapter")
+        for key, value in (("vulkan_icd_dir", vulkan_icd_dir),
+                           ("d3d12_adapter", d3d12_adapter)):
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{name}.{key} must be a non-empty string")
+        if backend != "gpu" and (vulkan_icd_dir is not None or d3d12_adapter is not None):
+            raise ValueError(f"{name}: Vulkan/Dozen settings require backend=gpu")
+        if vulkan_icd_dir is not None and not Path(vulkan_icd_dir).is_absolute():
+            raise ValueError(f"{name}.vulkan_icd_dir must be an absolute path")
+
         profiles[profile_name] = LiteRTProfile(
             model=_string(item, "model", name),
             backend=backend,
@@ -233,6 +248,8 @@ def _parse_litert(data: Any) -> LiteRTConfig:
             cpu_threads=cpu_threads,
             speculative=_bool(item, "speculative", name),
             ynnpack=_bool(item, "ynnpack", name),
+            vulkan_icd_dir=vulkan_icd_dir.strip() if vulkan_icd_dir else None,
+            d3d12_adapter=d3d12_adapter.strip() if d3d12_adapter else None,
         )
 
     if active_profile not in profiles:
