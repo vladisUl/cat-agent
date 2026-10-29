@@ -139,7 +139,8 @@ Dawn отказался создавать Vulkan adapter:
 - Vulkan выбрал `Microsoft Direct3D12 (NVIDIA GeForce RTX 3050 Laptop GPU)`,
   `arch=ampere`, `backend=Vulkan`, `adapterType=Discrete GPU`.
 - Минимальный Engine/Conversation: `warm -> OK`.
-- Три независимых BASE и три рабочих клона в одном GPU Engine:
+- Три независимых BASE и три рабочих клона в одном GPU Engine
+  (изолированный тест без инструментов):
   MANAGER 400, AGENT_1 183, QUERY MANAGER 153 KV-токенов.
   После работы клонов исходные BASE KV не изменились.
 - Native Python Tool Calling на клоне: реальный вызов `gpu_probe`,
