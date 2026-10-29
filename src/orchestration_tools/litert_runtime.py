@@ -26,6 +26,7 @@ def build_native_manager(
     shell_max_output: int = 16384, enable_mqtt: bool = True,
     max_context_tokens: int = 4096, max_output_tokens: int = 512,
     cpu_threads: int | None = None, backend_name: str = "cpu",
+    vision_backend_name: str = "cpu",
     activation_dtype: str | None = None, speculative: bool = False,
     temperature: float = 0.2,
     top_p: float = 1.0, trace_native_json: bool = False,
@@ -44,6 +45,8 @@ def build_native_manager(
         raise ValueError('CPU threads must be positive')
     if backend_name not in ('cpu', 'gpu'):
         raise ValueError(f'Native LiteRT backend must be cpu or gpu: {backend_name!r}')
+    if vision_backend_name not in ('cpu', 'gpu', 'none'):
+        raise ValueError(f'Native LiteRT vision backend must be cpu, gpu or none: {vision_backend_name!r}')
     if activation_dtype is not None and activation_dtype not in ('fp32', 'fp16', 'int16', 'int8'):
         raise ValueError(f'Unsupported LiteRT activation dtype: {activation_dtype!r}')
 
@@ -87,20 +90,26 @@ def build_native_manager(
     )
     engine_options = dict(
         backend=model_backend,
-        vision_backend=litert_lm.Backend.CPU(),
         max_num_tokens=max_context_tokens,
         enable_speculative_decoding=speculative,
         # Do not enable YNNPACK here: this path failed with UNIMPLEMENTED.
         enable_ynnpack=False,
         enable_benchmark=True,
     )
+    # LiteRT 0.18.x tries to load tf_lite_vision_encoder whenever
+    # vision_backend is supplied. Text-only E2B GPU models lack that section.
+    # Omitting the argument disables vision executor creation.
+    if vision_backend_name == 'cpu':
+        engine_options['vision_backend'] = litert_lm.Backend.CPU()
+    elif vision_backend_name == 'gpu':
+        engine_options['vision_backend'] = litert_lm.Backend.GPU()
     if activation_dtype is not None:
         activation = litert_lm.ActivationDataType.from_str(activation_dtype)
         if activation is None:
             raise ValueError(f'LiteRT does not support activation dtype {activation_dtype!r}')
         engine_options['activation_data_type'] = activation
-    LOGGER.info('Native LiteRT backend=%s speculative=%s activation_dtype=%s',
-                backend_name, speculative, activation_dtype or 'default')
+    LOGGER.info('Native LiteRT backend=%s vision_backend=%s speculative=%s activation_dtype=%s',
+                backend_name, vision_backend_name, speculative, activation_dtype or 'default')
     engine = litert_lm.Engine(str(model), **engine_options)
     engine.__enter__()
     chat = None
