@@ -39,6 +39,7 @@ class YamlConfigTest(unittest.TestCase):
             "/storage/models/litertlm/gemma-4-E4B-it.litertlm",
         )
         self.assertEqual(config.litert.active.backend, "cpu")
+        self.assertEqual(config.litert.active.vision_backend, "cpu")
         self.assertEqual(config.litert.active.cpu_threads, 8)
         self.assertEqual(config.runtime.http_timeout, 180)
         self.assertEqual(config.voice.wake_words, ("гена",))
@@ -69,6 +70,28 @@ class YamlConfigTest(unittest.TestCase):
         self.assertIn("unset LITERT_AGENT_CPU_THREADS", exported)
         self.assertIn("export LITERT_AGENT_SPECULATIVE=1", exported)
         self.assertIn("export LITERT_AGENT_YNNPACK=0", exported)
+
+    def test_explicit_text_only_gpu_profile_exports_vision_none(self) -> None:
+        source = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        source["litert"]["active_profile"] = "e2b"
+        source["litert"]["profiles"]["e2b"]["vision_backend"] = "none"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "vision-none.yaml"
+            path.write_text(yaml.safe_dump(source, allow_unicode=True),
+                            encoding="utf-8")
+            config = load_app_config(path)
+            exported = self._capture("litert", config_path=path)
+        self.assertEqual(config.litert.active.vision_backend, "none")
+        self.assertIn("export LITERT_AGENT_VISION_BACKEND=none", exported)
+
+    def test_invalid_vision_backend_rejected(self) -> None:
+        source = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        source["litert"]["profiles"]["e2b"]["vision_backend"] = "unexpected"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "invalid-vision.yaml"
+            path.write_text(yaml.safe_dump(source), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "vision_backend"):
+                load_app_config(path)
 
     def test_active_profile_controls_openai_export(self) -> None:
         source = yaml.safe_load((self.config_path).read_text(encoding="utf-8"))
