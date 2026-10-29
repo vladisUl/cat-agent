@@ -363,6 +363,29 @@ class ValidationTests(unittest.TestCase):
             self.assertIs(api.Engine.call_args.kwargs["backend"], api.Backend.GPU.return_value)
             runtime.close()
 
+    def test_gpu_never_passes_cpu_only_ynnpack_even_when_configured(self):
+        with tempfile.TemporaryDirectory() as temp:
+            model = Path(temp) / "model.litertlm"
+            model.touch()
+            for ynnpack in (False, True):
+                with self.subTest(ynnpack=ynnpack):
+                    api = SimpleNamespace(
+                        Engine=Mock(), Backend=SimpleNamespace(CPU=Mock(), GPU=Mock())
+                    )
+                    config = {
+                        "model_path": str(model),
+                        "backend": "gpu",
+                        "vision_backend": "none",
+                        "enable_ynnpack": ynnpack,
+                    }
+                    with patch("importlib.metadata.version", return_value="0.18.0"), \\
+                         patch.dict(sys.modules, {"litert_lm": api}):
+                        runtime = LiteRTRuntime("test", config)
+                    kwargs = api.Engine.call_args.kwargs
+                    self.assertIs(kwargs["backend"], api.Backend.GPU.return_value)
+                    self.assertNotIn("enable_ynnpack", kwargs)
+                    runtime.close()
+
     def test_explicit_text_only_mode_does_not_create_vision_executor(self):
         with tempfile.TemporaryDirectory() as temp:
             model = Path(temp) / "model.litertlm"
