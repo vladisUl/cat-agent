@@ -49,6 +49,7 @@ def _export_litert(config: AppConfig) -> None:
     profile = config.litert.active
     _export("LITERT_AGENT_MODEL_PATH", profile.model)
     _export("LITERT_AGENT_BACKEND", profile.backend)
+    _export("LITERT_AGENT_VISION_BACKEND", profile.vision_backend)
     _export("LITERT_AGENT_SPECULATIVE", "1" if profile.speculative else "0")
     _export("LITERT_AGENT_YNNPACK", "1" if profile.ynnpack else "0")
     if profile.cpu_threads is None:
