@@ -20,6 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--max-output-tokens', type=int, default=512)
     parser.add_argument('--cpu-threads', type=int)
     parser.add_argument('--backend', choices=('cpu', 'gpu'), default='cpu')
+    parser.add_argument('--vision-backend', choices=('cpu', 'gpu', 'none'), default='cpu')
     parser.add_argument('--activation-dtype', choices=('fp32', 'fp16', 'int16', 'int8'))
     parser.add_argument('--speculative', action='store_true')
     parser.add_argument('--temperature', type=float, default=0.2)
@@ -79,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_context_tokens=args.max_context_tokens,
                 max_output_tokens=args.max_output_tokens,
                 cpu_threads=args.cpu_threads, backend_name=args.backend,
+                vision_backend_name=args.vision_backend,
                 activation_dtype=args.activation_dtype,
                 speculative=args.speculative, temperature=args.temperature,
                 top_p=args.top_p, trace_native_json=args.trace_native_json,
