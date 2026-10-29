@@ -39,7 +39,7 @@
                                        /
                                       / executor=litert
 ./start_tui_tools.sh -> /run/cat-agent/litert-tools.sock
-                         native LiteRT CORE (CPU, native tools)
+                         native LiteRT CORE (CPU/GPU, native tools)
 ```
 
 Из `/opt/cat-agent` запустить в отдельных терминалах, **если процессы
@@ -70,7 +70,7 @@
 **не** новый native CORE. Не запускайте старый и новый LiteRT workers
 одновременно под одним `executor=litert`.
 
-`start_native_core.sh` берёт CPU-профиль из `cat-agent.yaml`
+`start_native_core.sh` берёт активный CPU/GPU-профиль из `cat-agent.yaml`
 (`litert.active_profile`), `prompts_tools/manager.md`, 
 `config/native_agents.example.json` и каталог работы `runtime.workspace`.
 Для другой модели можно указать `CAT_AGENT_NATIVE_MODEL_PATH`, для другого
@@ -121,14 +121,32 @@ readiness: openai
 
 В `cat-agent.yaml` уже имеется `litert.profiles.e2b` с GPU-моделью
 `/storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm`, `backend: gpu`,
-`activation_dtype: fp32`, `speculative: true`.
+`activation_dtype: fp32`, `vision_backend: none`, `speculative: true`.
 После помещения файла модели для проверки смените только
 `litert.active_profile: e4b` на `e2b`. Запустите `./start_native_core.sh`
-обычным способом: launcher передаст GPU, FP32 и speculative в Engine.
+обычным способом: launcher передаст GPU, FP32 и speculative в Engine, но **не**
+создаст vision executor, так как E2B GPU-модель не содержит секции
+`tf_lite_vision_encoder`. Без `vision_backend: none` LiteRT 0.18.0 падает при
+`create_conversation()` с `tf_lite_vision_encoder not found`.
 Обратный переход — `active_profile: e4b` (CPU).
 Никакого автоматического отката на CPU при ошибке GPU нет.
 Для первичной диагностики GPU отдельно от speculative можно временно
 выставить `speculative: false` в профиле E2B.
+
+**Внимание к фактическому GPU:** запись `Selected adapter: llvmpipe ...\nadapterType=CPU / Software` означает программный Vulkan на CPU, а не
+аппаратное GPU-ускорение. Успешный запуск Native CORE с backend=gpu
+сам по себе не доказывает работу на физическом GPU. Для ускорения нужен
+доступный аппаратный Vulkan/WebGPU-адаптер и его драйвер.
+
+Отладка в случае ошибки:
+
+```bash
+cd /opt/cat-agent
+git pull --ff-only
+./start_native_core.sh
+```
+
+После изменения конфигурации или кода перезапустите Native CORE.
 
 Проверки без модели:
 
