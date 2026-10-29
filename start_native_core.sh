@@ -59,7 +59,6 @@ args=(
     --shell-cwd "$WORKSPACE"
     --enable-task-worker
     --enable-shell
-    --disable-mqtt
 )
 if [[ -n "${LITERT_AGENT_CPU_THREADS:-}" ]]; then
     args+=(--cpu-threads "$LITERT_AGENT_CPU_THREADS")
