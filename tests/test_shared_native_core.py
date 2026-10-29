@@ -193,6 +193,7 @@ class NativeSharedLauncherTests(unittest.TestCase):
             'printf "export LITERT_AGENT_CPU_THREADS=8\\n"\n'
             'if [ "$NATIVE_FAKE_BACKEND" = gpu ]; then\n'
             '  printf "export LITERT_AGENT_ACTIVATION_DATA_TYPE=fp32\\n"\n'
+            '  printf "export LITERT_AGENT_VISION_BACKEND=none\\n"\n'
             '  printf "export LITERT_AGENT_SPECULATIVE=1\\n"\n'
             'fi\n'
             'printf "export CAT_AGENT_WORKSPACE=/opt/model\\n"\n',
@@ -248,6 +249,7 @@ class NativeSharedLauncherTests(unittest.TestCase):
         self.assertIn("--enable-task-worker", opts)
         self.assertNotIn("--disable-mqtt", opts)
         self.assertEqual(opts[opts.index("--backend") + 1], "cpu")
+        self.assertEqual(opts[opts.index("--vision-backend") + 1], "cpu")
         self.assertNotIn("--speculative", opts)
         self.assertIn("--enable-shell", opts)
 
@@ -268,6 +270,7 @@ class NativeSharedLauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         opts = json.loads(self.capture.read_text(encoding="utf-8"))[2:]
         self.assertEqual(opts[opts.index("--backend") + 1], "gpu")
+        self.assertEqual(opts[opts.index("--vision-backend") + 1], "none")
         self.assertEqual(opts[opts.index("--activation-dtype") + 1], "fp32")
         self.assertIn("--speculative", opts)
         self.assertNotIn("--cpu-threads", opts)
