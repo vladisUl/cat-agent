@@ -9,13 +9,29 @@
 # restart the corresponding process/service. There is no hot reload.
 
 litert:
-  # Selects the profile loaded by the long-running LiteRT CORE.
-  # Change this value, then restart cat-agent-litert.service.
-  active_profile: e4b
+  # Selects the profile loaded by the LiteRT CORE.
+  # Restart the affected CORE (including ./start_native_core.sh) after changes.
+  active_profile: e2b-wsl3050
 
   # Named, known-good LiteRT runtime profiles. Add new profiles here when new
   # models/backends are tested. active_profile must reference one of these keys.
   profiles:
+    # Native CORE on WSL2 with RTX 3050 and separately built, patched Dozen.
+    # This workaround bypasses a Vulkan feature check; it is not conformant.
+    e2b-wsl3050:
+      model: /storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm
+      backend: gpu
+      # Text-only E2B GPU model has no TFLite vision encoder section.
+      vision_backend: none
+      # Omitted activation_dtype = LiteRT default FP16.
+      speculative: false
+      ynnpack: false
+      # Optional absolute directory containing exactly one Vulkan ICD JSON.
+      # Launcher selects the file and sets VK_DRIVER_FILES for native CORE.
+      vulkan_icd_dir: /opt/mesa-dozen-dawn-test/share/vulkan/icd.d
+      # Optional Mesa Dozen D3D12 adapter name substring.
+      d3d12_adapter: NVIDIA
+
     e2b:
       # LiteRT-LM model file.
       model: /storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm
@@ -26,7 +42,7 @@ litert:
       activation_dtype: fp32
       # Enable LiteRT speculative decoding for this profile.
       speculative: true
-      # Enable the YNNPACK CPU delegate. Disabled for this GPU profile.
+      # YNNPACK is CPU-only; native GPU Engine never receives this flag.
       ynnpack: false
 
     e2b-cpu:
