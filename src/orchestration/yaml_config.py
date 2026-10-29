@@ -80,6 +80,7 @@ def _number(
 class LiteRTProfile:
     model: str
     backend: str
+    vision_backend: str
     activation_dtype: str | None
     cpu_threads: int | None
     speculative: bool
@@ -189,6 +190,7 @@ def _parse_litert(data: Any) -> LiteRTConfig:
     allowed = {
         "model",
         "backend",
+        "vision_backend",
         "activation_dtype",
         "cpu_threads",
         "speculative",
@@ -203,6 +205,10 @@ def _parse_litert(data: Any) -> LiteRTConfig:
         backend = _string(item, "backend", name).lower()
         if backend not in {"cpu", "gpu"}:
             raise ValueError(f"{name}.backend must be cpu or gpu")
+        vision_backend = item.get("vision_backend", "cpu")
+        if not isinstance(vision_backend, str) or vision_backend.lower() not in {"none", "cpu", "gpu"}:
+            raise ValueError(f"{name}.vision_backend must be none, cpu or gpu")
+        vision_backend = vision_backend.lower()
 
         activation_dtype = item.get("activation_dtype")
         if activation_dtype is not None:
@@ -222,6 +228,7 @@ def _parse_litert(data: Any) -> LiteRTConfig:
         profiles[profile_name] = LiteRTProfile(
             model=_string(item, "model", name),
             backend=backend,
+            vision_backend=vision_backend,
             activation_dtype=activation_dtype,
             cpu_threads=cpu_threads,
             speculative=_bool(item, "speculative", name),
