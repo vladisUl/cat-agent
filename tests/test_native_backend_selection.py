@@ -78,6 +78,27 @@ class NativeBackendSelectionTests(unittest.TestCase):
         self.assertEqual(settings["vision_backend"], ("cpu", None))
         self.assertFalse(settings["enable_ynnpack"])
 
+    def test_gpu_text_only_omits_vision_backend_entirely(self):
+        settings = self.probe(
+            backend_name="gpu", vision_backend_name="none",
+            activation_dtype="fp32",
+        )
+        self.assertEqual(settings["backend"], ("gpu", None))
+        self.assertNotIn("vision_backend", settings)
+
+    def test_gpu_with_explicit_gpu_vision_backend(self):
+        settings = self.probe(
+            backend_name="gpu", vision_backend_name="gpu",
+        )
+        self.assertEqual(settings["vision_backend"], ("gpu", None))
+
+    def test_unknown_vision_backend_rejected(self):
+        with self.assertRaisesRegex(ValueError, "vision backend"):
+            build_native_manager(
+                self.model, self.prompt, enable_mqtt=False,
+                vision_backend_name="invalid",
+            )
+
     def test_bad_backend_rejected_before_native_library_import(self):
         with self.assertRaisesRegex(ValueError, "backend must be cpu or gpu"):
             build_native_manager(self.model, self.prompt, enable_mqtt=False,
