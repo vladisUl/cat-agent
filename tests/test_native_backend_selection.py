@@ -76,7 +76,7 @@ class NativeBackendSelectionTests(unittest.TestCase):
         self.assertEqual(settings["activation_data_type"], "dtype:fp32")
         self.assertTrue(settings["enable_speculative_decoding"])
         self.assertEqual(settings["vision_backend"], ("cpu", None))
-        self.assertFalse(settings["enable_ynnpack"])
+        self.assertNotIn("enable_ynnpack", settings)
 
     def test_gpu_text_only_omits_vision_backend_entirely(self):
         settings = self.probe(
@@ -85,6 +85,7 @@ class NativeBackendSelectionTests(unittest.TestCase):
         )
         self.assertEqual(settings["backend"], ("gpu", None))
         self.assertNotIn("vision_backend", settings)
+        self.assertNotIn("enable_ynnpack", settings)
 
     def test_gpu_with_explicit_gpu_vision_backend(self):
         settings = self.probe(
