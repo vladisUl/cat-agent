@@ -24,6 +24,32 @@ case "$BACKEND" in
 esac
 # YNNPACK remains disabled in native LiteRT (0.18.x CPU UNIMPLEMENTED).
 
+# The selected YAML profile owns Vulkan driver selection. Never silently
+# inherit a previously exported WSL/Dozen adapter when switching profiles.
+unset VK_DRIVER_FILES MESA_D3D12_DEFAULT_ADAPTER_NAME
+if [[ -n "${LITERT_AGENT_VULKAN_ICD_DIR:-}" ]]; then
+    ICD_DIR="$LITERT_AGENT_VULKAN_ICD_DIR"
+    if [[ ! -d "$ICD_DIR" ]]; then
+        echo "Native CORE Vulkan ICD directory missing: $ICD_DIR" >&2
+        exit 2
+    fi
+    shopt -s nullglob
+    icd_files=("$ICD_DIR"/*.json)
+    shopt -u nullglob
+    if (( ${#icd_files[@]} != 1 )); then
+        echo "Native CORE expected exactly one Vulkan ICD JSON in $ICD_DIR; found ${#icd_files[@]}" >&2
+        exit 2
+    fi
+    export VK_DRIVER_FILES="${icd_files[0]}"
+    unset icd_files
+fi
+if [[ -n "${LITERT_AGENT_D3D12_ADAPTER:-}" ]]; then
+    export MESA_D3D12_DEFAULT_ADAPTER_NAME="$LITERT_AGENT_D3D12_ADAPTER"
+fi
+if [[ "$BACKEND" == "gpu" && -n "${VK_DRIVER_FILES:-}" ]]; then
+    echo "Native CORE Vulkan ICD: $VK_DRIVER_FILES; D3D12 adapter: ${MESA_D3D12_DEFAULT_ADAPTER_NAME:-default}" >&2
+fi
+
 MODEL="${CAT_AGENT_NATIVE_MODEL_PATH:-${LITERT_AGENT_MODEL_PATH:-}}"
 PROMPT="${CAT_AGENT_NATIVE_MANAGER_PROMPT:-${ROOT}/prompts_tools/manager.md}"
 AGENTS="${CAT_AGENT_NATIVE_AGENT_CONFIG:-${ROOT}/config/native_agents.example.json}"
