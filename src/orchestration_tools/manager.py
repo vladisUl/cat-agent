@@ -18,13 +18,14 @@ LOGGER = logging.getLogger(__name__)
 
 class NativeManager:
     def __init__(
-        self, chat, engine, *, model_name: str,
+        self, chat, engine, *, model_name: str, backend_name: str = "cpu",
         agents: AgentPool | None = None, delegations: DelegationBroker | None = None,
         query_chat=None,
     ):
         self.chat = chat
         self.engine = engine
         self.model_name = model_name
+        self.backend_name = backend_name.upper()
         self._closed = False
         self.agents = agents if agents is not None else AgentPool([])
         self.delegations = delegations
