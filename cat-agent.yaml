@@ -1,7 +1,19 @@
 litert:
-  active_profile: e4b
+  active_profile: e2b-wsl3050
 
   profiles:
+    # Verified on WSL2 + RTX 3050 Laptop + patched Mesa Dozen 26.0.8.
+    # The Dozen fullDrawIndexUint32 workaround is experimental.
+    e2b-wsl3050:
+      model: /storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm
+      backend: gpu
+      vision_backend: none
+      speculative: false
+      ynnpack: false
+      # Omit activation_dtype: GpuArtisan defaults to fp16.
+      vulkan_icd_dir: /opt/mesa-dozen-dawn-test/share/vulkan/icd.d
+      d3d12_adapter: NVIDIA
+
     e2b:
       model: /storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm
       backend: gpu
