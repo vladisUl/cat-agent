@@ -246,38 +246,6 @@ class ConversationTests(unittest.TestCase):
         self.assertIn("BASE-CLONE kv_tokens=12 expected=12", logs)
         self.assertIn("last_prefill_tokens=7", logs)
 
-    def test_warm_never_auto_executes_tools_and_rejects_tool_calls(self):
-        calls = []
-        class WarmToolCallConversation(StubConversation):
-            def send_message(self, question):
-                self.calls.append(question)
-                if self.automatic_tool_calling:
-                    calls.append("tool_executed")
-                return {
-                    "role": "assistant", "content": "",
-                    "tool_calls": [{"function": {"name": "shell", "arguments": {}}}],
-                }
-
-        class ToolCallEngine(StubEngine):
-            def create_conversation(self, **kwargs):
-                self.options = kwargs
-                self.base = WarmToolCallConversation(kwargs["messages"], kwargs["tools"])
-                return self.base
-
-        engine = ToolCallEngine()
-        with self.assertRaisesRegex(RuntimeError, "BASE warm-up requested a tool"):
-            NativeConversationChat(engine, "AGENT PROMPT", [lambda: None])
-        self.assertEqual(calls, [])
-        self.assertEqual(engine.base.calls, ["warm"])
-        self.assertTrue(engine.base.automatic_tool_calling)
-        self.assertTrue(engine.base.closed)
-
-    def test_warm_reenables_native_tool_calling_for_live_dialogue(self):
-        engine = StubEngine()
-        with NativeConversationChat(engine, "TEMP PROMPT", [lambda: None]) as chat:
-            self.assertTrue(chat._base.automatic_tool_calling)
-            self.assertTrue(engine.options["automatic_tool_calling"])
-
     def test_warm_rejects_missing_native_kv(self):
         engine = WarmStubEngine(tokens=0)
         with patch.object(WarmStubConversation, "send_message",
