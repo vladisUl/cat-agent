@@ -196,6 +196,12 @@ class NativeSharedLauncherTests(unittest.TestCase):
             '  printf "export LITERT_AGENT_VISION_BACKEND=none\\n"\n'
             '  printf "export LITERT_AGENT_SPECULATIVE=1\\n"\n'
             'fi\n'
+            'if [ -n "$NATIVE_FAKE_VULKAN_DIR" ]; then\n'
+            '  printf "export LITERT_AGENT_VULKAN_ICD_DIR=%s\\n" "$NATIVE_FAKE_VULKAN_DIR"\n'
+            'fi\n'
+            'if [ -n "$NATIVE_FAKE_D3D12_ADAPTER" ]; then\n'
+            '  printf "export LITERT_AGENT_D3D12_ADAPTER=%s\\n" "$NATIVE_FAKE_D3D12_ADAPTER"\n'
+            'fi\n'
             'printf "export CAT_AGENT_WORKSPACE=/opt/model\\n"\n',
             encoding="utf-8",
         )
@@ -205,11 +211,14 @@ class NativeSharedLauncherTests(unittest.TestCase):
             '#!/usr/bin/env python3\n'
             'import json, os, sys\n'
             'with open(os.environ["NATIVE_CAPTURE"], "w", encoding="utf-8") as f:\n'
-            '    json.dump(sys.argv[1:], f)\n',
+            '    json.dump(sys.argv[1:], f)\n'
+            'with open(os.environ["NATIVE_ENV_CAPTURE"], "w", encoding="utf-8") as f:\n'
+            '    json.dump({key: os.getenv(key) for key in ("VK_DRIVER_FILES", "MESA_D3D12_DEFAULT_ADAPTER_NAME")}, f)\n',
             encoding="utf-8",
         )
         self.stub_runtime.chmod(0o755)
         self.capture = self.root / "args.json"
+        self.capture_env = self.root / "environ.json"
 
     def launch(self, **changes):
         # Profile values may be exported in the caller's WSL shell. The
@@ -226,6 +235,7 @@ class NativeSharedLauncherTests(unittest.TestCase):
             "NATIVE_FAKE_PROFILE_MODEL": str(self.model),
             "NATIVE_FAKE_BACKEND": "cpu",
             "NATIVE_CAPTURE": str(self.capture),
+            "NATIVE_ENV_CAPTURE": str(self.capture_env),
         }
         # Ensure host-level admin overrides cannot change default tests.
         env.pop("CAT_AGENT_TASK_SOCKET", None)
@@ -294,6 +304,56 @@ class NativeSharedLauncherTests(unittest.TestCase):
         self.assertIn("--speculative", opts)
         self.assertNotIn("--cpu-threads", opts)
         self.assertNotIn("--disable-mqtt", opts)
+
+    def test_gpu_profile_resolves_only_icd_and_selects_nvidia(self):
+        icd_dir = self.root / "dozen" / "icd.d"
+        icd_dir.mkdir(parents=True)
+        icd = icd_dir / "dzn_icd.x86_64.json"
+        icd.write_text("{}", encoding="utf-8")
+        result = self.launch(
+            NATIVE_FAKE_BACKEND="gpu",
+            NATIVE_FAKE_VULKAN_DIR=icd_dir,
+            NATIVE_FAKE_D3D12_ADAPTER="NVIDIA",
+            VK_DRIVER_FILES="/tmp/inherited-lvp.json",
+            MESA_D3D12_DEFAULT_ADAPTER_NAME="Intel",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        native_env = json.loads(self.capture_env.read_text(encoding="utf-8"))
+        self.assertEqual(native_env["VK_DRIVER_FILES"], str(icd))
+        self.assertEqual(native_env["MESA_D3D12_DEFAULT_ADAPTER_NAME"], "NVIDIA")
+        self.assertIn("Native CORE Vulkan ICD:", result.stderr)
+
+    def test_missing_vulkan_icd_dir_fails_before_engine(self):
+        result = self.launch(
+            NATIVE_FAKE_BACKEND="gpu",
+            NATIVE_FAKE_VULKAN_DIR=self.root / "missing-driver",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Vulkan ICD directory missing", result.stderr)
+        self.assertFalse(self.capture.exists())
+
+    def test_ambiguous_vulkan_icd_dir_fails_before_engine(self):
+        icd_dir = self.root / "icd.d"
+        icd_dir.mkdir()
+        (icd_dir / "a.json").write_text("{}", encoding="utf-8")
+        (icd_dir / "b.json").write_text("{}", encoding="utf-8")
+        result = self.launch(
+            NATIVE_FAKE_BACKEND="gpu",
+            NATIVE_FAKE_VULKAN_DIR=icd_dir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("expected exactly one Vulkan ICD JSON", result.stderr)
+        self.assertFalse(self.capture.exists())
+
+    def test_cpu_profile_clears_inherited_vulkan_override(self):
+        result = self.launch(
+            VK_DRIVER_FILES="/tmp/inherited-lvp.json",
+            MESA_D3D12_DEFAULT_ADAPTER_NAME="NVIDIA",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        native_env = json.loads(self.capture_env.read_text(encoding="utf-8"))
+        self.assertIsNone(native_env["VK_DRIVER_FILES"])
+        self.assertIsNone(native_env["MESA_D3D12_DEFAULT_ADAPTER_NAME"])
 
     def test_unknown_backend_is_rejected_before_engine(self):
         result = self.launch(NATIVE_FAKE_BACKEND="unconfigured")
