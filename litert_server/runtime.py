@@ -35,18 +35,18 @@ class LiteRTRuntime:
         model_path = Path(model_path).expanduser().resolve()
         if not model_path.is_file():
             raise FileNotFoundError(f"Model not found: {model_path}; set model_path in config")
-        backend = config.get("backend", "cpu")
-        if backend == "cpu":
+        backend_name = config.get("backend", "cpu")
+        if backend_name == "cpu":
             backend = litert_lm.Backend.CPU(thread_count=config.get("cpu_thread_count"))
-        elif backend == "gpu":
+        elif backend_name == "gpu":
             backend = litert_lm.Backend.GPU()
         else:
             raise ValueError("backend must be cpu or gpu")
         started = time.monotonic()
-        # 0.18 uses None to select the runtime's YNNPACK default. Do not turn
-        # it off merely because an existing serve config omits this option.
+        # 0.18 uses None to select the CPU YNNPACK default. On GPU the
+        # option must not be passed: GpuArtisanConfig has no CpuConfig.
         engine_options = {}
-        if "enable_ynnpack" in config:
+        if backend_name == "cpu" and "enable_ynnpack" in config:
             engine_options["enable_ynnpack"] = config["enable_ynnpack"]
         # Unlike the CLI, Engine does not resolve a missing vision backend from
         # model metadata. None disables the executor even for a vision model.
