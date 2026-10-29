@@ -97,14 +97,17 @@ readiness: openai
 
 ## Нынешние границы / недоделки
 
-- Native CORE поддерживает **только CPU**; GPU, YNNPACK и speculative
-  режимы старого LiteRT CORE в него не перенесены.
+- Native CORE выбирает **CPU или GPU** из `litert.active_profile`.
+  GPU и speculative передаются в LiteRT Engine согласно YAML; реальная
+  работоспособность GPU, в том числе `Conversation.clone()`, требует
+  проверки с моделью и подходящим драйвером. YNNPACK принудительно
+  отключён из-за UNIMPLEMENTED на проверенном CPU-пути.
 - Один Engine исполняет вызовы последовательно. Начатый
   `Conversation.send_message()` и его native tool-chain не прерываются
   планировщиком посередине.
-- Рабочий native launcher включает `shell` и `delegate_task`, но
-  запускается с `--disable-mqtt`; MQTT инструменты native CORE по
-  умолчанию недоступны. `shell` выполняется с правами процесса, не sandbox.
+- Рабочий native launcher включает `shell`, `delegate_task` и четыре
+  MQTT-инструмента температуры/влажности. `shell` выполняется с правами
+  процесса, не sandbox.
 - Web и Voice пока используют старые CORE и их IPC. Переноса истории
   человеческого диалога между CORE нет.
 - Старый OpenAI TUI/Web не читает автоматически новый QUERY inbox.
@@ -112,6 +115,30 @@ readiness: openai
 - Прохождение unit-тестов не доказывает поведение реальной Gemma:
   переключение KV, вызовы инструментов, TASK/QUERY и отказы ещё нужно
   проверять на целевой машине.
+
+
+## Проверка GPU-профиля E2B
+
+В `cat-agent.yaml` уже имеется `litert.profiles.e2b` с GPU-моделью
+`/storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm`, `backend: gpu`,
+`activation_dtype: fp32`, `speculative: true`.
+После помещения файла модели для проверки смените только
+`litert.active_profile: e4b` на `e2b`. Запустите `./start_native_core.sh`
+обычным способом: launcher передаст GPU, FP32 и speculative в Engine.
+Обратный переход — `active_profile: e4b` (CPU).
+Никакого автоматического отката на CPU при ошибке GPU нет.
+Для первичной диагностики GPU отдельно от speculative можно временно
+выставить `speculative: false` в профиле E2B.
+
+Проверки без модели:
+
+```bash
+cd /opt/cat-agent
+PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \\
+  -m unittest discover -s tests -p 'test_native_backend_selection.py' -v
+PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \\
+  -m unittest discover -s tests -p 'test_shared_native_core.py' -v
+```
 
 ## Проверка после изменений
 
