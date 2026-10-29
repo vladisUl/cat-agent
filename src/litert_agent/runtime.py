@@ -247,9 +247,10 @@ def _create_engine(
         "vision_backend": litert_lm.Backend.CPU(),
         "max_num_tokens": max_num_tokens,
         "enable_speculative_decoding": speculative,
-        "enable_ynnpack": ynnpack,
         "enable_benchmark": True,
     }
+    if backend_name == "cpu":
+        kwargs["enable_ynnpack"] = ynnpack
     if activation_data_type is not None:
         kwargs["activation_data_type"] = activation_data_type
 
