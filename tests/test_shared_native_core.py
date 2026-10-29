@@ -191,6 +191,10 @@ class NativeSharedLauncherTests(unittest.TestCase):
             'printf "export LITERT_AGENT_MODEL_PATH=%s\\n" "$NATIVE_FAKE_PROFILE_MODEL"\n'
             'printf "export LITERT_AGENT_BACKEND=%s\\n" "$NATIVE_FAKE_BACKEND"\n'
             'printf "export LITERT_AGENT_CPU_THREADS=8\\n"\n'
+            'if [ "$NATIVE_FAKE_BACKEND" = gpu ]; then\n'
+            '  printf "export LITERT_AGENT_ACTIVATION_DATA_TYPE=fp32\\n"\n'
+            '  printf "export LITERT_AGENT_SPECULATIVE=1\\n"\n'
+            'fi\n'
             'printf "export CAT_AGENT_WORKSPACE=/opt/model\\n"\n',
             encoding="utf-8",
         )
@@ -242,7 +246,9 @@ class NativeSharedLauncherTests(unittest.TestCase):
         self.assertEqual(opts[opts.index("--model") + 1], str(self.model))
         self.assertEqual(opts[opts.index("--cpu-threads") + 1], "8")
         self.assertIn("--enable-task-worker", opts)
-        self.assertIn("--disable-mqtt", opts)
+        self.assertNotIn("--disable-mqtt", opts)
+        self.assertEqual(opts[opts.index("--backend") + 1], "cpu")
+        self.assertNotIn("--speculative", opts)
         self.assertIn("--enable-shell", opts)
 
     def test_configured_task_socket_and_explicit_model_are_preserved(self):
@@ -257,10 +263,20 @@ class NativeSharedLauncherTests(unittest.TestCase):
         self.assertEqual(args[args.index("--model") + 1], str(alternate_model))
         self.assertEqual(args[args.index("--task-socket") + 1], "/tmp/shared-test.sock")
 
-    def test_gpu_profile_rejected_instead_of_silent_cpu_fallback(self):
+    def test_gpu_profile_selects_gpu_and_passes_profile_options(self):
         result = self.launch(NATIVE_FAKE_BACKEND="gpu")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        opts = json.loads(self.capture.read_text(encoding="utf-8"))[2:]
+        self.assertEqual(opts[opts.index("--backend") + 1], "gpu")
+        self.assertEqual(opts[opts.index("--activation-dtype") + 1], "fp32")
+        self.assertIn("--speculative", opts)
+        self.assertNotIn("--cpu-threads", opts)
+        self.assertNotIn("--disable-mqtt", opts)
+
+    def test_unknown_backend_is_rejected_before_engine(self):
+        result = self.launch(NATIVE_FAKE_BACKEND="unconfigured")
         self.assertEqual(result.returncode, 2)
-        self.assertIn("requires a CPU active profile", result.stderr)
+        self.assertIn("Unsupported Native LiteRT backend", result.stderr)
         self.assertFalse(self.capture.exists())
 
     def test_rejects_socket_collision_with_openai(self):
