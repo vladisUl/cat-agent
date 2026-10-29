@@ -5,6 +5,7 @@ Import LiteRT lazily: stage-1 IPC and stage-2 mock tests need no model installed
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 
 from litert_agent_tools.config import MqttConfig
 from litert_agent_tools.conversation import NativeConversationChat
@@ -16,13 +17,17 @@ from .agents import AgentPool, NativeAgent
 from .delegation import DelegationBroker, create_delegate_tool
 from .manager import NativeManager
 
+LOGGER = logging.getLogger(__name__)
+
 
 def build_native_manager(
     model: Path, system_file: Path, *, enable_shell: bool = False,
     shell_cwd: Path = Path('/opt/model'), shell_timeout: float = 15.0,
     shell_max_output: int = 16384, enable_mqtt: bool = True,
     max_context_tokens: int = 4096, max_output_tokens: int = 512,
-    cpu_threads: int | None = None, temperature: float = 0.2,
+    cpu_threads: int | None = None, backend_name: str = "cpu",
+    activation_dtype: str | None = None, speculative: bool = False,
+    temperature: float = 0.2,
     top_p: float = 1.0, trace_native_json: bool = False,
     agent_config: Path | None = None,
 ) -> NativeManager:
@@ -37,6 +42,10 @@ def build_native_manager(
         raise ValueError('Token limits must be positive')
     if cpu_threads is not None and cpu_threads < 1:
         raise ValueError('CPU threads must be positive')
+    if backend_name not in ('cpu', 'gpu'):
+        raise ValueError(f'Native LiteRT backend must be cpu or gpu: {backend_name!r}')
+    if activation_dtype is not None and activation_dtype not in ('fp32', 'fp16', 'int16', 'int8'):
+        raise ValueError(f'Unsupported LiteRT activation dtype: {activation_dtype!r}')
 
     specs = load_agent_specs(agent_config) if agent_config is not None else ()
     if specs:
@@ -72,12 +81,27 @@ def build_native_manager(
 
     import litert_lm
 
-    engine = litert_lm.Engine(
-        str(model), backend=litert_lm.Backend.CPU(thread_count=cpu_threads),
+    model_backend = (
+        litert_lm.Backend.GPU() if backend_name == 'gpu'
+        else litert_lm.Backend.CPU(thread_count=cpu_threads)
+    )
+    engine_options = dict(
+        backend=model_backend,
         vision_backend=litert_lm.Backend.CPU(),
         max_num_tokens=max_context_tokens,
-        enable_ynnpack=False, enable_benchmark=True,
+        enable_speculative_decoding=speculative,
+        # Do not enable YNNPACK here: this path failed with UNIMPLEMENTED.
+        enable_ynnpack=False,
+        enable_benchmark=True,
     )
+    if activation_dtype is not None:
+        activation = litert_lm.ActivationDataType.from_str(activation_dtype)
+        if activation is None:
+            raise ValueError(f'LiteRT does not support activation dtype {activation_dtype!r}')
+        engine_options['activation_data_type'] = activation
+    LOGGER.info('Native LiteRT backend=%s speculative=%s activation_dtype=%s',
+                backend_name, speculative, activation_dtype or 'default')
+    engine = litert_lm.Engine(str(model), **engine_options)
     engine.__enter__()
     chat = None
     query_chat = None
@@ -118,7 +142,7 @@ def build_native_manager(
         if delegations is not None:
             delegations.enabled = True
         return NativeManager(
-            chat, engine, model_name=model.name,
+            chat, engine, model_name=model.name, backend_name=backend_name,
             agents=AgentPool(agents), delegations=delegations,
             query_chat=query_chat,
         )
