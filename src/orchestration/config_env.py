@@ -52,6 +52,15 @@ def _export_litert(config: AppConfig) -> None:
     _export("LITERT_AGENT_VISION_BACKEND", profile.vision_backend)
     _export("LITERT_AGENT_SPECULATIVE", "1" if profile.speculative else "0")
     _export("LITERT_AGENT_YNNPACK", "1" if profile.ynnpack else "0")
+    # Explicitly reset profile-specific GPU settings when switching to CPU.
+    if profile.vulkan_icd_dir is None:
+        _unset("LITERT_AGENT_VULKAN_ICD_DIR")
+    else:
+        _export("LITERT_AGENT_VULKAN_ICD_DIR", profile.vulkan_icd_dir)
+    if profile.d3d12_adapter is None:
+        _unset("LITERT_AGENT_D3D12_ADAPTER")
+    else:
+        _export("LITERT_AGENT_D3D12_ADAPTER", profile.d3d12_adapter)
     if profile.cpu_threads is None:
         _unset("LITERT_AGENT_CPU_THREADS")
     else:
