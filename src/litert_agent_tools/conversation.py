@@ -125,10 +125,25 @@ class NativeConversationChat:
             self._base = engine.create_conversation(**kwargs)
             initial_kv = _kv_tokens(self._base)
 
-            # First real inference populates the system + tools preface KV.
-            # Unlike a manually rendered prefill, the stock 0.18.x API
-            # necessarily retains this user/assistant exchange in BASE.
-            response = self._base.send_message(warm_message)
+            # Keep the tool schemas in the BASE preface, but never let a
+            # service warm-up execute model-requested tools. Native LiteRT
+            # tool-result continuation can crash on some GPU backends.
+            # This flag is Python-side and is restored before cloning BASE.
+            self._base.automatic_tool_calling = False
+            try:
+                response = self._base.send_message(warm_message)
+            finally:
+                self._base.automatic_tool_calling = True
+            pending_calls = (
+                response.get("tool_calls") if isinstance(response, Mapping)
+                else getattr(response, "tool_calls", None)
+            )
+            if pending_calls:
+                raise RuntimeError(
+                    "BASE warm-up requested a tool; refusing to clone a "
+                    "partially executed tool turn. Instruct the model to "
+                    "answer the service warm message without tools."
+                )
             self._base_warm_reply = response_text(response)
             if not self._base_warm_reply.strip():
                 raise RuntimeError("BASE warm message returned an empty assistant reply")
