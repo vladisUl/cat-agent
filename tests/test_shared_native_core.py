@@ -212,8 +212,12 @@ class NativeSharedLauncherTests(unittest.TestCase):
         self.capture = self.root / "args.json"
 
     def launch(self, **changes):
+        # Profile values may be exported in the caller's WSL shell. The
+        # launcher is tested with a stub config exporter, not the caller's
+        # selected LiteRT profile; inherited LITERT_AGENT_* must not leak in.
         env = {
-            **os.environ,
+            **{key: value for key, value in os.environ.items()
+               if not key.startswith("LITERT_AGENT_")},
             "CAT_AGENT_NATIVE_CONFIG_PYTHON": str(self.stub_config),
             "CAT_AGENT_TOOLS_PYTHON": str(self.stub_runtime),
             "CAT_AGENT_NATIVE_MODEL_PATH": str(self.model),
@@ -252,6 +256,21 @@ class NativeSharedLauncherTests(unittest.TestCase):
         self.assertEqual(opts[opts.index("--vision-backend") + 1], "cpu")
         self.assertNotIn("--speculative", opts)
         self.assertIn("--enable-shell", opts)
+
+    def test_inherited_gpu_profile_cannot_contaminate_cpu_launch(self):
+        with patch.dict(os.environ, {
+            "LITERT_AGENT_BACKEND": "gpu",
+            "LITERT_AGENT_VISION_BACKEND": "none",
+            "LITERT_AGENT_ACTIVATION_DATA_TYPE": "fp32",
+            "LITERT_AGENT_SPECULATIVE": "1",
+        }):
+            result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        opts = json.loads(self.capture.read_text(encoding="utf-8"))[2:]
+        self.assertEqual(opts[opts.index("--backend") + 1], "cpu")
+        self.assertEqual(opts[opts.index("--vision-backend") + 1], "cpu")
+        self.assertNotIn("--activation-dtype", opts)
+        self.assertNotIn("--speculative", opts)
 
     def test_configured_task_socket_and_explicit_model_are_preserved(self):
         alternate_model = self.root / "chosen.litertlm"
