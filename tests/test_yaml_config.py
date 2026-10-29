@@ -84,6 +84,45 @@ class YamlConfigTest(unittest.TestCase):
         self.assertEqual(config.litert.active.vision_backend, "none")
         self.assertIn("export LITERT_AGENT_VISION_BACKEND=none", exported)
 
+    def test_wsl_dozen_gpu_profile_exports_driver_selection(self) -> None:
+        source = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        source["litert"]["active_profile"] = "e2b"
+        profile = source["litert"]["profiles"]["e2b"]
+        profile["vulkan_icd_dir"] = "/opt/mesa-dozen-dawn-test/share/vulkan/icd.d"
+        profile["d3d12_adapter"] = "NVIDIA"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "gpu.yaml"
+            path.write_text(yaml.safe_dump(source, allow_unicode=True), encoding="utf-8")
+            config = load_app_config(path)
+            exported = self._capture("litert", config_path=path)
+        self.assertEqual(config.litert.active.vulkan_icd_dir,
+                         "/opt/mesa-dozen-dawn-test/share/vulkan/icd.d")
+        self.assertEqual(config.litert.active.d3d12_adapter, "NVIDIA")
+        self.assertIn("export LITERT_AGENT_VULKAN_ICD_DIR=/opt/mesa-dozen-dawn-test/share/vulkan/icd.d", exported)
+        self.assertIn("export LITERT_AGENT_D3D12_ADAPTER=NVIDIA", exported)
+
+        cpu_export = self._capture("litert")
+        self.assertIn("unset LITERT_AGENT_VULKAN_ICD_DIR", cpu_export)
+        self.assertIn("unset LITERT_AGENT_D3D12_ADAPTER", cpu_export)
+
+    def test_cpu_rejects_vulkan_driver_configuration(self) -> None:
+        source = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        source["litert"]["profiles"]["e4b"]["vulkan_icd_dir"] = "/tmp/driver"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "bad-gpu-settings.yaml"
+            path.write_text(yaml.safe_dump(source), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "require backend=gpu"):
+                load_app_config(path)
+
+    def test_dozen_icd_directory_must_be_absolute(self) -> None:
+        source = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        source["litert"]["profiles"]["e2b"]["vulkan_icd_dir"] = "relative/dir"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "bad-icd-path.yaml"
+            path.write_text(yaml.safe_dump(source), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must be an absolute path"):
+                load_app_config(path)
+
     def test_invalid_vision_backend_rejected(self) -> None:
         source = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
         source["litert"]["profiles"]["e2b"]["vision_backend"] = "unexpected"
