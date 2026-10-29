@@ -5,6 +5,7 @@ litert:
     e2b:
       model: /storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm
       backend: gpu
+      vision_backend: none
       activation_dtype: fp32
       speculative: true
       ynnpack: false
