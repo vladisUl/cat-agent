@@ -378,7 +378,7 @@ class ValidationTests(unittest.TestCase):
                         "vision_backend": "none",
                         "enable_ynnpack": ynnpack,
                     }
-                    with patch("importlib.metadata.version", return_value="0.18.0"), \\
+                    with patch("importlib.metadata.version", return_value="0.18.0"), \
                          patch.dict(sys.modules, {"litert_lm": api}):
                         runtime = LiteRTRuntime("test", config)
                     kwargs = api.Engine.call_args.kwargs
