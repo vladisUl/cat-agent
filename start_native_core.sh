@@ -56,6 +56,7 @@ args=(
     --task-socket "$TASK_SOCKET"
     --model "$MODEL"
     --backend "$BACKEND"
+    --vision-backend "${LITERT_AGENT_VISION_BACKEND:-cpu}"
     --system-file "$PROMPT"
     --agent-config "$AGENTS"
     --shell-cwd "$WORKSPACE"
