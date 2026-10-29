@@ -92,10 +92,13 @@ def build_native_manager(
         backend=model_backend,
         max_num_tokens=max_context_tokens,
         enable_speculative_decoding=speculative,
-        # Do not enable YNNPACK here: this path failed with UNIMPLEMENTED.
-        enable_ynnpack=False,
         enable_benchmark=True,
     )
+    # YNNPACK belongs to CpuConfig only. Passing it to GpuArtisanConfig
+    # produces INVALID_ARGUMENT even with enable_ynnpack=False.
+    if backend_name == 'cpu':
+        # The tested CPU LiteRT path failed with YNNPACK UNIMPLEMENTED.
+        engine_options['enable_ynnpack'] = False
     # LiteRT 0.18.x tries to load tf_lite_vision_encoder whenever
     # vision_backend is supplied. Text-only E2B GPU models lack that section.
     # Omitting the argument disables vision executor creation.
