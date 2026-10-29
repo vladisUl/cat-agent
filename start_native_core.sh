@@ -16,12 +16,13 @@ fi
 eval "$CONFIG_ENV"
 unset CONFIG_ENV
 
-# Native Engine is CPU-only. Do not silently pretend to support GPU,
-# YNNPACK or speculative settings from the legacy LiteRT profile.
-if [[ "${LITERT_AGENT_BACKEND:-}" != "cpu" ]]; then
-    echo "Native LiteRT CORE currently requires a CPU active profile (litert.active_profile)." >&2
-    exit 2
-fi
+# Honor the active CPU/GPU model profile. Unsupported backends fail explicitly.
+BACKEND="${LITERT_AGENT_BACKEND:-cpu}"
+case "$BACKEND" in
+    cpu|gpu) ;;
+    *) echo "Unsupported Native LiteRT backend: $BACKEND (expected cpu or gpu)" >&2; exit 2 ;;
+esac
+# YNNPACK remains disabled in native LiteRT (0.18.x CPU UNIMPLEMENTED).
 
 MODEL="${CAT_AGENT_NATIVE_MODEL_PATH:-${LITERT_AGENT_MODEL_PATH:-}}"
 PROMPT="${CAT_AGENT_NATIVE_MANAGER_PROMPT:-${ROOT}/prompts_tools/manager.md}"
@@ -54,14 +55,21 @@ args=(
     --socket "$CORE_SOCKET"
     --task-socket "$TASK_SOCKET"
     --model "$MODEL"
+    --backend "$BACKEND"
     --system-file "$PROMPT"
     --agent-config "$AGENTS"
     --shell-cwd "$WORKSPACE"
     --enable-task-worker
     --enable-shell
 )
-if [[ -n "${LITERT_AGENT_CPU_THREADS:-}" ]]; then
+if [[ "$BACKEND" == "cpu" && -n "${LITERT_AGENT_CPU_THREADS:-}" ]]; then
     args+=(--cpu-threads "$LITERT_AGENT_CPU_THREADS")
+fi
+if [[ -n "${LITERT_AGENT_ACTIVATION_DATA_TYPE:-}" ]]; then
+    args+=(--activation-dtype "$LITERT_AGENT_ACTIVATION_DATA_TYPE")
+fi
+if [[ "${LITERT_AGENT_SPECULATIVE:-0}" == "1" ]]; then
+    args+=(--speculative)
 fi
 
 # No second TASK SYSTEM; native worker registers as executor=litert on the
