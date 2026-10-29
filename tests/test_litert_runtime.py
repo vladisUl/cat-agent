@@ -50,5 +50,28 @@ class LiteRTRuntimeTest(unittest.TestCase):
                     self.assertEqual(kwargs["enable_ynnpack"], enabled)
 
 
+    def test_gpu_engine_never_receives_cpu_only_ynnpack_option(self) -> None:
+        backend = object()
+        with (
+            patch.object(runtime, "_backend", return_value=backend),
+            patch.object(runtime.litert_lm, "Engine", FakeEngine),
+        ):
+            for enabled in (False, True):
+                with self.subTest(enabled=enabled):
+                    FakeEngine.calls.clear()
+                    runtime._create_engine(
+                        Path("model.litertlm"),
+                        "gpu",
+                        None,
+                        4096,
+                        False,
+                        enabled,
+                        None,
+                        label="gpu-test",
+                    )
+                    self.assertEqual(len(FakeEngine.calls), 1)
+                    self.assertNotIn("enable_ynnpack", FakeEngine.calls[0][1])
+
+
 if __name__ == "__main__":
     unittest.main()
