@@ -700,7 +700,8 @@ class CoreServer:
                     "core": {
                         "socket": str(self.path),
                         "model": getattr(self._manager, "model_name", None),
-                        "backend": "UNCONNECTED" if self._manager is None else "CPU",
+                        "backend": ("UNCONNECTED" if self._manager is None
+                                    else getattr(self._manager, "backend_name", "CPU")),
                         "stage": (1 if self._manager is None else
                                   5 if self._task_worker is not None else
                                   4 if self._background_enabled else 2),
