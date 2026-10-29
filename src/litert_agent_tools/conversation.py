@@ -130,6 +130,7 @@ class NativeConversationChat:
             # tool-result continuation can crash on some GPU backends.
             # This flag is Python-side and is restored before cloning BASE.
             self._base.automatic_tool_calling = False
+            LOGGER.info("native-conversation BASE-WARM tool_auto_execute=disabled")
             try:
                 response = self._base.send_message(warm_message)
             finally:
