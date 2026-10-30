@@ -98,6 +98,9 @@ fi
 if [[ "${LITERT_AGENT_SPECULATIVE:-0}" == "1" ]]; then
     args+=(--speculative)
 fi
+if [[ "${CAT_AGENT_NATIVE_TRACE_JSON:-0}" == "1" ]]; then
+    args+=(--trace-native-json)
+fi
 
 # No second TASK SYSTEM; native worker registers as executor=litert on the
 # existing service. Old OpenAI CORE keeps executor=openai and its own socket.
