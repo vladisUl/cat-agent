@@ -63,6 +63,10 @@ class RuntimeAgentTests(unittest.TestCase):
             manager_prompt.write_text("Я менеджер", encoding="utf-8")
             agent_prompt = root / "agent.md"
             agent_prompt.write_text("Я агент", encoding="utf-8")
+            (root / "query_manager.md").write_text(
+                "TASK QUERY: Сформулируй результат автономной задачи.",
+                encoding="utf-8",
+            )
             config = root / "agents.json"
             config.write_text(json.dumps({
                 "agents": [{"id": "agent_1", "prompt": "agent.md", "tools": []}]
