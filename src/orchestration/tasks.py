@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace, field
 import json
 import math
+import re
 import uuid
 import threading
 from functools import wraps
@@ -38,6 +39,7 @@ class TaskRecord:
     enabled: bool = True
     generation: str = field(default_factory=lambda: uuid.uuid4().hex)
     executor: str = "auto"
+    agent_id: str | None = None
 
 
 class TaskStore:
@@ -88,6 +90,7 @@ class TaskStore:
                 )
                 enabled = bool(item.get("enabled", True))
                 executor = str(item.get("executor", "litert"))
+                agent_id = item.get("agent_id")
                 self._validate_executor(executor)
             except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
                 raise TaskStoreError(
@@ -101,6 +104,7 @@ class TaskStore:
                 method,
                 skills,
                 timer_period_seconds,
+                agent_id=agent_id,
                 line_number=line_number,
             )
             if task_id in tasks:
@@ -118,6 +122,7 @@ class TaskStore:
                 enabled=enabled,
                 generation=str(item.get("generation") or uuid.uuid4().hex),
                 executor=executor,
+                agent_id=agent_id,
             )
 
         self._tasks = tasks
@@ -133,6 +138,7 @@ class TaskStore:
         timer_period_seconds: float | None = None,
         enabled: bool = True,
         executor: str = "auto",
+        agent_id: str | None = None,
     ) -> TaskRecord:
         self._validate_executor(executor)
         description = description.strip()
@@ -146,6 +152,7 @@ class TaskStore:
             method,
             skills,
             timer_period_seconds,
+            agent_id=agent_id,
             validate_id=False,
         )
 
@@ -162,6 +169,7 @@ class TaskStore:
             timer_period_seconds=timer_period_seconds,
             enabled=enabled,
             executor=executor,
+            agent_id=agent_id,
         )
         self._tasks[task_id] = record
         try:
@@ -253,6 +261,7 @@ class TaskStore:
         skills: tuple[str, ...],
         timer_period_seconds: float | None,
         *,
+        agent_id: str | None = None,
         line_number: int | None = None,
         validate_id: bool = True,
     ) -> None:
@@ -271,6 +280,11 @@ class TaskStore:
             raise TaskStoreError(f"empty task skill name{where}")
         if len(set(skills)) != len(skills):
             raise TaskStoreError(f"duplicate task skill name{where}")
+        if agent_id is not None and (
+            not isinstance(agent_id, str)
+            or not re.fullmatch(r"agent_[1-9][0-9]*", agent_id)
+        ):
+            raise TaskStoreError(f"invalid task agent_id {agent_id!r}{where}")
         if timer_period_seconds is not None and (not math.isfinite(timer_period_seconds) or timer_period_seconds <= 0):
             raise TaskStoreError(f"timer_period_seconds must be > 0{where}")
 
@@ -294,6 +308,7 @@ class TaskStore:
                     "enabled": task.enabled,
                     "generation": task.generation,
                     "executor": task.executor,
+                    "agent_id": task.agent_id,
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),

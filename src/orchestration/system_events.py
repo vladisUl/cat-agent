@@ -141,9 +141,10 @@ class SystemRuntime:
         *,
         method: str = "task",
         executor: str = "auto",
+        agent_id: str | None = None,
     ) -> TaskRecord:
-        if not skills:
-            raise TaskStoreError("periodic task requires at least one skill")
+        if not skills and agent_id is None:
+            raise TaskStoreError("periodic task requires skills or a target agent_id")
         if not math.isfinite(period_seconds) or period_seconds <= 0:
             raise ValueError("period_seconds must be > 0")
 
@@ -156,6 +157,7 @@ class SystemRuntime:
             timer_period_seconds=float(period_seconds),
             enabled=True,
             executor=executor,
+            agent_id=agent_id,
         )
         now = time.monotonic()
         with self._lock:

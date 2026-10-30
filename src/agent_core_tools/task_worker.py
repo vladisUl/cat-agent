@@ -333,6 +333,17 @@ class NativeTaskWorker:
         agents = {
             s["agent_id"]: s["state"] for s in self.manager.agent_status()
         }
+        target = task.get("agent_id")
+        if target is not None:
+            # Native delegated schedules bind to the selected agent.
+            # AGENT retains its entire registered tool set; required skills
+            # are not an instruction to call any particular tool.
+            if (target not in self.permissions or agents.get(target) != "FREE"
+                    or not set(required).issubset(self.permissions[target])
+                    or self.agent_blocked(target)):
+                return None
+            with self._lock:
+                return target if target not in self._reserved else None
         # Never take the server lock while holding the TaskWorker lock:
         # CoreServer admission checks do the reverse (server -> worker).
         for ident, granted in self.permissions.items():
