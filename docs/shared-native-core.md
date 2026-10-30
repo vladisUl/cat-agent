@@ -176,14 +176,17 @@ Dawn отказался создавать Vulkan adapter:
 `vulkan_icd_dir: /opt/mesa-dozen-dawn-test/share/vulkan/icd.d`
 с `d3d12_adapter: NVIDIA`.
 
-**Эксперимент с Vision GPU (30 октября 2026):** активному профилю
-временно задано `vision_backend: gpu`, при неизменных модели,
-`backend: gpu`, драйвере и остальных параметрах. Это **не проверенная**
-конфигурация. Прежняя ошибка `tf_lite_vision_encoder not found`
-указывает на отсутствие нужной секции в контейнере модели; если ошибка
-повторится при GPU Vision, это не доказывает неисправность RTX 3050.
-После проверки верните `vision_backend: none` для восстановленного
-текстового режима.
+**Эксперимент с Vision GPU (30 октября 2026):** первоначальная
+попытка с `gemma-4-E2B-it-gpu.litertlm` и `vision_backend: gpu`
+завершилась ошибкой `tf_lite_vision_encoder not found` при создании
+Conversation: облегчённая GPU-сборка не предоставила требуемый Vision
+encoder. Теперь активному профилю назначен полный файл
+`/storage/models/litertlm/gemma-4-E2B-it.litertlm`, при сохранённых
+`backend: gpu`, `vision_backend: gpu`, FP16 и настройках Dozen/NVIDIA.
+**Работа полной модели с GPU Vision пока не проверена.**
+Для возврата к ранее проверенному текстовому режиму нужно восстановить
+одновременно файл `gemma-4-E2B-it-gpu.litertlm` и
+`vision_backend: none`.
 
 Запуск при работающем SYSTEM CORE:
 
