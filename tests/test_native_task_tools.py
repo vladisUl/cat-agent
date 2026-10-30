@@ -123,6 +123,69 @@ class UnifiedDelegationTests(unittest.TestCase):
         finally:
             self._end()
 
+    def test_start_restores_saved_task_and_timer_without_creating_another(self):
+        self._begin()
+        try:
+            created = self.tool("agent_1", "Читать температуру и писать в файл", 60)
+            self.assertTrue(created["ok"], created)
+            task_id = created["task_id"]
+            before = self.rpc.call("tasks", "require", task_id)
+            stopped = self.management["stop_periodic_query"](str(task_id))
+            self.assertFalse(stopped["enabled"])
+            self.assertIsNone(self.engine.runtime._task_timers[task_id].next_fire_monotonic)
+            started = self.management["start_periodic_query"](str(task_id))
+            self.assertEqual(started, {"ok": True, "task_id": task_id,
+                                       "enabled": True, "already_running": False,
+                                       "period_seconds": 60.0})
+            after = self.rpc.call("tasks", "require", task_id)
+            self.assertTrue(after["enabled"])
+            for field in ("task_id", "text", "timer_period_seconds", "agent_id"):
+                self.assertEqual(after[field], before[field])
+            self.assertNotEqual(after["generation"], before["generation"])
+            timer = self.engine.runtime._task_timers[task_id]
+            self.assertTrue(timer.enabled)
+            self.assertEqual(timer.period_seconds, 60.0)
+            self.assertIsNotNone(timer.next_fire_monotonic)
+            self.assertEqual(len(self.engine.runtime.task_timer_snapshot()), 1)
+            self.assertEqual(len(self.rpc.call("system", "task_snapshot")), 1)
+            self.assertTrue(self.management["list_periodic_queries"]()["tasks"][0]["enabled"])
+            # Already-running start must not change generation or next firing time.
+            generation = after["generation"]
+            next_fire = timer.next_fire_monotonic
+            active = self.management["start_periodic_query"](task_id)
+            self.assertTrue(active["ok"])
+            self.assertTrue(active["already_running"])
+            self.assertEqual(self.rpc.call("tasks", "require", task_id)["generation"],
+                             generation)
+            self.assertEqual(self.engine.runtime._task_timers[task_id].next_fire_monotonic,
+                             next_fire)
+            self.assertEqual(len([c for c in self.rpc.calls if c[1] == "start_task"]), 1)
+        finally:
+            self._end()
+
+    def test_start_rejects_invalid_foreign_deleted_or_outside_turn(self):
+        start = self.management["start_periodic_query"]
+        self.assertEqual(start(1)["error"], "task_management_not_in_active_turn")
+        self._begin()
+        try:
+            for invalid in (0, -1, True, 1.5, "oops"):
+                self.assertEqual(start(invalid)["error"], "task_id must be a positive integer")
+            foreign = self.engine.runtime.create_periodic_task(
+                "OpenAI task", "work", ("shell",), 60,
+                method="query", executor="openai")
+            self.assertEqual(start(foreign.task_id)["error"],
+                             "native periodic QUERY not found")
+            self.assertTrue(self.rpc.call("tasks", "get", foreign.task_id)["enabled"])
+            self.assertEqual(start(98765)["error"], "native periodic QUERY not found")
+            created = self.tool("agent_1", "Следить за датчиком", 60)
+            self.assertTrue(created["ok"])
+            self.assertTrue(self.management["delete_periodic_query"](
+                created["task_id"])["ok"])
+            self.assertEqual(start(created["task_id"])["error"],
+                             "native periodic QUERY not found")
+        finally:
+            self._end()
+
     def test_delete_removes_stopped_task_and_frees_identifier(self):
         self._begin()
         try:

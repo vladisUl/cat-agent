@@ -204,6 +204,36 @@ class NativeTaskController:
         LOGGER.info("native-task-tool STOPPED id=%s", task_id)
         return {"ok": True, "task_id": task_id, "enabled": stopped["enabled"]}
 
+    def start(self, task_id: int) -> dict:
+        """Resume a native periodic TASK with its persisted instruction and timer."""
+        LOGGER.info("native-task-tool START ARG task_id=%r type=%s",
+                    task_id, type(task_id).__name__)
+        if not self._allowed():
+            return {"ok": False, "error": "task_management_not_in_active_turn"}
+        normalized_id = _task_id(task_id)
+        if normalized_id is None:
+            LOGGER.warning("native-task-tool START REJECT invalid task_id=%r", task_id)
+            return {"ok": False, "error": "task_id must be a positive integer"}
+        try:
+            record = self.rpc.call("tasks", "get", normalized_id)
+            if record is None or not self._ours(record):
+                LOGGER.warning("native-task-tool START NOT-FOUND id=%s", normalized_id)
+                return {"ok": False, "error": "native periodic QUERY not found"}
+            if record["enabled"]:
+                # Do not unnecessarily change generation or reset an active timer.
+                LOGGER.info("native-task-tool ALREADY RUNNING id=%s", normalized_id)
+                return {"ok": True, "task_id": normalized_id,
+                        "enabled": True, "already_running": True,
+                        "period_seconds": record["timer_period_seconds"]}
+            started = self.rpc.call("system", "start_task", normalized_id)
+        except (TaskStoreError, OSError, ValueError) as exc:
+            return self._rpc_error("START", exc)
+        LOGGER.info("native-task-tool STARTED id=%s period=%s",
+                    normalized_id, started["timer_period_seconds"])
+        return {"ok": True, "task_id": normalized_id,
+                "enabled": started["enabled"], "already_running": False,
+                "period_seconds": started["timer_period_seconds"]}
+
     def delete(self, task_id: int) -> dict:
         """Permanently remove one native periodic TASK from the shared service."""
         LOGGER.info("native-task-tool DELETE ARG task_id=%r type=%s",
@@ -236,6 +266,17 @@ def create_task_tools(controller: NativeTaskController) -> list:
         """Получить список периодических QUERY, созданных LiteRT MANAGER."""
         return controller.list_queries()
 
+    def start_periodic_query(task_id: int) -> dict:
+        """Возобновить остановленное периодическое задание LiteRT с прежним периодом.
+
+        Текст задания не изменяется. Первый запуск после одного полного
+        периода; уже работающее задание не перезапускается.
+
+        Args:
+            task_id (int): Номер TASK из delegate_task или list_periodic_queries.
+        """
+        return controller.start(task_id)
+
     def stop_periodic_query(task_id: int) -> dict:
         """Остановить ранее созданный периодический QUERY по номеру задачи.
 
@@ -255,4 +296,5 @@ def create_task_tools(controller: NativeTaskController) -> list:
         """
         return controller.delete(task_id)
 
-    return [list_periodic_queries, stop_periodic_query, delete_periodic_query]
+    return [list_periodic_queries, start_periodic_query,
+            stop_periodic_query, delete_periodic_query]

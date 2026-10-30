@@ -235,11 +235,13 @@ class RuntimeAgentTests(unittest.TestCase):
                 ]
                 self.assertIn("delegate_task", names[0])
                 self.assertNotIn("create_periodic_query", names[0])
+                self.assertIn("start_periodic_query", names[0])
                 self.assertIn("stop_periodic_query", names[0])
                 self.assertIn("delete_periodic_query", names[0])
                 self.assertIn("list_periodic_queries", names[0])
                 self.assertNotIn("delegate_task", names[1])
                 self.assertIn("delegate_task(agent_id, task, period_seconds)", conversations[0]["messages"][0]["content"])
+                self.assertIn("start_periodic_query", conversations[0]["messages"][0]["content"])
                 self.assertIn("stop_periodic_query", conversations[0]["messages"][0]["content"])
                 self.assertIn("delete_periodic_query", conversations[0]["messages"][0]["content"])
                 tool = next(tool for tool in conversations[0]["tools"]
