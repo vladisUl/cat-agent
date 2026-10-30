@@ -21,10 +21,11 @@ TASK, таймеров или очереди запусков.
 ./start_voice.sh
 ```
 
-В этом режиме `scripts/select_core.sh` запрашивает:
+В этом режиме `scripts/select_core.sh` обращается к общему TASK SYSTEM через
+административный режим `start_task_system.sh`:
 
 ```sh
-./task_system.sh cores
+./start_task_system.sh cores
 ```
 
 и выбирает первый READY CORE в порядке:
