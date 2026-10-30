@@ -244,9 +244,12 @@ class CoreServer:
             if self._task_worker is not None:
                 worker_status = self._task_worker.snapshot()
                 status["task_worker"] = worker_status
-                status["tasks"] = worker_status["tasks"]
-                status["task_display_error"] = worker_status["task_display_error"]
-                status["last_agent_runs"] = worker_status["last_agent_runs"]
+                # The TASK inbox adapter supports a minimal snapshot.
+                # Extended native-worker telemetry is optional and must not
+                # prevent a TUI client from acquiring its CORE session.
+                for key in ("tasks", "task_display_error", "last_agent_runs"):
+                    if key in worker_status:
+                        status[key] = worker_status[key]
                 status["task_query_recent_cache"] = len(self._query_results)
             return status
 
