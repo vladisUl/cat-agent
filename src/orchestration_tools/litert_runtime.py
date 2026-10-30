@@ -113,6 +113,10 @@ def build_native_manager(
             "используй create_periodic_query, а НЕ delegate_task или Shell-цикл. "
             "Таймер и уведомления обслуживает TASK SYSTEM. "
             "Для однократного поручения используй delegate_task. "
+            "Для остановки задания по ID используй stop_periodic_query(task_id), "
+            "для просмотра списка — list_periodic_queries(). "
+            "Не утверждай, что остановил или создал задание без ok=true " 
+            "из результата инструмента. "
             "Не утверждай, что регулярное задание создано, пока инструмент "
             "не вернул ok=true и task_id."
         )

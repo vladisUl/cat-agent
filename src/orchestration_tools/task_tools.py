@@ -44,6 +44,37 @@ def _period_seconds(value: object) -> int | None:
     return seconds if 10 <= seconds <= MAX_PERIOD_SECONDS else None
 
 
+def _task_id(value: object) -> int | None:
+    """Decode a positive TASK id exactly; native LiteRT may supply a string."""
+    if type(value) is int:
+        identifier = value
+    elif type(value) is float:
+        if not value.is_integer() or value < 1 or value > 10**15:
+            return None
+        identifier = int(value)
+    elif type(value) is str:
+        raw = value.strip()
+        if not 1 <= len(raw) <= 16:
+            return None
+        whole, dot, fraction = raw.partition(".")
+        if not whole.isascii() or not whole.isdecimal():
+            return None
+        if dot and (not fraction or any(char != "0" for char in fraction)):
+            return None
+        identifier = int(whole)
+    else:
+        return None
+    return identifier if 1 <= identifier <= 10**15 else None
+
+
+_READONLY_MQTT_ACTIONS = {
+    "get_outdoor_weather": "Измерь текущую температуру и влажность на улице",
+    "get_home_climate": "Измерь текущую температуру и влажность дома",
+    "get_aquarium_temperature": "Измерь текущую температуру воды в аквариуме",
+    "get_freezer_temperature": "Измерь текущую температуру в морозильнике",
+}
+
+
 class NativeTaskController:
     """Restrict persistent mutations to an active human MANAGER turn."""
 
@@ -124,11 +155,15 @@ class NativeTaskController:
         description = TASK_PREFIX + instruction[:100]
         # The schedule belongs to SYSTEM, not the model or an AGENT shell.
         # Every timer tick starts an independently bounded single AGENT run.
+        action = _READONLY_MQTT_ACTIONS.get(skill_name, instruction)
         task_text = (
-            "Выполни ОДИН раз следующее действие через нативный инструмент "
-            + skill_name + ". Не организуй циклы, ожидание, sleep, cron или "
-            "собственное расписание. Следующий запуск сделает TASK SYSTEM.\n"
-            "Действие: " + instruction
+            "СЕЙЧАС выполни ОДИН раз: " + action + ". "
+            "Обязательно вызови нативный инструмент " + skill_name + "(), "
+            "дождись его результата, затем сообщи фактические значения "
+            "или причину ошибки. Не отвечай до вызова инструмента. "
+            "Не организуй циклы, ожидание, sleep, cron или собственное "
+            "расписание: следующий запуск сделает TASK SYSTEM.\n"
+            "Дополнительная инструкция: " + instruction
         )
         LOGGER.info(
             "native-task-tool CREATE period=%s skill=%s instruction=%r",
@@ -153,6 +188,7 @@ class NativeTaskController:
     def list_queries(self) -> dict:
         if not self._allowed():
             return {"ok": False, "error": "task_management_not_in_active_turn"}
+        LOGGER.info("native-task-tool LIST periodic queries")
         try:
             records = self.rpc.call("system", "task_snapshot")
         except (TaskStoreError, OSError, ValueError) as exc:
@@ -167,16 +203,23 @@ class NativeTaskController:
             }
             for r in records if self._ours(r)
         ]
+        LOGGER.info("native-task-tool LIST found=%d", len(entries))
         return {"ok": True, "tasks": entries}
 
     def stop(self, task_id: int) -> dict:
+        LOGGER.info("native-task-tool STOP ARG task_id=%r type=%s",
+                    task_id, type(task_id).__name__)
         if not self._allowed():
             return {"ok": False, "error": "task_management_not_in_active_turn"}
-        if type(task_id) is not int or task_id < 1:
+        normalized_id = _task_id(task_id)
+        if normalized_id is None:
+            LOGGER.warning("native-task-tool STOP REJECT invalid task_id=%r", task_id)
             return {"ok": False, "error": "task_id must be a positive integer"}
+        task_id = normalized_id
         try:
             record = self.rpc.call("tasks", "get", task_id)
             if record is None or not self._ours(record):
+                LOGGER.warning("native-task-tool STOP NOT-FOUND id=%s", task_id)
                 return {"ok": False, "error": "native periodic QUERY not found"}
             stopped = self.rpc.call("system", "stop_task", task_id)
         except (TaskStoreError, OSError, ValueError) as exc:

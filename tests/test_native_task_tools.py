@@ -90,9 +90,11 @@ class NativePeriodicTaskTests(unittest.TestCase):
             self.assertEqual(record["executor"], "litert")
             self.assertEqual(record["skills"], ["get_outdoor_weather"])
             self.assertEqual(record["timer_period_seconds"], 60.0)
-            self.assertIn("Выполни ОДИН раз", record["text"])
+            self.assertIn("выполни ОДИН раз", record["text"])
+            self.assertIn("Измерь текущую температуру и влажность на улице", record["text"])
+            self.assertIn("Обязательно вызови нативный инструмент get_outdoor_weather()", record["text"])
             self.assertIn("get_outdoor_weather", record["text"])
-            stopped = self.tools["stop_periodic_query"](item["task_id"])
+            stopped = self.tools["stop_periodic_query"](str(item["task_id"]))
             self.assertEqual(stopped, {
                 "ok": True, "task_id": item["task_id"], "enabled": False,
             })
@@ -163,6 +165,29 @@ class NativePeriodicTaskTests(unittest.TestCase):
                     return
             time.sleep(0.005)
         self.fail(f"QUERY notifications did not reach count {expected}")
+
+    def test_stop_accepts_exact_native_ids_and_rejects_fractional(self):
+        from orchestration_tools.task_tools import _task_id
+        self.assertEqual(_task_id("1"), 1)
+        self.assertEqual(_task_id(" 1.0 "), 1)
+        self.assertEqual(_task_id(1.0), 1)
+        self.assertIsNone(_task_id(True))
+        self.assertIsNone(_task_id("1.5"))
+        self.assertIsNone(_task_id(1.5))
+        self.assertIsNone(_task_id(0))
+        self.assertIsNone(_task_id(float("nan")))
+        self.controller.enabled = True
+        self.controller.begin_turn()
+        try:
+            item = self.controller.create(60, "get_outdoor_weather", "температура")
+            self.assertTrue(item["ok"])
+            before = len(self.rpc.calls)
+            self.assertFalse(self.controller.stop("1.5")["ok"])
+            self.assertEqual(len(self.rpc.calls), before)
+            self.assertEqual(self.controller.stop(float(item["task_id"])),
+                             {"ok": True, "task_id": item["task_id"], "enabled": False})
+        finally:
+            self.controller.finish_turn()
 
     def test_native_period_argument_types_are_normalized_exactly(self):
         self.controller.enabled = True

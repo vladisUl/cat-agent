@@ -248,6 +248,7 @@ class RuntimeAgentTests(unittest.TestCase):
                 self.assertNotIn("create_periodic_query", names[1])
                 self.assertEqual(names[2], [])
                 self.assertIn("ПЕРИОДИЧЕСКИЕ ЗАДАНИЯ", conversations[0]["messages"][0]["content"])
+                self.assertIn("stop_periodic_query", conversations[0]["messages"][0]["content"])
                 tool = next(tool for tool in conversations[0]["tools"]
                             if tool.__name__ == "create_periodic_query")
                 # Even though registered during BASE warm-up, it cannot
