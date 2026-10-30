@@ -104,7 +104,7 @@ class ExternalCommandToolTests(unittest.TestCase):
         }), encoding="utf-8")
         (self.directory / "data").mkdir()
         # Real signature is sufficient: old image_tool reads and validates it.
-        (self.directory / "data" / "tiny.png").write_bytes(b"\\x89PNG\\r\\n\\x1a\\n123")
+        (self.directory / "data" / "tiny.png").write_bytes(bytes.fromhex("89504e470d0a1a0a") + b"123")
         pic, = self.load()
         self.gate.enabled = True
         with patch.dict(sys.modules, {"litert_lm": self.fake_litert}):
@@ -120,6 +120,58 @@ class ExternalCommandToolTests(unittest.TestCase):
         self.assertEqual(ledger.status_code, 0)
         self.assertFalse(measured.execute({"path": "../outside.png"})["ok"])
         self.assertEqual(ledger.status_code, 1)
+
+    def test_model_gets_actual_image_after_native_tool_call(self):
+        from litert_agent_tools.conversation import NativeConversationChat
+
+        (self.directory / "read_pic.json").write_text(json.dumps({
+            "name": "read_pic",
+            "description": "Read image in DATA folder",
+            "handler": "read_pic",
+        }), encoding="utf-8")
+        (self.directory / "data").mkdir()
+        (self.directory / "data" / "tiny.png").write_bytes(
+            bytes.fromhex("89504e470d0a1a0a") + b"123",
+        )
+        self.gate.enabled = True
+        tool, = self.load()
+
+        class FakeConversation:
+            def __init__(self, tools, token_count=0):
+                self.tools = tools
+                self.token_count = token_count
+                self.calls = []
+                self.closed = False
+
+            def send_message(self, message):
+                self.calls.append(message)
+                self.token_count += 10
+                if message == "look at tiny.png":
+                    self.tools[0].execute({"path": "tiny.png"})
+                    return {"content": "image queued"}
+                if isinstance(message, dict):
+                    return {"content": "I can see the picture"}
+                return {"content": "warm ready"}
+
+            def clone(self):
+                return FakeConversation(self.tools, self.token_count)
+
+            def close(self):
+                self.closed = True
+
+        class FakeEngine:
+            def create_conversation(self, **kwargs):
+                return FakeConversation(kwargs["tools"])
+
+        with patch.dict(sys.modules, {"litert_lm": self.fake_litert}):
+            with NativeConversationChat(FakeEngine(), "Test system", [tool]) as chat:
+                self.assertEqual(chat.ask("look at tiny.png"), "I can see the picture")
+                second = chat._working.calls[-1]
+                self.assertEqual(second["role"], "user")
+                self.assertEqual(second["content"][1]["type"], "image")
+                self.assertEqual(second["content"][1]["blob"][:12], "iVBORw0KGgo="[:12])
+                self.assertEqual(chat.execution_tool_calls, 1)
+                self.assertEqual(chat.execution_status_code, 0)
 
     def test_rejects_bad_and_ambiguous_descriptions(self):
         self.write_tool(name="bad-name")
