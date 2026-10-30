@@ -99,26 +99,43 @@ class ToolExecutionLedger:
         self.calls = 0
         self.status_code = 0
 
-    def wrap(self, function):
-        if not callable(function):
-            return function
-        @wraps(function)
-        def measured(*args, **kwargs):
-            try:
-                result = function(*args, **kwargs)
-            except BaseException:
-                if self.active:
-                    self.calls += 1
-                    self.status_code = 1
-                raise
+    def _measure(self, function, *args, **kwargs):
+        try:
+            result = function(*args, **kwargs)
+        except BaseException:
             if self.active:
                 self.calls += 1
-                if isinstance(result, Mapping):
-                    code = result.get("exit_code")
-                    if (result.get("ok") is False or
-                            (type(code) is int and code != 0)):
-                        self.status_code = 1
-            return result
+                self.status_code = 1
+            raise
+        if self.active:
+            self.calls += 1
+            if isinstance(result, Mapping):
+                code = result.get("exit_code")
+                if (result.get("ok") is False or
+                        (type(code) is int and code != 0)):
+                    self.status_code = 1
+        return result
+
+    def wrap(self, function):
+        if not callable(function):
+            if not (hasattr(function, "get_tool_description") and
+                    hasattr(function, "execute")):
+                return function
+            from litert_lm import Tool
+            ledger = self
+
+            class MeasuredTool(Tool):
+                def get_tool_description(self):
+                    return function.get_tool_description()
+
+                def execute(self, param):
+                    return ledger._measure(function.execute, param)
+
+            return MeasuredTool()
+
+        @wraps(function)
+        def measured(*args, **kwargs):
+            return self._measure(function, *args, **kwargs)
         return measured
 
 
