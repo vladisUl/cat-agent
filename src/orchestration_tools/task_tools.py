@@ -177,7 +177,10 @@ class NativeTaskController:
             return {"ok": False, "error": "Already attempted creating a task in this turn; list tasks before retrying"}
         self._create_attempted = True
         instruction = instruction.strip()
-        description = TASK_PREFIX + instruction[:100]
+        description = TASK_PREFIX + (
+            f"Температура на улице -> {filename}"
+            if filename is not None else instruction[:100]
+        )
         # The schedule belongs to SYSTEM, not the model or an AGENT shell.
         # Every timer tick starts an independently bounded single AGENT run.
         if skill_name == RECORD_TOOL_NAME:
