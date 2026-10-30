@@ -15,7 +15,7 @@ from agent_core_tools.native_logging import DEFAULT_LOG_PATH, configure_native_l
 
 
 class NativeLoggingTests(unittest.TestCase):
-    def test_file_stderr_and_private_permissions(self):
+    def test_file_stderr_and_world_readable_permissions(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "logs" / "litert.log"
             stream = io.StringIO()
@@ -32,7 +32,7 @@ class NativeLoggingTests(unittest.TestCase):
                     handler.flush()
                 text = path.read_text(encoding="utf-8")
                 self.assertEqual(actual, path)
-                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
                 self.assertIn("USER -> MANAGER 'привет'", text)
                 self.assertIn("MANAGER -> USER 'ответ'", text)
                 self.assertNotIn("hidden debug event", text)

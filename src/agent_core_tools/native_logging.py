@@ -32,8 +32,8 @@ def configure_native_logging(level: str, *, path: Path | None = None) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     file_handler = logging.FileHandler(destination, encoding="utf-8")
     try:
-        # The log contains complete user/tool text; do not expose it as 0644.
-        os.chmod(destination, 0o600)
+        # Operator policy: readable by all local users (contains user/tool transcript).
+        os.chmod(destination, 0o644)
     except OSError:
         file_handler.close()
         raise
