@@ -138,6 +138,7 @@ def _execute(config: ShellConfig, command: str) -> dict:
         "native-tool RESULT name=shell ok=%s exit_code=%s bytes=%d error=%s elapsed=%.3fs",
         result["ok"], exit_code, len(output), result.get("error"), time.monotonic() - started,
     )
+    LOGGER.info("TOOL shell -> MODEL %r", result)
     return result
 
 

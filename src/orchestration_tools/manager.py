@@ -67,6 +67,7 @@ class NativeManager:
                         return ManagerTurn("silent")
                     LOGGER.info("native-delegation START id=%s agent=%s",
                                 item.call_id, item.agent_id)
+                    LOGGER.info("MANAGER -> %s %r", item.agent_id.upper(), item.task)
                     try:
                         outcome = self.agents.run(item.task, item.agent_id)
                         ok = outcome.state is AgentState.FREE
@@ -74,6 +75,8 @@ class NativeManager:
                     except Exception as exc:
                         LOGGER.exception("Native agent delegation failed: %s", item.agent_id)
                         ok, result_text = False, str(exc)
+                    LOGGER.info("%s -> MANAGER ok=%s text=%r",
+                                item.agent_id.upper(), ok, result_text)
                     LOGGER.info("native-delegation FINISH id=%s agent=%s ok=%s",
                                 item.call_id, item.agent_id, ok)
                     results.append({
@@ -91,6 +94,7 @@ class NativeManager:
                     ensure_ascii=False, separators=(",", ":"),
                 )
                 LOGGER.info("native-delegation REPORT to manager count=%d", len(results))
+                LOGGER.info("SYSTEM -> MANAGER %r", payload)
                 answer = self.chat.ask(
                     "СИСТЕМНОЕ СОБЫТИЕ CAT_AGENT_DELEGATION_RESULTS. "
                     "Ниже фактические результаты поручений AGENT в JSON. "
@@ -119,9 +123,11 @@ class NativeManager:
             "ok": not failed, "result": agent_result[:4096],
         }, ensure_ascii=False, separators=(",", ":"))
         try:
+            LOGGER.info("SYSTEM -> QUERY_MANAGER %r", payload)
             answer = self.query_chat.ask(
                 "SYSTEM_QUERY_RESULT TASK " + str(task_id) + "\n" + payload
             )
+            LOGGER.info("QUERY_MANAGER -> SYSTEM %r", answer)
             return ManagerTurn("reply", answer) if answer.strip() else ManagerTurn("silent")
         finally:
             # Crucial: neither another QUERY nor a human inherits this KV.

@@ -137,6 +137,16 @@ class SharedSystemTests(unittest.TestCase):
 
 
 class NativeTaskSystemHandshakeTests(unittest.TestCase):
+    def setUp(self):
+        # CLI startup now writes a private file log. Keep tests off /var/log.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        override = patch.dict(os.environ, {
+            "CAT_AGENT_LITERT_LOG_PATH": str(Path(temporary.name) / "native.log"),
+        })
+        override.start()
+        self.addCleanup(override.stop)
+
     def test_missing_service_fails_before_native_model_initialization(self):
         from agent_core_tools.__main__ import main
         with tempfile.TemporaryDirectory() as name:

@@ -294,6 +294,8 @@ class CoreServer:
         with self._lock:
             if self._human is not client or client.epoch != epoch or self._stop.is_set():
                 return
+        LOGGER.info("%s -> %s %r",
+                    "USER", "MANAGER" if agent_id is None else agent_id.upper(), text)
         LOGGER.info("native-scheduler HUMAN START id=%s agent=%s",
                     request_id, agent_id)
         try:
@@ -335,6 +337,11 @@ class CoreServer:
                 }
                 if agent_id is not None:
                     fields["agent_id"] = agent_id
+                # Log the delivered result, not a stale response discarded
+                # after a client disconnect/session change.
+                LOGGER.info("%s -> USER kind=%s text=%r",
+                            "MANAGER" if agent_id is None else agent_id.upper(),
+                            turn.kind, turn.text)
                 if turn.kind == "error":
                     client.send({"type": "error", **fields})
                 elif turn.kind == "reply":
@@ -482,6 +489,8 @@ class CoreServer:
             job.state = "RUNNING"
         LOGGER.info("native-background STEP id=%s agent=%s step=%d/%d",
                     job_id, job.agent_id, position + 1, len(job.steps))
+        LOGGER.info("BACKGROUND %s -> %s %r",
+                    job_id, job.agent_id.upper(), instruction)
         try:
             from orchestration_tools.agents import AgentState
             outcome = self._manager.run_agent_slice(
@@ -492,6 +501,8 @@ class CoreServer:
         except Exception as exc:
             LOGGER.exception("native-background ERROR id=%s", job_id)
             ok, answer = False, str(exc)[:2048]
+        LOGGER.info("%s -> BACKGROUND %s ok=%s text=%r",
+                    job.agent_id.upper(), job_id, ok, answer)
         with self._lock:
             if job.cancelled or self._stop.is_set():
                 return
@@ -593,6 +604,7 @@ class CoreServer:
             return
         LOGGER.info("native-hardware START id=%s source=%s name=%s agent=%s",
                     event_id, source, name, agent_id)
+        LOGGER.info("HARDWARE %s -> %s %r", event_id, agent_id.upper(), task)
         try:
             from orchestration_tools.agents import AgentState
             outcome = self._manager.run_agent(agent_id, task)
@@ -601,6 +613,8 @@ class CoreServer:
         except Exception as exc:
             LOGGER.exception("native-hardware ERROR id=%s", event_id)
             ok, result = False, str(exc)[:2048]
+        LOGGER.info("%s -> HARDWARE %s ok=%s text=%r",
+                    agent_id.upper(), event_id, ok, result)
         LOGGER.info("native-hardware FINISH id=%s ok=%s", event_id, ok)
         with self._lock:
             if not self._client_still_active(client, epoch):

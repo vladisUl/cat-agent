@@ -113,6 +113,18 @@ class CoreManagerTests(unittest.TestCase):
         self.query(sock,payload)
         return self.recv(reader)
 
+    def test_native_user_manager_transcript_is_logged(self):
+        with self.assertLogs("agent_core_tools.server", level="INFO") as captured:
+            sock, reader = self.connect()
+            self.recv_after_query(sock, reader, {"type": "acquire", "client": "tui"})
+            self.query(sock, {"type": "user", "text": "температура на улице"})
+            self.assertEqual(self.recv(reader)["type"], "accepted")
+            self.assertEqual(self.recv(reader)["type"], "reply")
+            self.assertEqual(self.recv(reader)["type"], "completed")
+        transcript = "\\n".join(captured.output)
+        self.assertIn("USER -> MANAGER 'температура на улице'", transcript)
+        self.assertIn("MANAGER -> USER kind=reply text='температура на улице'", transcript)
+
     def test_acquire_reports_selected_gpu_backend(self):
         self.manager.backend_name = 'GPU'
         sock, reader = self.connect()

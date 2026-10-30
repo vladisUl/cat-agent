@@ -9,6 +9,10 @@ import signal
 import sys
 
 from .server import CoreServer, DEFAULT_SOCKET
+from .native_logging import configure_native_logging
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -42,7 +46,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--agent-config', type=Path,
                         help='JSON agent pool configuration (experimental)')
     parser.add_argument('--trace-native-json', action='store_true')
-    parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
+    parser.add_argument(
+        '--log-level',
+        default=os.getenv('CAT_AGENT_LOG_LEVEL', 'INFO').upper(),
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+    )
     args = parser.parse_args(argv)
     if args.enable_background_probe and args.agent_config is None:
         parser.error('--enable-background-probe requires --agent-config')
@@ -54,7 +62,21 @@ def main(argv: list[str] | None = None) -> int:
         parser.error('--agent-config requires --model and --system-file')
     if bool(args.model) != bool(args.system_file):
         parser.error('--model and --system-file must be used together')
-    logging.basicConfig(level=getattr(logging, args.log_level))
+    if args.model is None:
+        # Skeleton-only diagnostics run without the model and file log.
+        logging.basicConfig(level=getattr(logging, args.log_level))
+    else:
+        try:
+            log_path = configure_native_logging(args.log_level)
+        except (OSError, ValueError) as exc:
+            print(f'Cannot initialize LiteRT log: {exc}', file=sys.stderr)
+            return 2
+        LOGGER.info("cat-agent LiteRT CORE starting")
+        LOGGER.info("Log file: %s", log_path)
+        LOGGER.info("Model: %s backend=%s vision_backend=%s",
+                    args.model, args.backend, args.vision_backend)
+        LOGGER.info("Manager prompt: %s agents: %s", args.system_file, args.agent_config)
+        LOGGER.info("CORE socket: %s TASK socket: %s", args.socket, args.task_socket)
     if args.enable_task_worker:
         # Check the shared service BEFORE loading and warming the LiteRT
         # Engine. A second local Task SYSTEM must never be started as fallback.
@@ -65,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
             if result != 'TASK_SYSTEM_READY':
                 raise TaskStoreError('unexpected TASK SYSTEM handshake')
         except TaskStoreError as exc:
+            LOGGER.error("Shared TASK SYSTEM unavailable at %s: %s", args.task_socket, exc)
             print(f'Shared TASK SYSTEM unavailable at {args.task_socket}: {exc}',
                   file=sys.stderr)
             return 2
@@ -87,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
                 agent_config=args.agent_config,
             )
         except (OSError, ValueError, RuntimeError) as exc:
+            LOGGER.exception("TOOLS CORE manager initialization failed")
             print(f'TOOLS CORE manager initialization failed: {exc}', file=sys.stderr)
             return 2
     agent_permissions = None
@@ -112,12 +136,14 @@ def main(argv: list[str] | None = None) -> int:
         server.start()
         server.serve_forever()
     except (OSError, RuntimeError) as exc:
+        LOGGER.exception("TOOLS CORE startup/service error")
         print(f'TOOLS CORE startup/service error: {exc}', file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         pass
     finally:
         server.close()
+        LOGGER.info("cat-agent LiteRT CORE stopped")
     return 0
 
 
