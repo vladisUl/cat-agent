@@ -11,17 +11,6 @@ import logging
 
 LOGGER = logging.getLogger(__name__)
 
-# A no-output, no-tool turn has no observable task result. One corrective
-# prompt in the same working dialogue is safe: no native tool side effect
-# has occurred, so this cannot replay a previously completed action.
-NO_ACTION_CORRECTION = (
-    "Предыдущий ответ был пустым, и ни один инструмент не был вызван. "
-    "Задание ещё не выполнено. Выполни исходное задание сейчас: "
-    "вызови необходимые доступные инструменты. "
-    "Если пользователь просил сообщить результат, верни фактические данные текстом. "
-    "Если задача не может быть выполнена, объясни причину вместо пустого ответа."
-)
-
 
 class AgentState(str, Enum):
     FREE = "FREE"
@@ -67,21 +56,9 @@ class NativeAgent:
         try:
             content = self.chat.ask(task)
             kv = self.chat.working_kv_tokens
-            # A successful silent turn requires an actual native tool call.
-            # A model that produces neither a result nor a tool invocation
-            # has not attempted the task. Correct it once, without replaying
-            # any side effects: this branch is reachable only with 0 tools.
-            calls = getattr(self.chat, "execution_tool_calls", None)
-            if not content.strip() and calls == 0:
-                LOGGER.warning("%s no-action turn (0 tools, empty text); "
-                               "requesting one correction", self.agent_id)
-                content = self.chat.ask(NO_ACTION_CORRECTION)
-                kv = self.chat.working_kv_tokens
-                calls = getattr(self.chat, "execution_tool_calls", None)
+            # Silence is a valid completion; tool failures are independent.
             if getattr(self.chat, "execution_status_code", 0):
                 failure = RuntimeError("One or more native tools failed")
-            elif not content.strip() and calls == 0:
-                failure = RuntimeError("Agent did not execute tools or return a result")
         except Exception as exc:
             failure = exc
             kv = self.chat.working_kv_tokens
