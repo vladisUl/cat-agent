@@ -17,6 +17,33 @@ MAX_INSTRUCTION_CHARS = 2048
 TASK_PREFIX = "LiteRT QUERY: "
 
 
+def _period_seconds(value: object) -> int | None:
+    """Accept exact whole seconds even if native tool decoding used float/str.
+
+    Never round fractional intervals or accept bool as an integer. Keep
+    this conversion at the native-tool boundary; RPC remains strictly typed.
+    """
+    if type(value) is int:
+        seconds = value
+    elif type(value) is float:
+        if not 10 <= value <= MAX_PERIOD_SECONDS or not value.is_integer():
+            return None
+        seconds = int(value)
+    elif type(value) is str:
+        raw = value.strip()
+        if not 1 <= len(raw) <= 16:
+            return None
+        whole, dot, fraction = raw.partition(".")
+        if not whole.isascii() or not whole.isdecimal():
+            return None
+        if dot and (not fraction or any(char != "0" for char in fraction)):
+            return None
+        seconds = int(whole)
+    else:
+        return None
+    return seconds if 10 <= seconds <= MAX_PERIOD_SECONDS else None
+
+
 class NativeTaskController:
     """Restrict persistent mutations to an active human MANAGER turn."""
 
@@ -74,8 +101,18 @@ class NativeTaskController:
     def create(self, period_seconds: int, skill_name: str, instruction: str) -> dict:
         if not self._allowed():
             return {"ok": False, "error": "task_management_not_in_active_turn"}
-        if type(period_seconds) is not int or not 10 <= period_seconds <= MAX_PERIOD_SECONDS:
+        LOGGER.info(
+            "native-task-tool CREATE ARG period_seconds=%r type=%s skill=%r",
+            repr(period_seconds)[:80], type(period_seconds).__name__, skill_name,
+        )
+        normalized_period = _period_seconds(period_seconds)
+        if normalized_period is None:
+            LOGGER.warning(
+                "native-task-tool CREATE REJECT period_seconds=%r type=%s",
+                repr(period_seconds)[:80], type(period_seconds).__name__,
+            )
             return {"ok": False, "error": "period_seconds must be an integer in 10..604800"}
+        period_seconds = normalized_period
         if not isinstance(skill_name, str) or skill_name not in self.allowed_skills:
             return {"ok": False, "error": "skill is not available to native AGENT"}
         if not isinstance(instruction, str) or not instruction.strip() or len(instruction) > MAX_INSTRUCTION_CHARS:

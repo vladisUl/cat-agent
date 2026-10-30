@@ -164,6 +164,30 @@ class NativePeriodicTaskTests(unittest.TestCase):
             time.sleep(0.005)
         self.fail(f"QUERY notifications did not reach count {expected}")
 
+    def test_native_period_argument_types_are_normalized_exactly(self):
+        self.controller.enabled = True
+        for raw in (60.0, "60", " 60 ", "60.0", 60):
+            self.controller.begin_turn()
+            try:
+                result = self.controller.create(raw, "get_outdoor_weather", "температура")
+                self.assertTrue(result["ok"], (raw, result))
+                self.assertEqual(result["period_seconds"], 60)
+                record = self.rpc.call("tasks", "require", result["task_id"])
+                self.assertEqual(record["timer_period_seconds"], 60.0)
+            finally:
+                self.controller.finish_turn()
+
+        for raw in (True, False, 60.5, float("inf"), float("nan"),
+                    "60.5", "abc", "", None, -60, 0, 604801):
+            self.controller.begin_turn()
+            try:
+                before = len(self.rpc.calls)
+                result = self.controller.create(raw, "get_outdoor_weather", "температура")
+                self.assertFalse(result["ok"], (raw, result))
+                self.assertEqual(len(self.rpc.calls), before)
+            finally:
+                self.controller.finish_turn()
+
     def test_invalid_inputs_and_rpc_failure_are_not_blindly_retried(self):
         self.controller.enabled = True
         self.controller.begin_turn()
