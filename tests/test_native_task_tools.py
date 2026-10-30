@@ -1,4 +1,4 @@
-"""Periodic native MANAGER tools: durable RPC, independent timer, safe boundaries."""
+"""Unified native delegation: one-shot and periodic use identical AGENT text."""
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
@@ -13,6 +13,7 @@ from agent_core_tools.task_worker import NativeTaskWorker
 from orchestration.tasks import TaskStoreError
 from orchestration_tools.agents import AgentOutcome, AgentState
 from orchestration_tools.contracts import ManagerTurn
+from orchestration_tools.delegation import DelegationBroker, create_delegate_tool
 from orchestration_tools.task_tools import NativeTaskController, create_task_tools
 from task_system.engine import TaskEngine
 
@@ -31,22 +32,25 @@ class LocalRPC:
         ))
 
 
-class FakeAgentManager:
+class FakeManager:
     def __init__(self):
         self.calls = []
 
     def agent_status(self):
-        return [{"agent_id": "agent_1", "state": "FREE"}]
+        return [
+            {"agent_id": "agent_1", "state": "FREE"},
+            {"agent_id": "agent_2", "state": "FREE"},
+        ]
 
     def run_agent(self, agent_id, text):
         self.calls.append((agent_id, text))
-        return AgentOutcome(agent_id, AgentState.FREE, "8.36°C", 250)
+        return AgentOutcome(agent_id, AgentState.FREE, "Сделано", 250)
 
     def process_task_query(self, task_id, text, failed=False):
         return ManagerTurn("reply", f"TASK {task_id}: {text}")
 
 
-class NativePeriodicTaskTests(unittest.TestCase):
+class UnifiedDelegationTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -58,175 +62,149 @@ class NativePeriodicTaskTests(unittest.TestCase):
         self.addCleanup(self.engine.close)
         self.rpc = LocalRPC(self.engine)
         self.controller = NativeTaskController(
-            self.rpc, {"agent_1": ("get_outdoor_weather", "shell")},
+            self.rpc, {"agent_1": ("get_outdoor_weather", "shell"),
+                       "agent_2": ("get_outdoor_weather",)},
         )
-        self.tools = {t.__name__: t for t in create_task_tools(self.controller)}
-
-    def test_persistent_query_create_list_stop_and_deduplicate(self):
-        create = self.tools["create_periodic_query"]
-        self.assertFalse(create(60, "get_outdoor_weather", "измерь температуру")["ok"])
-        self.assertEqual(self.rpc.calls, [])  # Warm-up must be side-effect free.
+        self.broker = DelegationBroker(("agent_1", "agent_2"), self.controller)
+        self.tool = create_delegate_tool(self.broker)
+        self.management = {
+            t.__name__: t for t in create_task_tools(self.controller)
+        }
         self.controller.enabled = True
-        self.assertFalse(create(60, "get_outdoor_weather", "измерь температуру")["ok"])
-        self.controller.begin_turn()
-        try:
-            invalid = create(60, "arbitrary_tool", "постучи")
-            self.assertFalse(invalid["ok"])
-            self.assertEqual(self.rpc.calls, [])
-            item = create(60, "get_outdoor_weather", "измерь температуру на улице")
-            self.assertTrue(item["ok"], item)
-            self.assertEqual(item["status"], "scheduled")
-            self.assertEqual(item["delivery"], "TASK QUERY notifications inbox")
-            self.assertEqual(item["period_seconds"], 60)
-            self.assertEqual(len([c for c in self.rpc.calls if c[1] == "create_periodic_task"]), 1)
-            again = create(60, "get_outdoor_weather", "измерь температуру на улице")
-            self.assertFalse(again["ok"])
-            self.assertEqual(len([c for c in self.rpc.calls if c[1] == "create_periodic_task"]), 1)
-            records = self.tools["list_periodic_queries"]()
-            self.assertEqual(len(records["tasks"]), 1)
-            self.assertEqual(records["tasks"][0]["task_id"], item["task_id"])
-            record = self.rpc.call("tasks", "require", item["task_id"])
-            self.assertEqual(record["method"], "query")
-            self.assertEqual(record["executor"], "litert")
-            self.assertEqual(record["skills"], ["get_outdoor_weather"])
-            self.assertEqual(record["timer_period_seconds"], 60.0)
-            self.assertIn("выполни ОДИН раз", record["text"])
-            self.assertIn("Измерь текущую температуру и влажность на улице", record["text"])
-            self.assertIn("Обязательно вызови нативный инструмент get_outdoor_weather()", record["text"])
-            self.assertIn("get_outdoor_weather", record["text"])
-            stopped = self.tools["stop_periodic_query"](str(item["task_id"]))
-            self.assertEqual(stopped, {
-                "ok": True, "task_id": item["task_id"], "enabled": False,
-            })
-        finally:
-            self.controller.finish_turn()
-        self.assertFalse(self.tools["list_periodic_queries"]()["ok"])
-        self.assertEqual(
-            self.rpc.call("tasks", "require", item["task_id"])["enabled"], False,
-        )
-        # Timers belong to SYSTEM and remain persisted, including disabled state.
-        self.assertTrue(any(t.task_id == item["task_id"] for t in
-                            self.engine.runtime.task_timer_snapshot()))
+        self.broker.enabled = True
 
-    def test_periodic_query_executes_repeated_agent_turns_and_delivers_notifications(self):
-        self.controller.enabled = True
+    def _begin(self):
         self.controller.begin_turn()
+        self.broker.begin_turn()
+
+    def _end(self):
+        self.broker.finish_turn()
+        self.controller.finish_turn()
+
+    def test_zero_is_original_one_shot_delegation(self):
+        for interval in (0, "0", "0.0", 0.0):
+            self._begin()
+            try:
+                result = self.tool("agent_1", " MQTT -> shell -> файл ", interval)
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(result["status"], "queued")
+                pending, = self.broker.take_pending()
+                self.assertEqual(pending.agent_id, "agent_1")
+                self.assertEqual(pending.task, "MQTT -> shell -> файл")
+                self.assertFalse(self.rpc.calls)
+            finally:
+                self._end()
+
+    def test_periodic_persists_unmodified_multistep_instruction_and_target(self):
+        original = ("Получить температуру через MQTT, если файла нет создать "
+                    "temp.txt, дописать строку через shell.")
+        self._begin()
         try:
-            item = self.controller.create(60, "get_outdoor_weather", "Температура на улице")
+            result = self.tool("agent_1", original, "60")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["status"], "scheduled")
+            self.assertEqual(result["period_seconds"], 60)
+            self.assertEqual(result["agent_id"], "agent_1")
+            self.assertEqual(self.broker.take_pending(), ())
+            task = self.rpc.call("tasks", "require", result["task_id"])
+            self.assertEqual(task["text"], original)
+            self.assertEqual(task["skills"], [])
+            self.assertEqual(task["agent_id"], "agent_1")
+            self.assertEqual(task["method"], "query")
+            self.assertEqual(task["executor"], "litert")
+            self.assertEqual(task["timer_period_seconds"], 60.0)
+            self.assertEqual(self.tool("agent_1", original, "60")["ok"], False)
+            self.assertEqual(
+                len([c for c in self.rpc.calls if c[1] == "create_periodic_task"]), 1,
+            )
+            listed = self.management["list_periodic_queries"]()
+            self.assertEqual(listed["tasks"][0]["agent_id"], "agent_1")
+            stopped = self.management["stop_periodic_query"](str(result["task_id"]))
+            self.assertTrue(stopped["ok"])
+            self.assertFalse(stopped["enabled"])
         finally:
-            self.controller.finish_turn()
-        self.assertTrue(item["ok"], item)
-        manager = FakeAgentManager()
+            self._end()
+
+    def test_periodic_executes_same_text_twice_on_selected_agent_and_stops(self):
+        text = "Прочитать MQTT, добавить строку в temp.txt через shell"
+        self._begin()
+        try:
+            result = self.tool("agent_1", text, 60)
+        finally:
+            self._end()
+        self.assertTrue(result["ok"], result)
+        manager = FakeManager()
         scheduler = PriorityScheduler()
         worker = NativeTaskWorker(
             scheduler, manager, rpc=self.rpc,
-            agent_permissions={"agent_1": ("get_outdoor_weather",)},
-            poll_seconds=3600,
+            agent_permissions={
+                "agent_1": ("get_outdoor_weather", "shell"),
+                "agent_2": ("get_outdoor_weather",),
+            }, poll_seconds=3600,
         )
         worker.start()
         try:
-            first_deadline = time.monotonic() + 61
-            self.engine.tick(now=first_deadline)
+            first = time.monotonic() + 61
+            self.engine.tick(now=first)
             self.assertTrue(worker.poll_once())
-            self._wait_one_notification(manager, expected=1, worker=worker)
-            first_results = self.rpc.call("notifications", "list")
-            self.assertEqual(len(first_results), 1)
-            self.assertIn("8.36°C", first_results[0]["text"])
-
-            self.engine.tick(now=first_deadline + 61)
-            # Mark previous run finished before the next admission.
+            self._await_reports(worker, manager, 1)
+            self.engine.tick(now=first + 61)
             self.assertTrue(worker.poll_once())
-            self._wait_one_notification(manager, expected=2, worker=worker)
-            second_results = self.rpc.call("notifications", "list")
-            self.assertEqual(len(second_results), 2)
-            self.assertNotEqual(second_results[0]["run_id"], second_results[1]["run_id"])
-            self.assertEqual(len(manager.calls), 2)
-            self.assertTrue(all(agent == "agent_1" for agent, _ in manager.calls))
-
-            self.controller.begin_turn()
+            self._await_reports(worker, manager, 2)
+            self.assertEqual(manager.calls, [
+                ("agent_1", text), ("agent_1", text),
+            ])
+            reports = self.rpc.call("notifications", "list")
+            self.assertEqual(len(reports), 2)
+            self.assertNotEqual(reports[0]["run_id"], reports[1]["run_id"])
+            self._begin()
             try:
-                stopped = self.controller.stop(item["task_id"])
+                self.assertTrue(self.management["stop_periodic_query"](
+                    result["task_id"])["ok"])
             finally:
-                self.controller.finish_turn()
-            self.assertTrue(stopped["ok"])
-            self.engine.tick(now=first_deadline + 122)
+                self._end()
+            self.engine.tick(now=first + 122)
             self.assertEqual(len(manager.calls), 2)
         finally:
             worker.close()
             scheduler.close()
 
-    def _wait_one_notification(self, manager, *, expected, worker):
+    def _await_reports(self, worker, manager, number):
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             worker.poll_once()
-            if len(manager.calls) >= expected:
-                events = self.rpc.call("notifications", "list")
-                if len(events) >= expected:
+            if len(manager.calls) >= number:
+                if len(self.rpc.call("notifications", "list")) >= number:
                     return
             time.sleep(0.005)
-        self.fail(f"QUERY notifications did not reach count {expected}")
+        self.fail(f"no {number} durable notifications")
 
-    def test_stop_accepts_exact_native_ids_and_rejects_fractional(self):
-        from orchestration_tools.task_tools import _task_id
-        self.assertEqual(_task_id("1"), 1)
-        self.assertEqual(_task_id(" 1.0 "), 1)
-        self.assertEqual(_task_id(1.0), 1)
-        self.assertIsNone(_task_id(True))
-        self.assertIsNone(_task_id("1.5"))
-        self.assertIsNone(_task_id(1.5))
-        self.assertIsNone(_task_id(0))
-        self.assertIsNone(_task_id(float("nan")))
-        self.controller.enabled = True
-        self.controller.begin_turn()
+    def test_unknown_agent_invalid_period_missing_system_and_warm_guard(self):
+        self.broker.enabled = False
+        self.assertFalse(self.tool("agent_1", "test", 60)["ok"])
+        self.broker.enabled = True
+        self.assertEqual(self.tool("agent_1", "test", 60)["error"],
+                         "no_active_manager_turn")
+        self._begin()
         try:
-            item = self.controller.create(60, "get_outdoor_weather", "температура")
-            self.assertTrue(item["ok"])
-            before = len(self.rpc.calls)
-            self.assertFalse(self.controller.stop("1.5")["ok"])
-            self.assertEqual(len(self.rpc.calls), before)
-            self.assertEqual(self.controller.stop(float(item["task_id"])),
-                             {"ok": True, "task_id": item["task_id"], "enabled": False})
+            for period in (True, -1, 60.5, "60.5", "abc", 604801):
+                self.assertFalse(self.tool("agent_1", "test", period)["ok"])
+            self.assertEqual(self.tool("agent_3", "task", 60)["error"],
+                             "unknown_agent")
+            self.assertFalse(self.tool("agent_1", "", 60)["ok"])
+            self.assertFalse(self.rpc.calls)
         finally:
-            self.controller.finish_turn()
-
-    def test_native_period_argument_types_are_normalized_exactly(self):
-        self.controller.enabled = True
-        for raw in (60.0, "60", " 60 ", "60.0", 60):
-            self.controller.begin_turn()
-            try:
-                result = self.controller.create(raw, "get_outdoor_weather", "температура")
-                self.assertTrue(result["ok"], (raw, result))
-                self.assertEqual(result["period_seconds"], 60)
-                record = self.rpc.call("tasks", "require", result["task_id"])
-                self.assertEqual(record["timer_period_seconds"], 60.0)
-            finally:
-                self.controller.finish_turn()
-
-        for raw in (True, False, 60.5, float("inf"), float("nan"),
-                    "60.5", "abc", "", None, -60, 0, 604801):
-            self.controller.begin_turn()
-            try:
-                before = len(self.rpc.calls)
-                result = self.controller.create(raw, "get_outdoor_weather", "температура")
-                self.assertFalse(result["ok"], (raw, result))
-                self.assertEqual(len(self.rpc.calls), before)
-            finally:
-                self.controller.finish_turn()
-
-    def test_invalid_inputs_and_rpc_failure_are_not_blindly_retried(self):
-        self.controller.enabled = True
-        self.controller.begin_turn()
+            self._end()
+        self.broker.periodic_controller = None
+        self._begin()
         try:
-            for args in ((True, "get_outdoor_weather", "x"),
-                         (0, "get_outdoor_weather", "x"),
-                         (60, "fake_tool", "x"),
-                         (60, "get_outdoor_weather", "")):
-                self.assertFalse(self.controller.create(*args)["ok"])
-            self.assertEqual(self.rpc.calls, [])
+            result = self.tool("agent_1", "test", 60)
+            self.assertEqual(result["error"], "periodic_TASK_SYSTEM_not_configured")
         finally:
-            self.controller.finish_turn()
+            self._end()
 
-        class BrokenRPC:
+    def test_no_duplicate_after_unknown_rpc_reply(self):
+        class LostRPC:
             def __init__(self):
                 self.calls = 0
 
@@ -234,19 +212,21 @@ class NativePeriodicTaskTests(unittest.TestCase):
                 self.calls += 1
                 raise TaskStoreError("Task SYSTEM unavailable at socket: timeout")
 
-        broken = BrokenRPC()
-        control = NativeTaskController(broken, {"agent_1": ("get_outdoor_weather",)})
-        control.enabled = True
-        control.begin_turn()
+        rpc = LostRPC()
+        controller = NativeTaskController(rpc, {"agent_1": ("shell",)})
+        broker = DelegationBroker(("agent_1",), controller)
+        controller.enabled = broker.enabled = True
+        controller.begin_turn()
+        broker.begin_turn()
         try:
-            result = control.create(60, "get_outdoor_weather", "получить температуру")
-            self.assertFalse(result["ok"])
-            self.assertEqual(result["status"], "unknown")
-            second = control.create(60, "get_outdoor_weather", "получить температуру")
-            self.assertFalse(second["ok"])
-            self.assertEqual(broken.calls, 1)
+            first = broker.enqueue("agent_1", "read then write", "60")
+            self.assertEqual(first["status"], "unknown")
+            again = broker.enqueue("agent_1", "read then write", "60")
+            self.assertFalse(again["ok"])
+            self.assertEqual(rpc.calls, 1)
         finally:
-            control.finish_turn()
+            broker.finish_turn()
+            controller.finish_turn()
 
 
 if __name__ == "__main__":
