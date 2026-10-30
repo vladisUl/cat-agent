@@ -30,7 +30,7 @@ if [[ -n "${CAT_AGENT_CORE_SOCKET:-}" ]]; then
 fi
 
 if [[ -z "$_selected_core" ]]; then
-    if ! _core_status="$("$_repo_root/task_system.sh" cores 2>/dev/null)"; then
+    if ! _core_status="$("$_repo_root/start_system_core.sh" cores 2>/dev/null)"; then
         echo "Cannot query Task SYSTEM CORE readiness." >&2
         exit 1
     fi

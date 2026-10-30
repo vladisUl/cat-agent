@@ -1,6 +1,6 @@
 [Unit]
 Description=cat-agent Native LiteRT CORE
-After=cat-agent-task-system.service
+After=cat-agent-system-core.service
 
 [Service]
 Type=simple

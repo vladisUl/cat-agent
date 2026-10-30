@@ -22,10 +22,10 @@ TASK, таймеров или очереди запусков.
 ```
 
 В этом режиме `scripts/select_core.sh` обращается к общему TASK SYSTEM через
-административный режим `task_system.sh`:
+административный режим `start_system_core.sh`:
 
 ```sh
-./task_system.sh cores
+./start_system_core.sh cores
 ```
 
 и выбирает первый READY CORE в порядке:

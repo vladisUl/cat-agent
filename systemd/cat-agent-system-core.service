@@ -1,11 +1,11 @@
 [Unit]
-Description=cat-agent Task SYSTEM
+Description=cat-agent System CORE
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/cat-agent
-ExecStart=/opt/cat-agent/task_system.sh
+ExecStart=/opt/cat-agent/start_system_core.sh
 Restart=always
 RestartSec=2
 KillSignal=SIGTERM

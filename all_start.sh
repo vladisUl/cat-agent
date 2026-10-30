@@ -2,6 +2,6 @@
 set -euo pipefail
 
 systemctl start \
-    cat-agent-task-system.service \
+    cat-agent-system-core.service \
     cat-agent-litert.service \
     cat-agent-openai.service

@@ -162,21 +162,21 @@ A RUN that has already started is never silently moved to another CORE. If a
 CORE dies after execution began, the outcome may be unknown and that run is not
 automatically replayed: external side effects may already have happened.
 
-The same `./task_system.sh` starts the service with no arguments and
+The same `./start_system_core.sh` starts the service with no arguments and
 acts as its administration CLI when a subcommand is supplied.
 
 Useful administrative commands:
 
 ```bash
-./task_system.sh list
-./task_system.sh cores
-./task_system.sh runs
-./task_system.sh run 1
-./task_system.sh stop 1
-./task_system.sh start 1
-./task_system.sh period 1 120
-./task_system.sh executor 1 auto
-./task_system.sh delete 1
+./start_system_core.sh list
+./start_system_core.sh cores
+./start_system_core.sh runs
+./start_system_core.sh run 1
+./start_system_core.sh stop 1
+./start_system_core.sh start 1
+./start_system_core.sh period 1 120
+./start_system_core.sh executor 1 auto
+./start_system_core.sh delete 1
 ```
 
 See [docs/task-system.md](docs/task-system.md) for persistence, queue states,
@@ -385,7 +385,7 @@ For manual startup, start Task SYSTEM first and then one or both primary COREs:
 ```bash
 cd /opt/cat-agent
 
-./task_system.sh
+./start_system_core.sh
 ./start_native_core.sh
 ./start_openai_agent.sh
 ```
@@ -408,7 +408,7 @@ target installation:
 manage:
 
 ```text
-cat-agent-task-system.service
+cat-agent-system-core.service
 cat-agent-litert.service  (Native CORE, listens on litert-tools.sock)
 cat-agent-openai.service
 ```
