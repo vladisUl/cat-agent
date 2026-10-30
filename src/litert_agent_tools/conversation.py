@@ -259,8 +259,8 @@ class NativeConversationChat:
         )
         text = response_text(result)
         if not text.strip():
-            LOGGER.warning(
-                "native-conversation EMPTY-REPLY response_type=%s response=%r",
+            LOGGER.info(
+                "native-conversation SILENT-REPLY response_type=%s response=%r",
                 type(result).__name__, repr(result)[:2048],
             )
         return text

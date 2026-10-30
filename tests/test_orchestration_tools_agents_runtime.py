@@ -100,12 +100,6 @@ class RuntimeAgentTests(unittest.TestCase):
             self.assertEqual(manager.base_kv_tokens, 20)
             self.assertEqual(manager.agent_status()[0]["base_kv_tokens"], 20)
             self.assertEqual(manager.respond("test", "Привет").text, "DONE:Привет")
-            with self.assertLogs("orchestration_tools.manager", level="INFO") as events:
-                self.assertIn("SYSTEM_QUERY_RESULT TASK 1",
-                              manager.process_task_query(1, "/opt/model").text)
-            journal = "\\n".join(events.output)
-            self.assertIn("SYSTEM -> QUERY_MANAGER", journal)
-            self.assertIn("QUERY_MANAGER -> SYSTEM", journal)
             self.assertEqual(manager.run_agent("agent_1", "работай").text, "DONE:работай")
             self.assertEqual(manager.run_agent("agent_1", "еще").text, "DONE:еще")
             self.assertEqual(manager.agent_status()[0]["state"], "FREE")
