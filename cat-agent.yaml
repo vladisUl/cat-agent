@@ -2,8 +2,8 @@ litert:
   active_profile: e2b-wsl3050
 
   profiles:
-    # GPU text path verified on WSL2 + RTX 3050 + patched Mesa Dozen 26.0.8.
-    # EXPERIMENT: Vision GPU was not verified; keep backend=GPU unchanged.
+    # Verified text-only GPU path previously used the smaller -gpu.litertlm file.
+    # EXPERIMENT: full E2B model with GPU Vision on RTX 3050 and patched Dozen.
     # The Dozen fullDrawIndexUint32 workaround is experimental.
     e2b-wsl3050:
       model: /storage/models/litertlm/gemma-4-E2B-it.litertlm
