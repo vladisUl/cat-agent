@@ -13,8 +13,8 @@ litert:
   # Restart the affected CORE (including ./start_litert_core.sh) after changes.
   active_profile: e2b-wsl3050
 
-  # Named, known-good LiteRT runtime profiles. Add new profiles here when new
-  # models/backends are tested. active_profile must reference one of these keys.
+  # Named LiteRT runtime profiles. Some options (Vision GPU) are experimental.
+  # active_profile must reference one of these keys.
   profiles:
     # Native CORE on WSL2 with RTX 3050 and separately built, patched Dozen.
     # This workaround bypasses a Vulkan feature check; it is not conformant.
