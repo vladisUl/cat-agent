@@ -162,18 +162,21 @@ A RUN that has already started is never silently moved to another CORE. If a
 CORE dies after execution began, the outcome may be unknown and that run is not
 automatically replayed: external side effects may already have happened.
 
+The same `./start_task_system.sh` starts the service with no arguments and
+acts as its administration CLI when a subcommand is supplied.
+
 Useful administrative commands:
 
 ```bash
-./task_system.sh list
-./task_system.sh cores
-./task_system.sh runs
-./task_system.sh run 1
-./task_system.sh stop 1
-./task_system.sh start 1
-./task_system.sh period 1 120
-./task_system.sh executor 1 auto
-./task_system.sh delete 1
+./start_task_system.sh list
+./start_task_system.sh cores
+./start_task_system.sh runs
+./start_task_system.sh run 1
+./start_task_system.sh stop 1
+./start_task_system.sh start 1
+./start_task_system.sh period 1 120
+./start_task_system.sh executor 1 auto
+./start_task_system.sh delete 1
 ```
 
 See [docs/task-system.md](docs/task-system.md) for persistence, queue states,
