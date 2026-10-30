@@ -49,7 +49,7 @@ OpenAI-compatible API. Старый LiteRT CORE сохранён в исходн
 ```bash
 ./start_system_core.sh
 ./start_openai_agent.sh
-./start_native_core.sh
+./start_litert_core.sh
 ```
 
 Подключение TUI:
@@ -72,14 +72,14 @@ OpenAI-compatible API. Старый LiteRT CORE сохранён в исходн
 `./start_tui_tools.sh`.
 
 После перехода на native CORE команда запуска одна:
-`./start_native_core.sh`. Промежуточная обёртка
+`./start_litert_core.sh`. Промежуточная обёртка
 `start_litert_agent_tools.sh` и прежний `start_litert_agent.sh`
 удалены. Внутри launcher напрямую исполняется
 `/opt/litert-lm-venv/bin/python3 -m agent_core_tools`,
 с сохранением `CAT_AGENT_TOOLS_PYTHON` для отладки и тестов.
 
 `systemd/cat-agent-litert.service` также запускает
-`start_native_core.sh`. Его тип — `simple`, а не `notify`,
+`start_litert_core.sh`. Его тип — `simple`, а не `notify`,
 поскольку native CORE не отправляет `sd_notify(READY=1)`.
 При установке systemd-unit вне репозитория его надо обновить
 отдельно; `git pull` не перезаписывает `/etc/systemd/system`.
@@ -87,7 +87,7 @@ OpenAI-compatible API. Старый LiteRT CORE сохранён в исходн
 протокол нового CORE, поэтому для диалога используйте
 `start_tui_tools.sh`.
 
-`start_native_core.sh` берёт активный CPU/GPU-профиль из `cat-agent.yaml`
+`start_litert_core.sh` берёт активный CPU/GPU-профиль из `cat-agent.yaml`
 (`litert.active_profile`), `prompts_tools/manager.md`, 
 `config/native_agents.example.json` и каталог работы `runtime.workspace`.
 Для другой модели можно указать `CAT_AGENT_NATIVE_MODEL_PATH`, для другого
@@ -177,7 +177,7 @@ decoding и выбор драйвера из
 
 ```bash
 cd /opt/cat-agent
-./start_native_core.sh
+./start_litert_core.sh
 ```
 
 В другом терминале:

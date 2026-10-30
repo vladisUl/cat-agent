@@ -10,7 +10,7 @@
 
 litert:
   # Selects the profile loaded by the LiteRT CORE.
-  # Restart the affected CORE (including ./start_native_core.sh) after changes.
+  # Restart the affected CORE (including ./start_litert_core.sh) after changes.
   active_profile: e2b-wsl3050
 
   # Named, known-good LiteRT runtime profiles. Add new profiles here when new

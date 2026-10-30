@@ -265,7 +265,7 @@ export OLLAMA_API_KEY
 
 ## Совместная работа с новым native LiteRT CORE
 
-Новый `./start_native_core.sh` регистрируется в том же TASK SYSTEM
+Новый `./start_litert_core.sh` регистрируется в том же TASK SYSTEM
 как `executor=litert` и использует отдельный сокет от OpenAI CORE.
 Штатный TASK SYSTEM не дублируется; алгоритм `auto` не меняется.
 Ограничения общего QUERY inbox и инструкции запуска приведены

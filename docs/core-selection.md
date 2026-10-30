@@ -120,10 +120,10 @@ Native LiteRT CORE:  /run/cat-agent/litert-tools.sock
 Shared TASK SYSTEM:  /run/cat-agent/tasks.sock
 ```
 
-`./start_native_core.sh` запускает native CORE по активному CPU/GPU-профилю
+`./start_litert_core.sh` запускает native CORE по активному CPU/GPU-профилю
 `litert` из `cat-agent.yaml`. Его терминал — `./start_tui_tools.sh`.
 `cat-agent-litert.service` теперь тоже запускает именно native CORE через
-`start_native_core.sh` с `Type=simple`.
+`start_litert_core.sh` с `Type=simple`.
 Старый `./start_tui.sh litert` **не переключается** на native CORE:
 он продолжает обращаться к прежнему LiteRT-порту
 `/run/cat-agent/litert.sock`. Старый `litert_agent.main` больше не стартует штатным скриптом или

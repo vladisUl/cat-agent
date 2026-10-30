@@ -176,9 +176,11 @@ class NativeTaskSystemHandshakeTests(unittest.TestCase):
 
 class NativeSharedLauncherTests(unittest.TestCase):
     def test_litert_systemd_service_runs_native_core(self):
+        self.assertTrue((ROOT / "start_litert_core.sh").is_file())
+        self.assertFalse((ROOT / "start_native_core.sh").exists())
         service = (ROOT / "systemd/cat-agent-litert.service").read_text(encoding="utf-8")
         self.assertIn("Type=simple", service)
-        self.assertIn("ExecStart=/opt/cat-agent/start_native_core.sh", service)
+        self.assertIn("ExecStart=/opt/cat-agent/start_litert_core.sh", service)
         self.assertNotIn("Type=notify", service)
         self.assertNotIn("start_litert_agent.sh", service)
 
@@ -254,7 +256,7 @@ class NativeSharedLauncherTests(unittest.TestCase):
             else:
                 env[key] = str(value)
         return subprocess.run(
-            ["bash", str(ROOT / "start_native_core.sh")],
+            ["bash", str(ROOT / "start_litert_core.sh")],
             cwd=ROOT, env=env, text=True, capture_output=True, timeout=10,
         )
 
