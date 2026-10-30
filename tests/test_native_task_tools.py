@@ -22,9 +22,9 @@ class LocalRPC:
         self.engine = engine
         self.calls = []
 
-    def call(self, target, method, *args, **kwargs):
-        self.calls.append((target, method, args, kwargs))
-        response = self.engine.call(target, method, args, kwargs, peer="native")
+    def call(self, target, operation, *args, **kwargs):
+        self.calls.append((target, operation, args, kwargs))
+        response = self.engine.call(target, operation, args, kwargs, peer="native")
         return json.loads(json.dumps(
             response,
             default=lambda value: asdict(value) if is_dataclass(value) else value,
