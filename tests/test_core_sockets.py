@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import json
 import socket
 import subprocess
 import tempfile
@@ -155,6 +156,38 @@ class CoreSocketsTest(unittest.TestCase):
         self.assertEqual(owner.path.read_text(), "replacement")
 
 
+class TaskSystemUnifiedLauncherTest(unittest.TestCase):
+    root = Path(__file__).resolve().parents[1]
+
+    def test_service_and_admin_share_one_script(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = Path(folder) / "fake-python"
+            capture = Path(folder) / "args.json"
+            fake.write_text(
+                "#!/usr/bin/env python3\\n"
+                "import json, os, sys\\n"
+                "with open(os.environ['CAPTURE'], 'w', encoding='utf-8') as f:\\n"
+                "    json.dump(sys.argv[1:], f)\\n",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            env = dict(os.environ, CAT_AGENT_TASK_PYTHON=str(fake),
+                       CAPTURE=str(capture))
+            for args, expected in (
+                ([], ["-m", "task_system.main"]),
+                (["cores"], ["-m", "task_system.cli", "cores"]),
+                (["executor", "1", "auto"],
+                 ["-m", "task_system.cli", "executor", "1", "auto"]),
+            ):
+                with self.subTest(args=args):
+                    result = subprocess.run(
+                        ["bash", str(self.root / "start_task_system.sh"), *args],
+                        env=env, text=True, capture_output=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(capture.read_text(encoding="utf-8")), expected)
+
+
 class LauncherSelectionTest(unittest.TestCase):
     root = Path(__file__).resolve().parents[1]
 
@@ -164,6 +197,24 @@ class LauncherSelectionTest(unittest.TestCase):
             ["bash", "-c", 'script="$1"; shift; source "$script" "$@"; printf "%s" "$CAT_AGENT_CORE_SOCKET"',
              "launcher", str(self.root / "scripts/select_core.sh"), *args],
             env=env, text=True, capture_output=True)
+
+    def test_auto_select_uses_unified_task_launcher(self):
+        with tempfile.TemporaryDirectory() as folder:
+            py = Path(folder) / "fake-python"
+            py.write_text(
+                "#!/usr/bin/env python3\\n"
+                "import sys\\n"
+                "if sys.argv[1:] == ['-m', 'task_system.cli', 'cores']:\\n"
+                "    print('openai READY')\\n"
+                "else:\\n"
+                "    raise SystemExit(3)\\n",
+                encoding="utf-8",
+            )
+            py.chmod(0o755)
+            with patch.dict(os.environ, {"CAT_AGENT_TASK_PYTHON": str(py)}):
+                result = self.select([])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "/run/cat-agent/openai.sock")
 
     def test_backend_selection(self):
         for backend in ("litert", "openai"):
