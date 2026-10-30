@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One shared TASK SYSTEM, two independently started COREs (OpenAI + native LiteRT).
-# Explicit arguments/testing remain available through start_litert_agent_tools.sh.
+# The sole Native CORE launcher; low-level CLI remains available via python -m agent_core_tools.
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -101,4 +101,5 @@ fi
 
 # No second TASK SYSTEM; native worker registers as executor=litert on the
 # existing service. Old OpenAI CORE keeps executor=openai and its own socket.
-exec "${ROOT}/start_litert_agent_tools.sh" "${args[@]}"
+NATIVE_PYTHON="${CAT_AGENT_TOOLS_PYTHON:-/opt/litert-lm-venv/bin/python3}"
+exec "$NATIVE_PYTHON" -m agent_core_tools "${args[@]}"
