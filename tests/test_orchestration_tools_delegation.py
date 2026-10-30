@@ -158,6 +158,21 @@ class DelegationTests(unittest.TestCase):
         self.assertEqual(tool("agent_1", "new")["status"], "queued")
         broker.finish_turn()
 
+    def test_explicit_zero_period_reuses_one_shot_without_task_system(self):
+        manager, broker, tool, events, chat, pool, _ = self.make_manager()
+        reply = tool("agent_1", "Точная инструкция", 0)
+        self.assertFalse(reply["ok"])  # Outside human turn.
+        broker.begin_turn()
+        try:
+            outcome = tool("agent_1", "Точная инструкция", "0")
+            self.assertEqual(outcome["status"], "queued")
+            self.assertEqual(broker.take_pending()[0].task, "Точная инструкция")
+            self.assertEqual(tool("agent_1", "Точная инструкция", 60)["error"],
+                             "periodic_TASK_SYSTEM_not_configured")
+        finally:
+            broker.finish_turn()
+        manager.close()
+
     def test_query_manager_is_independent_of_interactive_dialogue(self):
         manager, _, _, events, chat, pool, engine = self.make_manager()
         class QueryChat:

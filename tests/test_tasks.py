@@ -34,6 +34,22 @@ class TaskStoreTest(unittest.TestCase):
                 "TASK 1 ловля котов\nTASK 2 проверка системы",
             )
 
+    def test_target_agent_persisted_and_legacy_records_default_to_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "task.txt"
+            store = TaskStore(path)
+            target = store.create(
+                "погода в файл", "MQTT потом shell", method="query",
+                timer_period_seconds=60, executor="litert",
+                agent_id="agent_1",
+            )
+            restored = TaskStore(path).require(target.task_id)
+            self.assertEqual(restored.agent_id, "agent_1")
+            self.assertEqual(restored.text, "MQTT потом shell")
+            self.assertEqual(restored.skills, ())
+            with self.assertRaises(TaskStoreError):
+                store.create("invalid", "text", agent_id="../agent_2")
+
     def test_old_record_without_method_defaults_to_task(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "task.txt"
@@ -44,6 +60,7 @@ class TaskStoreTest(unittest.TestCase):
             )
             restored = TaskStore(path).require(1)
             self.assertEqual(restored.method, "task")
+            self.assertIsNone(restored.agent_id)
             self.assertFalse(restored.enabled)
 
     def test_rejects_unknown_method(self) -> None:

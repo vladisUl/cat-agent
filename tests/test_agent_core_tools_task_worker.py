@@ -184,6 +184,35 @@ class TaskWorkerTests(unittest.TestCase):
                 self.assertEqual(selected == "agent_1", expected)
         self.assertEqual(self.manager.events, [])
 
+    def test_target_agent_is_selected_without_tool_names_in_task(self):
+        self.worker.permissions["agent_2"] = frozenset({"shell"})
+        original_status = self.manager.agent_status
+        try:
+            self.manager.agent_status = lambda: [
+                {"agent_id": "agent_1", "state": "FREE"},
+                {"agent_id": "agent_2", "state": "FREE"},
+            ]
+            self.assertEqual(
+                self.worker._select_agent({"agent_id": "agent_2", "skills": []}),
+                "agent_2",
+            )
+            self.assertEqual(
+                self.worker._select_agent({"agent_id": "agent_1", "skills": []}),
+                "agent_1",
+            )
+            self.assertIsNone(
+                self.worker._select_agent({"agent_id": "agent_3", "skills": []}),
+            )
+            self.manager.agent_status = lambda: [
+                {"agent_id": "agent_1", "state": "FREE"},
+                {"agent_id": "agent_2", "state": "RUNNING"},
+            ]
+            self.assertIsNone(
+                self.worker._select_agent({"agent_id": "agent_2", "skills": []}),
+            )
+        finally:
+            self.manager.agent_status = original_status
+
     def test_unmatched_skill_is_deferred_without_begin_and_next_run_executes(self):
         denied = self.make_task(skills=("mqtt",))
         denied_run = next(iter(self.engine.runs))
