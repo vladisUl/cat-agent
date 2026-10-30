@@ -195,9 +195,13 @@ class TaskStore:
         return tuple(self._tasks[key] for key in sorted(self._tasks))
 
     @synchronized
-    def set_enabled(self, task_id: int, enabled: bool) -> TaskRecord:
+    def set_enabled(self, task_id: int, enabled: bool, *,
+                    preserve_generation: bool = False) -> TaskRecord:
         current = self.require(task_id)
-        updated = replace(current, enabled=bool(enabled), generation=uuid.uuid4().hex)
+        updated = replace(
+            current, enabled=bool(enabled),
+            generation=current.generation if preserve_generation else uuid.uuid4().hex,
+        )
         self._replace(updated)
         return updated
 

@@ -185,9 +185,12 @@ class SystemRuntime:
         LOGGER.info("SYSTEM task delete id=%d deleted=%s", task_id, deleted)
         return deleted
 
-    def start_task(self, task_id: int) -> TaskRecord:
+    def start_task(self, task_id: int, *,
+                   preserve_generation: bool = False) -> TaskRecord:
         store = self._require_task_store()
-        task = store.set_enabled(task_id, True)
+        task = store.set_enabled(
+            task_id, True, preserve_generation=preserve_generation,
+        )
         period = task.timer_period_seconds
         if period is not None:
             now = time.monotonic()
@@ -212,9 +215,12 @@ class SystemRuntime:
         )
         return task
 
-    def stop_task(self, task_id: int) -> TaskRecord:
+    def stop_task(self, task_id: int, *,
+                  preserve_generation: bool = False) -> TaskRecord:
         store = self._require_task_store()
-        task = store.set_enabled(task_id, False)
+        task = store.set_enabled(
+            task_id, False, preserve_generation=preserve_generation,
+        )
         period = task.timer_period_seconds
         if period is not None:
             with self._lock:

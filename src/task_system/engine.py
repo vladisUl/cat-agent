@@ -259,6 +259,15 @@ class TaskEngine:
                 return self.status_text()
             if method == 'delete_task':
                 return self._delete(*args, **kwargs)
+            if method == 'pause_task':
+                # Native pause suppresses timer ticks without changing the
+                # TASK generation. Revoke unstarted RUNs while disabled so
+                # rapid pause/resume cannot resurrect an old offer.
+                result = self.runtime.stop_task(args[0], preserve_generation=True)
+                self._reconcile()
+                return result
+            if method == 'resume_task':
+                return self.runtime.start_task(args[0], preserve_generation=True)
             if method == 'create_external_task':
                 task_kwargs, binding_kwargs = args
                 task = self.tasks.create(**task_kwargs)

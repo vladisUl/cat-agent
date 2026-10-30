@@ -198,7 +198,7 @@ class NativeTaskController:
             if record is None or not self._ours(record):
                 LOGGER.warning("native-task-tool STOP NOT-FOUND id=%s", task_id)
                 return {"ok": False, "error": "native periodic QUERY not found"}
-            stopped = self.rpc.call("system", "stop_task", task_id)
+            stopped = self.rpc.call("system", "pause_task", task_id)
         except (TaskStoreError, OSError, ValueError) as exc:
             return self._rpc_error("STOP", exc)
         LOGGER.info("native-task-tool STOPPED id=%s", task_id)
@@ -225,7 +225,7 @@ class NativeTaskController:
                 return {"ok": True, "task_id": normalized_id,
                         "enabled": True, "already_running": True,
                         "period_seconds": record["timer_period_seconds"]}
-            started = self.rpc.call("system", "start_task", normalized_id)
+            started = self.rpc.call("system", "resume_task", normalized_id)
         except (TaskStoreError, OSError, ValueError) as exc:
             return self._rpc_error("START", exc)
         LOGGER.info("native-task-tool STARTED id=%s period=%s",

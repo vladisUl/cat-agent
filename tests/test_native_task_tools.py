@@ -132,6 +132,10 @@ class UnifiedDelegationTests(unittest.TestCase):
             before = self.rpc.call("tasks", "require", task_id)
             stopped = self.management["stop_periodic_query"](str(task_id))
             self.assertFalse(stopped["enabled"])
+            self.assertEqual(
+                self.rpc.call("tasks", "require", task_id)["generation"],
+                before["generation"],
+            )
             self.assertIsNone(self.engine.runtime._task_timers[task_id].next_fire_monotonic)
             started = self.management["start_periodic_query"](str(task_id))
             self.assertEqual(started, {"ok": True, "task_id": task_id,
@@ -141,7 +145,10 @@ class UnifiedDelegationTests(unittest.TestCase):
             self.assertTrue(after["enabled"])
             for field in ("task_id", "text", "timer_period_seconds", "agent_id"):
                 self.assertEqual(after[field], before[field])
-            self.assertNotEqual(after["generation"], before["generation"])
+            self.assertEqual(after["generation"], before["generation"])
+            self.assertEqual(
+                self.rpc.call("tasks", "get", task_id)["text"], before["text"]
+            )
             timer = self.engine.runtime._task_timers[task_id]
             self.assertTrue(timer.enabled)
             self.assertEqual(timer.period_seconds, 60.0)
@@ -159,7 +166,7 @@ class UnifiedDelegationTests(unittest.TestCase):
                              generation)
             self.assertEqual(self.engine.runtime._task_timers[task_id].next_fire_monotonic,
                              next_fire)
-            self.assertEqual(len([c for c in self.rpc.calls if c[1] == "start_task"]), 1)
+            self.assertEqual(len([c for c in self.rpc.calls if c[1] == "resume_task"]), 1)
         finally:
             self._end()
 

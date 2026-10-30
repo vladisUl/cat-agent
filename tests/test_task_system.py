@@ -113,6 +113,45 @@ class TaskSystemTest(unittest.TestCase):
         self.assertEqual(first.run_id, repeated.run_id)
         self.assertEqual(self.pull(self.c), ())
 
+    def test_native_pause_resume_only_suspends_timer_not_task_generation(self):
+        task = self.create()
+        timer = self.engine.runtime._task_timers[task.task_id]
+        original_generation = task.generation
+        self.engine.call("system", "pause_task", (task.task_id,))
+        paused = self.a.task_store.require(task.task_id)
+        self.assertFalse(paused.enabled)
+        self.assertEqual(paused.generation, original_generation)
+        self.assertFalse(timer.enabled)
+        self.assertIsNone(timer.next_fire_monotonic)
+        self.engine.tick(time.monotonic() + 100)
+        self.assertEqual(self.engine.runs, {})
+        self.engine.call("system", "resume_task", (task.task_id,))
+        resumed = self.a.task_store.require(task.task_id)
+        self.assertTrue(resumed.enabled)
+        self.assertEqual(resumed.generation, original_generation)
+        self.assertEqual(resumed.text, task.text)
+        self.assertEqual(resumed.timer_period_seconds, task.timer_period_seconds)
+        self.assertEqual(resumed.agent_id, task.agent_id)
+        self.assertTrue(timer.enabled)
+        self.assertIsNotNone(timer.next_fire_monotonic)
+        self.assertEqual(len(self.a.task_snapshot()), 1)
+        self.due(task)
+        self.assertEqual(len(self.engine.runs), 1)
+
+    def test_native_pause_cancels_queued_run_before_resume(self):
+        task = self.create()
+        self.due(task)
+        event, = self.pull(self.a)
+        self.engine.call("system", "pause_task", (task.task_id,))
+        self.assertEqual(self.engine.runs[event.run_id]["state"], "cancelled")
+        self.engine.call("system", "resume_task", (task.task_id,))
+        self.assertFalse(self.a.begin_run(event))
+        self.assertFalse(self.a.valid_run(event))
+        self.due(task)
+        new, = self.pull(self.a)
+        self.assertNotEqual(new.run_id, event.run_id)
+        self.assertEqual(new.task_generation, task.generation)
+
     def test_stop_delete_recreate_cannot_revive_active_work(self):
         task = self.create()
         self.due(task)
