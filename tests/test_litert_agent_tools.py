@@ -16,7 +16,7 @@ from unittest.mock import patch
 from litert_agent_tools.clone import ConversationCloneError, clone_conversation
 from litert_agent_tools.config import MqttConfig
 from litert_agent_tools.conversation import (
-    InvalidUserTextError, NativeConversationChat, response_text,
+    InvalidUserTextError, NativeConversationChat, ToolExecutionLedger, response_text,
 )
 from litert_agent_tools.mqtt_tools import TOPICS, create_mqtt_tools
 from litert_agent_tools.native_patch.enable_prefill import CHANGES, change_source
@@ -411,6 +411,60 @@ class NativeSourcePatchTests(unittest.TestCase):
             self.assertIn("SetPrefillPrefaceOnInit", (root / "c/conversation.cc").read_text(encoding="utf-8"))
             self.assertIn("prefill_preface_on_init: bool = False",
                           (root / "python/litert_lm/engine.py").read_text(encoding="utf-8"))
+
+
+class NativeExecutionStatusTests(unittest.TestCase):
+    def test_tool_status_is_independent_from_model_text(self):
+        import inspect
+        ledger = ToolExecutionLedger()
+
+        def test_tool(command: str) -> dict:
+            """Test native tool with one typed argument."""
+            return {"ok": command != "fail", "exit_code": 1 if command == "fail" else 0}
+
+        wrapped = ledger.wrap(test_tool)
+        self.assertEqual(wrapped.__name__, "test_tool")
+        self.assertEqual(inspect.signature(wrapped), inspect.signature(test_tool))
+        self.assertEqual(ledger.wrap("test-sentinel"), "test-sentinel")
+        wrapped("fail")  # Warmup, not a task execution.
+        self.assertEqual(ledger.calls, 0)
+        ledger.active = True
+        wrapped("success")
+        self.assertEqual(ledger.calls, 1)
+        self.assertEqual(ledger.status_code, 0)
+        wrapped("fail")
+        self.assertEqual(ledger.calls, 2)
+        self.assertEqual(ledger.status_code, 1)
+        ledger.active = False
+
+    def test_native_agent_accepts_empty_reply_and_reports_status(self):
+        from orchestration_tools.agents import AgentState, NativeAgent
+
+        class FakeChat:
+            base_kv_tokens = 100
+            working_kv_tokens = 150
+            execution_status_code = 0
+            resets = 0
+
+            def ask(self, task):
+                self.working_kv_tokens += 10
+                return ""
+
+            def new_dialogue(self):
+                self.resets += 1
+
+        chat = FakeChat()
+        agent = NativeAgent("agent_1", chat)
+        result = agent.run("Запиши результат и ничего не сообщай")
+        self.assertEqual(result.status_code, 0)
+        self.assertEqual(result.state, AgentState.FREE)
+        self.assertEqual(result.text, "")
+        self.assertEqual(chat.resets, 1)
+        chat.execution_status_code = 1
+        failure = agent.run("Вызови инструмент с ошибкой")
+        self.assertEqual(failure.status_code, 1)
+        self.assertEqual(failure.state, AgentState.FAILED)
+        self.assertEqual(chat.resets, 2)
 
 
 if __name__ == "__main__":

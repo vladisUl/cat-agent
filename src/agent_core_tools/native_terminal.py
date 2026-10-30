@@ -119,7 +119,6 @@ class NativeTerminalTUI(TerminalTUI):
 
         put("BASE KV", bold=True)
         put("manager", f"{self.core_info.get('manager_warm_tokens', '?')} tok")
-        put("query", f"{self.core_info.get('query_warm_tokens', '?')} tok")
         agents = self.status.get("agents")
         recent = self.status.get("last_agent_runs")
         if not isinstance(recent, dict):

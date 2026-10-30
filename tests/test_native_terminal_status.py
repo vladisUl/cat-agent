@@ -38,7 +38,6 @@ class NativeTuiStatusTests(unittest.TestCase):
             "backend": "GPU",
             "stage": 5,
             "manager_warm_tokens": 1166,
-            "query_warm_tokens": 153,
         }
         tui.status = {
             "chat_open": True,
@@ -74,8 +73,6 @@ class NativeTuiStatusTests(unittest.TestCase):
         self.assertIn("GPU", text)
         self.assertIn("manager", text)
         self.assertIn("1166 tok", text)
-        self.assertIn("query", text)
-        self.assertIn("153 tok", text)
         self.assertIn("FREE  KV 418", text)
         self.assertIn("TASK 2 done", text)
         self.assertIn("RUN 60s  next 45s", text)
