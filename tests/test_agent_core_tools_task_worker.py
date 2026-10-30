@@ -234,36 +234,53 @@ class TaskWorkerTests(unittest.TestCase):
         self.assertEqual(runs[1]["state"], "done")
         self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 1)
 
-    def test_query_agent_then_separate_manager_and_result_publisher(self):
-        from orchestration_tools.contracts import ManagerTurn
-        summaries = []
-        self.worker.on_query_result = summaries.append
-        def report(task_id, result, *, failed=False):
-            self.manager.events.append("query-manager")
-            self.assertEqual(task_id, 1)
-            self.assertIn("TASK_TEST_ACTION", result)
-            return ManagerTurn("reply", "TASK QUERY summary: " + result)
-        self.manager.process_task_query = report
+    def test_query_publishes_exact_agent_text_without_second_model(self):
+        notices = []
+        self.worker.on_query_result = notices.append
         self.make_task(method="query")
         self.assertTrue(self.worker.poll_once())
         self.wait_model_done()
-        self.assertEqual(summaries, [])  # No IPC hint before durable commit.
-        self.assertFalse(self.worker.poll_once())  # STORE, notify, FINISH.
-        self.assertEqual(len(summaries), 1)
-        self.assertEqual(self.manager.events, ["TASK_TEST_ACTION", "query-manager"])
-        self.assertEqual(summaries[0]["task_id"], 1)
-        self.assertIn("TASK QUERY summary", summaries[0]["text"])
+        self.assertEqual(notices, [])  # No live hint before SQLite commit.
+        self.assertFalse(self.worker.poll_once())
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(self.manager.events, ["TASK_TEST_ACTION"])
+        self.assertEqual(notices[0]["text"], "TASK_TEST_ACTION")
+        self.assertEqual(notices[0]["status_code"], 0)
         self.assertEqual(self.manager.agent_chat.working_kv_tokens, 200)
-        self.assertFalse(self.worker.poll_once())  # Flush finish, no new RUN.
         self.assertEqual(next(iter(self.engine.runs.values()))["state"], "done")
 
+    def test_silent_query_finishes_without_notification(self):
+        from orchestration_tools.agents import AgentOutcome, AgentState
+        calls = []
+        def silent(agent_id, instruction):
+            calls.append((agent_id, instruction))
+            return AgentOutcome(agent_id, AgentState.FREE, "", 200, 0)
+        self.manager.run_agent = silent
+        self.make_task(method="query")
+        self.assertTrue(self.worker.poll_once())
+        self.wait_model_done()
+        self.assertFalse(self.worker.poll_once())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.rpc.call("notifications", "list"), [])
+        self.assertEqual(next(iter(self.engine.runs.values()))["state"], "done")
+        self.assertEqual(self.worker.snapshot()["last_agent_runs"]["agent_1"]["status_code"], 0)
+
+    def test_failed_query_persists_status_without_user_notification(self):
+        from orchestration_tools.agents import AgentOutcome, AgentState
+        self.manager.run_agent = lambda agent_id, instruction: (
+            AgentOutcome(agent_id, AgentState.FAILED, "tool error", 200, 1)
+        )
+        self.make_task(method="query")
+        self.assertTrue(self.worker.poll_once())
+        self.wait_model_done()
+        self.assertFalse(self.worker.poll_once())
+        self.assertEqual(self.rpc.call("notifications", "list"), [])
+        self.assertEqual(next(iter(self.engine.runs.values()))["state"], "error")
+        self.assertEqual(self.worker.snapshot()["last_agent_runs"]["agent_1"]["status_code"], 1)
+
     def test_query_store_outage_does_not_publish_or_rerun_model(self):
-        from orchestration_tools.contracts import ManagerTurn
         events = []
         self.worker.on_query_result = events.append
-        self.manager.process_task_query = (
-            lambda _id, _text, **_kw: ManagerTurn("reply", "Сводка QUERY")
-        )
         self.rpc.fail_publish_once = True
         self.make_task(method="query")
         self.assertTrue(self.worker.poll_once())
@@ -273,52 +290,27 @@ class TaskWorkerTests(unittest.TestCase):
         self.assertEqual(self.worker.snapshot()["pending_query_stores"], 1)
         self.assertEqual(self.rpc.call("notifications", "list"), [])
         self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 1)
-        self.assertFalse(self.worker.poll_once())  # Exactly one retry of STORE.
+        self.assertFalse(self.worker.poll_once())  # Retry only STORE.
         self.assertEqual(len(events), 1)
         self.assertEqual(len(self.rpc.call("notifications", "list")), 1)
         self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 1)
         self.assertEqual(next(iter(self.engine.runs.values()))["state"], "done")
 
     def test_lost_query_store_reply_is_idempotent(self):
-        from orchestration_tools.contracts import ManagerTurn
         notifications = []
         self.worker.on_query_result = notifications.append
-        self.manager.process_task_query = (
-            lambda _id, _text, **_kw: ManagerTurn("reply", "Сводка QUERY")
-        )
         self.rpc.fail_publish_reply_once = True
         self.make_task(method="query")
         self.assertTrue(self.worker.poll_once())
         self.wait_model_done()
-        self.assertFalse(self.worker.poll_once())  # Persisted, reply lost.
+        self.assertFalse(self.worker.poll_once())  # Persisted; reply lost.
         self.assertEqual(notifications, [])
         self.assertEqual(len(self.rpc.call("notifications", "list")), 1)
-        self.assertFalse(self.worker.poll_once())  # Same RUN, same immutable data.
+        self.assertFalse(self.worker.poll_once())  # Same immutable payload.
         self.assertEqual(len(notifications), 1)
         self.assertEqual(len(self.rpc.call("notifications", "list")), 1)
         self.assertEqual(self.manager.events.count("TASK_TEST_ACTION"), 1)
         self.assertEqual(next(iter(self.engine.runs.values()))["state"], "done")
-
-    def test_query_yields_to_human_between_agent_and_manager(self):
-        from orchestration_tools.contracts import ManagerTurn
-        from unittest.mock import patch
-        self.manager.process_task_query = lambda *args, **kwargs: (
-            self.manager.events.append("query-manager")
-            or ManagerTurn("reply", "Summary")
-        )
-        self.make_task(method="query")
-        original_submit = self.scheduler.submit
-        def submit(kind, callback, *, continuation=False):
-            if continuation:
-                original_submit("human", lambda: self.manager.events.append("human"))
-            return original_submit(kind, callback, continuation=continuation)
-        with patch.object(self.scheduler, "submit", side_effect=submit):
-            self.assertTrue(self.worker.poll_once())
-            deadline = time.monotonic() + 3
-            while self.worker.snapshot()["unacknowledged"] == 0 and time.monotonic() < deadline:
-                time.sleep(.005)
-        self.assertEqual(self.manager.events[:3],
-                         ["TASK_TEST_ACTION", "human", "query-manager"])
 
     def test_deferred_grant_uses_correct_offer_and_can_go_to_other_worker(self):
         denied = self.make_task(skills=("mqtt",))
@@ -351,26 +343,6 @@ class TaskWorkerTests(unittest.TestCase):
         release.set()
         self.wait_model_done()
         self.assertEqual(order[:3], ["blocking", "human", "TASK_TEST_ACTION"])
-
-    def test_revocation_between_agent_and_query_manager_blocks_report(self):
-        from orchestration_tools.contracts import ManagerTurn
-        from unittest.mock import patch
-        task = self.make_task(method="query")
-        self.manager.process_task_query = lambda *_args, **_kw: (
-            self.manager.events.append("query-manager")
-            or ManagerTurn("reply", "Summary")
-        )
-        original_submit = self.scheduler.submit
-        def submit(kind, callback, *, continuation=False):
-            if continuation:
-                original_submit("human", lambda: self.engine.runtime.stop_task(task.task_id))
-            return original_submit(kind, callback, continuation=continuation)
-        with patch.object(self.scheduler, "submit", side_effect=submit):
-            self.assertTrue(self.worker.poll_once())
-            self.wait_model_done()
-        self.assertEqual(self.manager.events, ["TASK_TEST_ACTION"])
-        self.worker.poll_once()
-        self.assertEqual(next(iter(self.engine.runs.values()))["state"], "cancelled")
 
     def test_begin_failure_never_invokes_model(self):
         self.make_task()
