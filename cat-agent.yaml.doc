@@ -19,7 +19,8 @@ litert:
     # Native CORE on WSL2 with RTX 3050 and separately built, patched Dozen.
     # This workaround bypasses a Vulkan feature check; it is not conformant.
     e2b-wsl3050:
-      model: /storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm
+      # Full E2B model for the unverified Vision GPU experiment.
+      model: /storage/models/litertlm/gemma-4-E2B-it.litertlm
       backend: gpu
       # EXPERIMENT only: test Vision executor on actual RTX 3050 GPU.
       # Prior initialization reported tf_lite_vision_encoder not found.
