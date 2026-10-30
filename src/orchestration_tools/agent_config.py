@@ -58,12 +58,4 @@ def effective_agent_tool_names(
 
     Native Conversation and TASK worker must use this same calculation.
     """
-    # A file-writing tool is never a common read-only MQTT capability.
-    # Grant the narrower audited writer only to an AGENT already authorized
-    # for shell AND outdoor MQTT. TASK admission uses this same function.
-    recording = (
-        ("record_outdoor_weather",)
-        if "shell" in spec.tool_names and "get_outdoor_weather" in builtins
-        else ()
-    )
-    return tuple(dict.fromkeys((*builtins, *recording, *spec.tool_names)))
+    return tuple(dict.fromkeys((*builtins, *spec.tool_names)))

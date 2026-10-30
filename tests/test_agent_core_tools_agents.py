@@ -152,7 +152,7 @@ class AgentPoolTests(unittest.TestCase):
         agent = AgentSpec("agent_1", Path("/nonexistent/agent_1.md"),
                           ("shell", "get_outdoor_weather"))
         names = effective_agent_tool_names(agent, BUILTIN_MQTT_TOOL_NAMES)
-        self.assertEqual(names, BUILTIN_MQTT_TOOL_NAMES + ("record_outdoor_weather", "shell"))
+        self.assertEqual(names, BUILTIN_MQTT_TOOL_NAMES + ("shell",))
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(effective_agent_tool_names(agent), agent.tool_names)
         limited = AgentSpec("agent_2", Path("/nonexistent/agent_2.md"), ())

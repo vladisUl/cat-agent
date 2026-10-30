@@ -478,39 +478,7 @@ class NativeTaskWorker:
             instruction = task["text"]
             # The prompt is taken from the saved TASK record, not the IPC offer.
             LOGGER.info("TASK %s -> %s %r", event["task_id"], agent_id.upper(), instruction)
-            if "record_outdoor_weather" in task.get("skills", ()):
-                # For a file-writing periodic task, disregard the model's
-                # unverified assertion. The tool receipt is authoritative.
-                from litert_agent_tools.tool_audit import capture_task_tools
-                from orchestration_tools.agents import AgentOutcome, AgentState
-                with capture_task_tools() as audit:
-                    result = self.manager.run_agent(agent_id, instruction)
-                receipt = audit.successful("record_outdoor_weather")
-                if (receipt is not None and isinstance(receipt.get("file_path"), str)
-                        and type(receipt.get("bytes_written")) is int
-                        and receipt["bytes_written"] > 0):
-                    text = (
-                        f"Запись подтверждена: {receipt['file_path']}; "
-                        f"температура {receipt['temperature_c']}°C, "
-                        f"влажность {receipt['humidity_percent']}%."
-                    )
-                    result = AgentOutcome(agent_id, AgentState.FREE,
-                                          text, result.kv_before_reset)
-                    LOGGER.info("native-task AUDIT WRITTEN run=%s path=%s bytes=%d",
-                                event["run_id"], receipt["file_path"],
-                                receipt["bytes_written"])
-                else:
-                    last = audit.last("record_outdoor_weather")
-                    reason = (last.get("error", "tool did not confirm a write")
-                              if last is not None else "record_outdoor_weather was not called")
-                    result = AgentOutcome(
-                        agent_id, AgentState.FAILED,
-                        f"Запись НЕ выполнена: {reason}", result.kv_before_reset,
-                    )
-                    LOGGER.warning("native-task AUDIT NO-WRITE run=%s reason=%s",
-                                   event["run_id"], reason)
-            else:
-                result = self.manager.run_agent(agent_id, instruction)
+            result = self.manager.run_agent(agent_id, instruction)
             LOGGER.info("%s -> TASK %s state=%s text=%r",
                         agent_id.upper(), event["task_id"], result.state.value, result.text)
             from orchestration_tools.agents import AgentState
