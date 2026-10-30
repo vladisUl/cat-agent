@@ -169,11 +169,23 @@ Dawn отказался создавать Vulkan adapter:
   команды нужен `native-tool RESULT name=shell` в журнале CORE.
 
 Профиль `litert.profiles.e2b-wsl3050` в `cat-agent.yaml`
-выбран как активный. Он включает GPU, `vision_backend: none`,
-FP16 по умолчанию (без `activation_dtype`), отключённый speculative
-decoding и выбор драйвера из
+выбран как активный. **Проверенная текстовая конфигурация** использовала
+`backend: gpu` и `vision_backend: none`, FP16 по умолчанию
+(без `activation_dtype`), отключённый speculative decoding
+и выбор драйвера из
 `vulkan_icd_dir: /opt/mesa-dozen-dawn-test/share/vulkan/icd.d`
-с `d3d12_adapter: NVIDIA`. Запуск при работающем TASK SYSTEM:
+с `d3d12_adapter: NVIDIA`.
+
+**Эксперимент с Vision GPU (30 октября 2026):** активному профилю
+временно задано `vision_backend: gpu`, при неизменных модели,
+`backend: gpu`, драйвере и остальных параметрах. Это **не проверенная**
+конфигурация. Прежняя ошибка `tf_lite_vision_encoder not found`
+указывает на отсутствие нужной секции в контейнере модели; если ошибка
+повторится при GPU Vision, это не доказывает неисправность RTX 3050.
+После проверки верните `vision_backend: none` для восстановленного
+текстового режима.
+
+Запуск при работающем SYSTEM CORE:
 
 ```bash
 cd /opt/cat-agent

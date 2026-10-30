@@ -21,8 +21,10 @@ litert:
     e2b-wsl3050:
       model: /storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm
       backend: gpu
-      # Text-only E2B GPU model has no TFLite vision encoder section.
-      vision_backend: none
+      # EXPERIMENT only: test Vision executor on actual RTX 3050 GPU.
+    # Prior init without a vision encoder section reported tf_lite_vision_encoder not found.
+    # Revert to 'none' to restore the confirmed text-only GPU path.
+      vision_backend: gpu
       # Omitted activation_dtype = LiteRT default FP16.
       speculative: false
       ynnpack: false

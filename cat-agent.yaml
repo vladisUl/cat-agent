@@ -2,12 +2,13 @@ litert:
   active_profile: e2b-wsl3050
 
   profiles:
-    # Verified on WSL2 + RTX 3050 Laptop + patched Mesa Dozen 26.0.8.
+    # GPU text path verified on WSL2 + RTX 3050 + patched Mesa Dozen 26.0.8.
+    # EXPERIMENT: Vision GPU was not verified; keep backend=GPU unchanged.
     # The Dozen fullDrawIndexUint32 workaround is experimental.
     e2b-wsl3050:
       model: /storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm
       backend: gpu
-      vision_backend: none
+      vision_backend: gpu
       speculative: false
       ynnpack: false
       # Omit activation_dtype: GpuArtisan defaults to fp16.
