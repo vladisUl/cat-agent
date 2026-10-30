@@ -58,6 +58,20 @@ def _last_prefill_tokens(conversation: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
+def _last_decode_tokens(conversation: Any) -> int | None:
+    """Last native decode length, to distinguish immediate EOS from tool loss."""
+    reader = getattr(conversation, "get_benchmark_info", None)
+    if not callable(reader):
+        return None
+    try:
+        info = reader()
+    except Exception:
+        LOGGER.debug("Native decode benchmark info is unavailable", exc_info=True)
+        return None
+    value = getattr(info, "last_decode_token_count", None)
+    return value if type(value) is int and value >= 0 else None
+
+
 def response_text(response: Any) -> str:
     """Extract the final assistant text from LiteRT's Message object."""
     content = response.get("content") if isinstance(response, Mapping) else getattr(response, "content", None)
@@ -251,11 +265,13 @@ class NativeConversationChat:
             ledger.active = False
         after = _kv_tokens(self._working)
         last_prefill = _last_prefill_tokens(self._working)
+        last_decode = _last_decode_tokens(self._working)
         LOGGER.info(
             "native-conversation TURN kv_before=%s kv_after=%s "
-            "last_prefill_tokens=%s elapsed=%.3fs tools=%d status_code=%d",
-            before, after, last_prefill, time.monotonic() - started,
-            ledger.calls, ledger.status_code,
+            "last_prefill_tokens=%s last_decode_tokens=%s "
+            "elapsed=%.3fs tools=%d status_code=%d",
+            before, after, last_prefill, last_decode,
+            time.monotonic() - started, ledger.calls, ledger.status_code,
         )
         text = response_text(result)
         if not text.strip():
@@ -263,6 +279,19 @@ class NativeConversationChat:
                 "native-conversation SILENT-REPLY response_type=%s response=%r",
                 type(result).__name__, repr(result)[:2048],
             )
+            if ledger.calls == 0:
+                # Inspect Python-side tool registration in both BASE and
+                # cloned Conversation. No retry, reset, or extra inference.
+                def names(conv):
+                    return tuple(getattr(tool, "__name__", type(tool).__name__)
+                                 for tool in (getattr(conv, "tools", None) or ()))
+                LOGGER.warning(
+                    "native-conversation EMPTY-NO-TOOL "
+                    "last_decode_tokens=%s working_tools=%s base_tools=%s "
+                    "automatic_tool_calling=%s",
+                    last_decode, names(self._working), names(self._base),
+                    getattr(self._working, "automatic_tool_calling", None),
+                )
         return text
 
     def fork_dialogue(self):

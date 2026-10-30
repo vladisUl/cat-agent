@@ -16,7 +16,8 @@ from unittest.mock import patch
 from litert_agent_tools.clone import ConversationCloneError, clone_conversation
 from litert_agent_tools.config import MqttConfig
 from litert_agent_tools.conversation import (
-    InvalidUserTextError, NativeConversationChat, ToolExecutionLedger, response_text,
+    InvalidUserTextError, NativeConversationChat, ToolExecutionLedger,
+    _last_decode_tokens, response_text,
 )
 from litert_agent_tools.mqtt_tools import TOPICS, create_mqtt_tools
 from litert_agent_tools.native_patch.enable_prefill import CHANGES, change_source
@@ -165,6 +166,17 @@ class WarmStubEngine:
         self.prefill_requested = prefill_preface_on_init
         self.base = WarmStubConversation(messages, tools, tokens=self.tokens)
         return self.base
+
+
+class DecodeDiagnosticsTests(unittest.TestCase):
+    def test_decode_token_counter_is_read_only_and_optional(self):
+        class Stub:
+            def get_benchmark_info(self):
+                return SimpleNamespace(last_decode_token_count=1)
+        class NoInfo:
+            pass
+        self.assertEqual(_last_decode_tokens(Stub()), 1)
+        self.assertIsNone(_last_decode_tokens(NoInfo()))
 
 
 class ConversationTests(unittest.TestCase):
