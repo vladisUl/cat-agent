@@ -164,10 +164,10 @@ class TaskSystemUnifiedLauncherTest(unittest.TestCase):
             fake = Path(folder) / "fake-python"
             capture = Path(folder) / "args.json"
             fake.write_text(
-                "#!/usr/bin/env python3\\n"
-                "import json, os, sys\\n"
-                "with open(os.environ['CAPTURE'], 'w', encoding='utf-8') as f:\\n"
-                "    json.dump(sys.argv[1:], f)\\n",
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "with open(os.environ['CAPTURE'], 'w', encoding='utf-8') as f:\n"
+                "    json.dump(sys.argv[1:], f)\n",
                 encoding="utf-8",
             )
             fake.chmod(0o755)
@@ -202,12 +202,12 @@ class LauncherSelectionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             py = Path(folder) / "fake-python"
             py.write_text(
-                "#!/usr/bin/env python3\\n"
-                "import sys\\n"
-                "if sys.argv[1:] == ['-m', 'task_system.cli', 'cores']:\\n"
-                "    print('openai READY')\\n"
-                "else:\\n"
-                "    raise SystemExit(3)\\n",
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "if sys.argv[1:] == ['-m', 'task_system.cli', 'cores']:\n"
+                "    print('openai READY')\n"
+                "else:\n"
+                "    raise SystemExit(3)\n",
                 encoding="utf-8",
             )
             py.chmod(0o755)
