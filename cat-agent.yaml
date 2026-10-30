@@ -6,7 +6,7 @@ litert:
     # EXPERIMENT: Vision GPU was not verified; keep backend=GPU unchanged.
     # The Dozen fullDrawIndexUint32 workaround is experimental.
     e2b-wsl3050:
-      model: /storage/models/litertlm/gemma-4-E2B-it-gpu.litertlm
+      model: /storage/models/litertlm/gemma-4-E2B-it.litertlm
       backend: gpu
       vision_backend: gpu
       speculative: false
