@@ -25,6 +25,7 @@ class AgentOutcome:
     state: AgentState
     text: str
     kv_before_reset: int | None
+    status_code: int = 0
 
 
 class NativeAgent:
@@ -55,8 +56,9 @@ class NativeAgent:
         try:
             content = self.chat.ask(task)
             kv = self.chat.working_kv_tokens
-            if not content.strip():
-                failure = RuntimeError("Agent returned an empty response")
+            # Silence is a valid completion; tool failures are independent.
+            if getattr(self.chat, "execution_status_code", 0):
+                failure = RuntimeError("One or more native tools failed")
         except Exception as exc:
             failure = exc
             kv = self.chat.working_kv_tokens
@@ -72,8 +74,8 @@ class NativeAgent:
             if not self._closed:
                 self.state = AgentState.FREE
         if failure is not None:
-            return AgentOutcome(self.agent_id, AgentState.FAILED, str(failure), kv)
-        return AgentOutcome(self.agent_id, AgentState.FREE, content, kv)
+            return AgentOutcome(self.agent_id, AgentState.FAILED, str(failure), kv, 1)
+        return AgentOutcome(self.agent_id, AgentState.FREE, content, kv, 0)
 
     def run_slice(self, instruction: str, *, final: bool) -> AgentOutcome:
         """One non-preemptible native model call for a cooperative background job.
@@ -92,8 +94,8 @@ class NativeAgent:
         try:
             text = self.chat.ask(instruction)
             kv = self.chat.working_kv_tokens
-            if not text.strip():
-                failure = RuntimeError("Agent returned an empty response")
+            if getattr(self.chat, "execution_status_code", 0):
+                failure = RuntimeError("One or more native tools failed")
         except Exception as exc:
             failure = exc
             kv = self.chat.working_kv_tokens
@@ -109,8 +111,8 @@ class NativeAgent:
         else:
             self.state = AgentState.WAITING
         if failure is not None:
-            return AgentOutcome(self.agent_id, AgentState.FAILED, str(failure), kv)
-        return AgentOutcome(self.agent_id, AgentState.FREE if final else AgentState.WAITING, text, kv)
+            return AgentOutcome(self.agent_id, AgentState.FAILED, str(failure), kv, 1)
+        return AgentOutcome(self.agent_id, AgentState.FREE if final else AgentState.WAITING, text, kv, 0)
 
     def abort_slices(self) -> None:
         """Discard a suspended task without replaying the previous native call."""

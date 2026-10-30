@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from functools import wraps
 import logging
 import time
 from typing import Any
@@ -76,6 +77,35 @@ def response_text(response: Any) -> str:
     raise TypeError(f"Unsupported LiteRT response content: {type(content).__name__}")
 
 
+class ToolExecutionLedger:
+    """Track native tool outcomes separately from model-generated text."""
+
+    def __init__(self):
+        self.active = False
+        self.calls = 0
+        self.status_code = 0
+
+    def wrap(self, function):
+        @wraps(function)
+        def measured(*args, **kwargs):
+            try:
+                result = function(*args, **kwargs)
+            except BaseException:
+                if self.active:
+                    self.calls += 1
+                    self.status_code = 1
+                raise
+            if self.active:
+                self.calls += 1
+                if isinstance(result, Mapping):
+                    code = result.get("exit_code")
+                    if (result.get("ok") is False or
+                            (type(code) is int and code != 0)):
+                        self.status_code = 1
+            return result
+        return measured
+
+
 class NativeConversationChat:
     """One template/base Conversation and one disposable working clone.
 
@@ -107,10 +137,11 @@ class NativeConversationChat:
         self._base_kv_tokens: int | None = None
         self._base_prefilled = False
         self._trace_native_json = trace_native_json
+        self._tool_ledger = ToolExecutionLedger()
         self._base_warm_reply: str | None = None
         kwargs: dict[str, Any] = {
             "messages": [{"role": "system", "content": system_prompt}],
-            "tools": list(tools),
+            "tools": [self._tool_ledger.wrap(tool) for tool in tools],
             "automatic_tool_calling": True,
         }
         if sampler_config is not None:
@@ -158,6 +189,14 @@ class NativeConversationChat:
             raise
 
     @property
+    def execution_status_code(self) -> int:
+        return self._tool_ledger.status_code
+
+    @property
+    def execution_tool_calls(self) -> int:
+        return self._tool_ledger.calls
+
+    @property
     def base_prefilled(self) -> bool:
         return self._base_prefilled
 
@@ -200,13 +239,21 @@ class NativeConversationChat:
         _validate_user_text(question)
         before = _kv_tokens(self._working)
         started = time.monotonic()
-        result = self._working.send_message(question)
+        ledger = self._tool_ledger
+        ledger.calls = 0
+        ledger.status_code = 0
+        ledger.active = True
+        try:
+            result = self._working.send_message(question)
+        finally:
+            ledger.active = False
         after = _kv_tokens(self._working)
         last_prefill = _last_prefill_tokens(self._working)
         LOGGER.info(
             "native-conversation TURN kv_before=%s kv_after=%s "
-            "last_prefill_tokens=%s elapsed=%.3fs",
+            "last_prefill_tokens=%s elapsed=%.3fs tools=%d status_code=%d",
             before, after, last_prefill, time.monotonic() - started,
+            ledger.calls, ledger.status_code,
         )
         text = response_text(result)
         if not text.strip():
