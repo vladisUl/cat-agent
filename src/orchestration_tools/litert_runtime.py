@@ -52,7 +52,7 @@ def build_native_manager(
     if activation_dtype is not None and activation_dtype not in ('fp32', 'fp16', 'int16', 'int8'):
         raise ValueError(f'Unsupported LiteRT activation dtype: {activation_dtype!r}')
 
-    # The manager, AGENT and QUERY prompts share the same external directory.
+    # AGENT prompts live alongside the external manager prompt.
     # Relative AGENT paths are resolved against the manager prompt's directory.
     prompt_dir = system_file.parent
     specs = (
@@ -109,7 +109,11 @@ def build_native_manager(
             "\n\nПоручения AGENT ставь через delegate_task(agent_id, task, period_seconds). "
             "Если нужно выполнить один раз, period_seconds=0. "
             "Если повторять каждую минуту, period_seconds=60. "
-            "Передавай в task полный текст задания, не сокращая его до имени инструмента. "
+            "Передавай в task только содержание работы, БЕЗ временных условий: "
+            "не включай 'каждую минуту', 'через час' и другие интервалы. "
+            "Время передавай ТОЛЬКО отдельным полем period_seconds. "
+            "Тактику выполнения и необходимость ответа определяет AGENT. "
+            "Если сообщение не требуется, AGENT может закончить молча. "
             "Повторения организует TASK SYSTEM, не shell или AGENT. "
             "Для остановки используй stop_periodic_query(task_id), "
             "для списка — list_periodic_queries(). "
@@ -155,7 +159,6 @@ def build_native_manager(
     engine = litert_lm.Engine(str(model), **engine_options)
     engine.__enter__()
     chat = None
-    query_chat = None
     agents = []
     try:
         sampler = litert_lm.SamplerConfig(temperature=temperature, top_p=top_p, seed=0)
@@ -183,16 +186,6 @@ def build_native_manager(
                 trace_native_json=trace_native_json,
             )
             agents.append(NativeAgent(spec.agent_id, agent_chat))
-        # 5B: independent tool-free manager. An autonomous QUERY must
-        # NEVER inject a user-role message into the human manager session,
-        # nor trigger shell/MQTT/delegation while reading agent output.
-        query_prompt_file = prompt_dir / "query_manager.md"
-        query_prompt = query_prompt_file.read_text(encoding="utf-8")
-        query_chat = NativeConversationChat(
-            engine, query_prompt, [], sampler_config=sampler,
-            max_output_tokens=max_output_tokens,
-            thinking_config=thinking, trace_native_json=trace_native_json,
-        )
         if shell_gate is not None:
             shell_gate.enabled = True
         if delegations is not None:
@@ -202,13 +195,11 @@ def build_native_manager(
         return NativeManager(
             chat, engine, model_name=model.name, backend_name=backend_name,
             agents=AgentPool(agents), delegations=delegations,
-            query_chat=query_chat, task_controller=task_controller,
+            task_controller=task_controller,
         )
     except BaseException:
         for agent in reversed(agents):
             agent.close()
-        if query_chat is not None:
-            query_chat.close()
         if chat is not None:
             chat.close()
         engine.close()

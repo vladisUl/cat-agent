@@ -258,7 +258,7 @@ class CoreServer:
 
         The per-process 32-entry cache is diagnostic only: `task_query_results`
         reads authoritative SQLite and survives a native CORE restart.
-        The independent tool-free query manager did not touch human KV.
+        AGENT output is published without any extra model inference or human KV changes.
         """
         with self._lock:
             run_id = item["run_id"]
@@ -727,7 +727,6 @@ class CoreServer:
                                   5 if self._task_worker is not None else
                                   4 if self._background_enabled else 2),
                         "manager_warm_tokens": getattr(self._manager, "base_kv_tokens", None),
-                        "query_warm_tokens": getattr(self._manager, "query_base_kv_tokens", None),
                     },
                     "status": self._status(),
                 })
