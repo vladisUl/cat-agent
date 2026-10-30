@@ -48,6 +48,12 @@ class NativeManager:
         """
         if self._closed:
             raise RuntimeError("Manager is closed")
+        if text.strip() == "/new":
+            # A local CORE command, not a model instruction: serialized on
+            # the same model worker as inference, with no AGENT/TASK mutation.
+            self.chat.new_dialogue()
+            LOGGER.info("Native manager /new; working conversation reset to BASE")
+            return ManagerTurn("reply", "Контекст MANAGER сброшен до BASE.")
         broker = self.delegations
         task_controller = self.task_controller
         if broker is None and task_controller is None:

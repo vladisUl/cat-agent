@@ -198,6 +198,56 @@ class CoreManagerTests(unittest.TestCase):
 
 
 class NativeManagerTests(unittest.TestCase):
+    def test_new_resets_only_manager_dialogue_without_inference_or_agent_calls(self):
+        class FakeChat:
+            base_kv_tokens = 250
+            def __init__(self):
+                self.messages = []
+                self.ask_calls = []
+                self.reset_count = 0
+            def ask(self, text):
+                self.ask_calls.append(text)
+                self.messages.append(text)
+                return "|".join(self.messages)
+            def new_dialogue(self):
+                self.reset_count += 1
+                self.messages.clear()
+            def close(self):
+                pass
+
+        class ForbiddenManagement:
+            def begin_turn(self):
+                raise AssertionError("/new must not start a tool-management turn")
+            def finish_turn(self):
+                raise AssertionError("/new must not finish a tool-management turn")
+            def take_pending(self):
+                raise AssertionError("/new must not delegate an AGENT")
+
+        chat = FakeChat()
+        manager = NativeManager(
+            chat, engine=None, model_name="gemma",
+            delegations=ForbiddenManagement(),
+            task_controller=ForbiddenManagement(),
+        )
+        # The normal conversation retains earlier messages.
+        self.assertEqual(manager.respond("session", "/new").kind, "reply")
+        self.assertEqual(manager.respond("session", "/new").text,
+                         "Контекст MANAGER сброшен до BASE.")
+        self.assertEqual(chat.reset_count, 2)
+        self.assertEqual(chat.ask_calls, [])
+        self.assertEqual(chat.messages, [])
+
+        # Test the ordinary multi-turn path with management disabled.
+        manager.delegations = None
+        manager.task_controller = None
+        self.assertEqual(manager.respond("session", "запомни 777").text, "запомни 777")
+        self.assertEqual(manager.respond("session", "помнишь?").text, "запомни 777|помнишь?")
+        self.assertEqual(manager.respond("session", " /new ").kind, "reply")
+        self.assertEqual(chat.reset_count, 3)
+        self.assertEqual(manager.respond("session", "после сброса").text, "после сброса")
+        self.assertEqual(chat.ask_calls,
+                         ["запомни 777", "помнишь?", "после сброса"])
+
     def test_native_manager_wraps_conversation_without_legacy_message_logic(self):
         class FakeChat:
             base_kv_tokens = 250
