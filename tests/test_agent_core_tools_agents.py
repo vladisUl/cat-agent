@@ -73,6 +73,66 @@ class AgentPoolTests(unittest.TestCase):
         pool.close()
         self.assertTrue(chat.closed)
 
+    def test_empty_no_action_retries_once_and_does_not_claim_success_without_work(self):
+        class NoActionChat(FakeChat):
+            execution_tool_calls = 0
+
+            def ask(self, task):
+                self.task_calls.append(task)
+                self.tokens += 20
+                return ""
+
+        chat = NoActionChat()
+        agent = NativeAgent("agent_1", chat)
+        result = agent.run("Прочитай температуру и сообщи её")
+        self.assertEqual(result.state, AgentState.FAILED)
+        self.assertEqual(result.status_code, 1)
+        self.assertIn("did not execute tools", result.text)
+        self.assertEqual(len(chat.task_calls), 2)
+        self.assertIn("ни один инструмент", chat.task_calls[1])
+        self.assertEqual(chat.reset_count, 1)
+        self.assertEqual(chat.working_kv_tokens, 250)
+
+    def test_empty_no_action_can_recover_with_one_real_tool_call(self):
+        class RecoveringChat(FakeChat):
+            def __init__(self):
+                super().__init__()
+                self.execution_tool_calls = 0
+
+            def ask(self, task):
+                self.task_calls.append(task)
+                self.tokens += 20
+                if len(self.task_calls) == 1:
+                    return ""
+                self.execution_tool_calls = 1
+                return "Температура на улице 11.84°C"
+
+        chat = RecoveringChat()
+        agent = NativeAgent("agent_1", chat)
+        result = agent.run("Получи температуру и сообщи её мне")
+        self.assertEqual(result.state, AgentState.FREE)
+        self.assertEqual(result.status_code, 0)
+        self.assertEqual(result.text, "Температура на улице 11.84°C")
+        self.assertEqual(len(chat.task_calls), 2)
+        self.assertEqual(chat.reset_count, 1)
+
+    def test_silent_after_tool_call_is_success_without_retry(self):
+        class SilentToolChat(FakeChat):
+            execution_tool_calls = 2
+
+            def ask(self, task):
+                self.task_calls.append(task)
+                self.tokens += 20
+                return ""
+
+        chat = SilentToolChat()
+        result = NativeAgent("agent_1", chat).run("Запиши температуру в файл")
+        self.assertEqual(result.state, AgentState.FREE)
+        self.assertEqual(result.status_code, 0)
+        self.assertEqual(result.text, "")
+        self.assertEqual(len(chat.task_calls), 1)
+        self.assertEqual(chat.reset_count, 1)
+
     def test_cooperative_slices_retain_and_then_reset_context(self):
         chat = FakeChat()
         agent = NativeAgent("agent_1", chat)

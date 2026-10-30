@@ -265,6 +265,32 @@ class TaskWorkerTests(unittest.TestCase):
         self.assertEqual(self.worker.snapshot()["last_agent_runs"]["agent_1"]["status_code"], 0)
         self.assertEqual(next(iter(self.engine.runs.values()))["status_code"], 0)
 
+    def test_native_agent_zero_tools_empty_text_is_not_completed_successfully(self):
+        from orchestration_tools.agents import NativeAgent
+        from test_agent_core_tools_priority import FakeAgentChat
+
+        class EmptyChat(FakeAgentChat):
+            execution_tool_calls = 0
+
+            def ask(self, question):
+                self.events.append(question)
+                return ""
+
+        chat = EmptyChat(self.manager.entered, self.manager.resume,
+                         self.manager.events)
+        self.manager.pool.close()
+        from orchestration_tools.agents import AgentPool
+        self.manager.pool = AgentPool([NativeAgent("agent_1", chat)])
+        self.make_task(method="query")
+        self.assertTrue(self.worker.poll_once())
+        self.wait_model_done()
+        self.assertFalse(self.worker.poll_once())
+        run = next(iter(self.engine.runs.values()))
+        self.assertEqual(run["state"], "error")
+        self.assertEqual(run["status_code"], 1)
+        self.assertEqual(self.rpc.call("notifications", "list"), [])
+        self.assertEqual(len(chat.events), 2)
+
     def test_failed_query_persists_status_without_user_notification(self):
         from orchestration_tools.agents import AgentOutcome, AgentState
         self.manager.run_agent = lambda agent_id, instruction: (
