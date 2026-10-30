@@ -13,7 +13,7 @@ from orchestration.tasks import TaskStoreError
 
 LOGGER = logging.getLogger(__name__)
 MAX_PERIOD_SECONDS = 604800
-MAX_INSTRUCTION_CHARS = 2048
+MAX_INSTRUCTION_CHARS = 4096
 TASK_PREFIX = "LiteRT QUERY: "
 
 
@@ -67,23 +67,12 @@ def _task_id(value: object) -> int | None:
     return identifier if 1 <= identifier <= 10**15 else None
 
 
-_READONLY_MQTT_ACTIONS = {
-    "get_outdoor_weather": "Измерь текущую температуру и влажность на улице",
-    "get_home_climate": "Измерь текущую температуру и влажность дома",
-    "get_aquarium_temperature": "Измерь текущую температуру воды в аквариуме",
-    "get_freezer_temperature": "Измерь текущую температуру в морозильнике",
-}
-
-
 class NativeTaskController:
     """Restrict persistent mutations to an active human MANAGER turn."""
 
     def __init__(self, rpc, agent_permissions: Mapping[str, tuple[str, ...]]):
         self.rpc = rpc
-        self.allowed_skills = frozenset(
-            name for names in agent_permissions.values() for name in names
-            if name != "delegate_task"
-        )
+        self.agent_ids = frozenset(agent_permissions)
         self.enabled = False
         self.in_turn = False
         self._create_attempted = False
@@ -129,60 +118,47 @@ class NativeTaskController:
             ) + str(exc),
         }
 
-    def create(self, period_seconds: int, skill_name: str, instruction: str) -> dict:
+    def create(self, period_seconds: int, agent_id: str, instruction: str) -> dict:
+        """Persist the exact same AGENT task text used for one-shot delegation."""
         if not self._allowed():
             return {"ok": False, "error": "task_management_not_in_active_turn"}
         LOGGER.info(
-            "native-task-tool CREATE ARG period_seconds=%r type=%s skill=%r",
-            repr(period_seconds)[:80], type(period_seconds).__name__, skill_name,
+            "native-task-tool CREATE ARG period_seconds=%r type=%s agent=%r",
+            period_seconds, type(period_seconds).__name__, agent_id,
         )
-        normalized_period = _period_seconds(period_seconds)
-        if normalized_period is None:
-            LOGGER.warning(
-                "native-task-tool CREATE REJECT period_seconds=%r type=%s",
-                repr(period_seconds)[:80], type(period_seconds).__name__,
-            )
+        period = _period_seconds(period_seconds)
+        if period is None:
             return {"ok": False, "error": "period_seconds must be an integer in 10..604800"}
-        period_seconds = normalized_period
-        if not isinstance(skill_name, str) or skill_name not in self.allowed_skills:
-            return {"ok": False, "error": "skill is not available to native AGENT"}
-        if not isinstance(instruction, str) or not instruction.strip() or len(instruction) > MAX_INSTRUCTION_CHARS:
-            return {"ok": False, "error": "instruction must be 1..2048 characters"}
+        if not isinstance(agent_id, str) or agent_id not in self.agent_ids:
+            return {"ok": False, "error": "unknown_agent"}
+        if (not isinstance(instruction, str) or not instruction.strip()
+                or len(instruction) > MAX_INSTRUCTION_CHARS):
+            return {"ok": False, "error": "invalid_task"}
+        try:
+            instruction.encode("utf-8", "strict")
+        except UnicodeEncodeError:
+            return {"ok": False, "error": "invalid_unicode"}
         if self._create_attempted:
             return {"ok": False, "error": "Already attempted creating a task in this turn; list tasks before retrying"}
         self._create_attempted = True
+
         instruction = instruction.strip()
-        description = TASK_PREFIX + instruction[:100]
-        # The schedule belongs to SYSTEM, not the model or an AGENT shell.
-        # Every timer tick starts an independently bounded single AGENT run.
-        action = _READONLY_MQTT_ACTIONS.get(skill_name, instruction)
-        task_text = (
-            "СЕЙЧАС выполни ОДИН раз: " + action + ". "
-            "Обязательно вызови нативный инструмент " + skill_name + "(), "
-            "дождись его результата, затем сообщи фактические значения "
-            "или причину ошибки. Не отвечай до вызова инструмента. "
-            "Не организуй циклы, ожидание, sleep, cron или собственное "
-            "расписание: следующий запуск сделает TASK SYSTEM.\n"
-            "Дополнительная инструкция: " + instruction
-        )
-        LOGGER.info(
-            "native-task-tool CREATE period=%s skill=%s instruction=%r",
-            period_seconds, skill_name, instruction,
-        )
+        LOGGER.info("native-task-tool CREATE period=%d agent=%s task=%r",
+                    period, agent_id, instruction)
         try:
             record = self.rpc.call(
                 "system", "create_periodic_task",
-                description, task_text, [skill_name], float(period_seconds),
-                method="query", executor="litert",
+                TASK_PREFIX + instruction[:100], instruction, [], float(period),
+                method="query", executor="litert", agent_id=agent_id,
             )
         except (TaskStoreError, OSError, ValueError) as exc:
             return self._rpc_error("CREATE", exc)
-        LOGGER.info("native-task-tool CREATED id=%s period=%s skill=%s",
-                    record["task_id"], period_seconds, skill_name)
+        LOGGER.info("native-task-tool CREATED id=%s period=%s agent=%s",
+                    record["task_id"], period, agent_id)
         return {
-            "ok": True, "task_id": record["task_id"],
-            "period_seconds": period_seconds, "skill": skill_name,
-            "status": "scheduled", "delivery": "TASK QUERY notifications inbox",
+            "ok": True, "task_id": record["task_id"], "agent_id": agent_id,
+            "period_seconds": period, "status": "scheduled",
+            "delivery": "TASK QUERY notifications inbox",
         }
 
     def list_queries(self) -> dict:
@@ -200,6 +176,7 @@ class NativeTaskController:
                 "period_seconds": r["timer_period_seconds"],
                 "enabled": r["enabled"],
                 "skills": r["skills"],
+                "agent_id": r.get("agent_id"),
             }
             for r in records if self._ours(r)
         ]
@@ -229,34 +206,17 @@ class NativeTaskController:
 
 
 def create_task_tools(controller: NativeTaskController) -> list:
-    def create_periodic_query(period_seconds: int, skill_name: str, instruction: str) -> dict:
-        """Создать ПЕРИОДИЧЕСКИЙ QUERY в долговременном TASK SYSTEM.
-
-        Используй, когда пользователь просит выполнять действие каждые N
-        секунд или минут и сообщать результат. ЭТО НЕ delegate_task:
-        delegate_task выполняет только однократное поручение.
-        Раз в period_seconds TASK SYSTEM запускает AGENT один раз, а
-        результат публикует через QUERY MANAGER в уведомлениях native TUI.
-        Нельзя использовать Shell-циклы, sleep или cron вместо этого.
-        Выбери skill_name из нативных инструментов AGENT.
-
-        Args:
-            period_seconds (int): Интервал в секундах. Раз в минуту = 60.
-            skill_name (str): Имя нужного инструмента AGENT, например get_outdoor_weather.
-            instruction (str): Конкретное ОДНО измерение/действие; без циклов.
-        """
-        return controller.create(period_seconds, skill_name, instruction)
-
+    """Management tools only; delegate_task owns both task schedules."""
     def list_periodic_queries() -> dict:
-        """Получить список периодических QUERY, созданных этим LiteRT MANAGER."""
+        """Получить список периодических QUERY, созданных LiteRT MANAGER."""
         return controller.list_queries()
 
     def stop_periodic_query(task_id: int) -> dict:
-        """Остановить ранее созданный периодический QUERY по его номеру.
+        """Остановить ранее созданный периодический QUERY по номеру задачи.
 
         Args:
-            task_id (int): Номер TASK из create_periodic_query или list_periodic_queries.
+            task_id (int): Номер TASK из delegate_task или list_periodic_queries.
         """
         return controller.stop(task_id)
 
-    return [create_periodic_query, list_periodic_queries, stop_periodic_query]
+    return [list_periodic_queries, stop_periodic_query]

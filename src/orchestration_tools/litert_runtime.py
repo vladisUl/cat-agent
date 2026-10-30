@@ -94,8 +94,6 @@ def build_native_manager(
     # Manager-only tool. Do not place it in available_tools: AGENTs cannot
     # delegate, and must not be able to request nested model inference.
     delegations = DelegationBroker(tuple(spec.agent_id for spec in specs)) if specs else None
-    if delegations is not None:
-        tools.append(create_delegate_tool(delegations))
     task_controller = None
     if task_socket is not None:
         if not specs:
@@ -108,18 +106,18 @@ def build_native_manager(
         task_controller = NativeTaskController(TaskRPC(task_socket), permissions)
         tools.extend(create_task_tools(task_controller))
         prompt += (
-            "\n\nПЕРИОДИЧЕСКИЕ ЗАДАНИЯ: если пользователь просит выполнять "
-            "действие регулярно (каждую минуту, каждый час и т.п.), "
-            "используй create_periodic_query, а НЕ delegate_task или Shell-цикл. "
-            "Таймер и уведомления обслуживает TASK SYSTEM. "
-            "Для однократного поручения используй delegate_task. "
-            "Для остановки задания по ID используй stop_periodic_query(task_id), "
-            "для просмотра списка — list_periodic_queries(). "
-            "Не утверждай, что остановил или создал задание без ok=true " 
-            "из результата инструмента. "
-            "Не утверждай, что регулярное задание создано, пока инструмент "
-            "не вернул ok=true и task_id."
+            "\n\nПоручения AGENT ставь через delegate_task(agent_id, task, period_seconds). "
+            "Если нужно выполнить один раз, period_seconds=0. "
+            "Если повторять каждую минуту, period_seconds=60. "
+            "Передавай в task полный текст задания, не сокращая его до имени инструмента. "
+            "Повторения организует TASK SYSTEM, не shell или AGENT. "
+            "Для остановки используй stop_periodic_query(task_id), "
+            "для списка — list_periodic_queries(). "
+            "Не объявляй периодическое задание созданным без ok=true и task_id."
         )
+    if delegations is not None:
+        delegations.periodic_controller = task_controller
+        tools.append(create_delegate_tool(delegations))
     LOGGER.info("native-tools MANAGER registered=%s",
                 tuple(fn.__name__ for fn in tools))
 
