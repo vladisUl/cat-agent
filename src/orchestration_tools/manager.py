@@ -30,6 +30,13 @@ class NativeManager:
         self.agents = agents if agents is not None else AgentPool([])
         self.delegations = delegations
         self.task_controller = task_controller
+        # Read LiteRT's native token count only on the serialized model
+        # worker; socket snapshot requests use this cached scalar.
+        self._working_kv_tokens = getattr(chat, "working_kv_tokens", chat.base_kv_tokens)
+
+    @property
+    def working_kv_tokens(self):
+        return self._working_kv_tokens
 
     @property
     def base_kv_tokens(self):
@@ -39,6 +46,17 @@ class NativeManager:
         return self.respond_guarded(session_id, text, lambda: True)
 
     def respond_guarded(
+        self, session_id: str, text: str, is_session_active: Callable[[], bool],
+    ) -> ManagerTurn:
+        try:
+            return self._respond_turn(session_id, text, is_session_active)
+        finally:
+            # A full turn may contain several model calls / AGENT handoffs.
+            self._working_kv_tokens = getattr(
+                self.chat, "working_kv_tokens", self.base_kv_tokens,
+            )
+
+    def _respond_turn(
         self, session_id: str, text: str, is_session_active: Callable[[], bool],
     ) -> ManagerTurn:
         """Run manager -> agent -> manager sequentially on the CORE model worker.
@@ -145,6 +163,9 @@ class NativeManager:
         if not self._closed:
             # Do not reuse the last owner's dialogue in a new session.
             self.chat.new_dialogue()
+            self._working_kv_tokens = getattr(
+                self.chat, "working_kv_tokens", self.base_kv_tokens,
+            )
             LOGGER.info("Native manager session released; BASE clone restored")
 
     def close(self) -> None:

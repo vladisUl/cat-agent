@@ -19,6 +19,10 @@ class FakeManager:
     model_name = 'gemma-4-E4B-it.litertlm'
     base_kv_tokens = 323
 
+    @property
+    def working_kv_tokens(self):
+        return self.base_kv_tokens + 10 * len(self.history)
+
     def __init__(self):
         self.history = []
         self.events = []
@@ -97,7 +101,10 @@ class CoreManagerTests(unittest.TestCase):
         self.assertEqual(acquired['core']['backend'], 'CPU')
         self.assertEqual(acquired['core']['manager_warm_tokens'], 323)
         self.assertTrue(acquired['status']['ready'])
-        for text, expected in [('привет', 'привет'), ('выполни ls', 'привет/выполни ls')]:
+        self.assertEqual(acquired['status']['manager_working_tokens'], 323)
+        for number, (text, expected) in enumerate(
+            [('привет', 'привет'), ('выполни ls', 'привет/выполни ls')], start=1,
+        ):
             self.query(sock, {'type': 'user', 'text': text})
             accepted = self.recv(r)
             reply = self.recv(r)
@@ -106,8 +113,11 @@ class CoreManagerTests(unittest.TestCase):
             self.assertEqual(accepted['request_id'], reply['request_id'])
             self.assertEqual(reply['request_id'], done['request_id'])
             self.assertEqual(reply['text'], expected)
+            self.assertEqual(done['manager_working_tokens'], 323 + 10 * number)
         self.assertEqual(self.manager.maximum_concurrent, 1)
-        self.assertEqual(self.recv_after_query(sock,r,{'type':'snapshot'})['status']['state'], 'IDLE')
+        snapshot = self.recv_after_query(sock, r, {'type': 'snapshot'})['status']
+        self.assertEqual(snapshot['state'], 'IDLE')
+        self.assertEqual(snapshot['manager_working_tokens'], 343)
 
     def recv_after_query(self, sock, reader, payload):
         self.query(sock,payload)
@@ -198,6 +208,39 @@ class CoreManagerTests(unittest.TestCase):
 
 
 class NativeManagerTests(unittest.TestCase):
+    def test_working_kv_telemetry_tracks_turn_new_and_session_release(self):
+        class Chat:
+            base_kv_tokens = 250
+            def __init__(self):
+                self.tokens = 250
+                self.reads = 0
+            @property
+            def working_kv_tokens(self):
+                self.reads += 1
+                return self.tokens
+            def ask(self, text):
+                self.tokens += len(text) + 8
+                return "ok"
+            def new_dialogue(self):
+                self.tokens = self.base_kv_tokens
+
+        chat = Chat()
+        manager = NativeManager(chat, engine=None, model_name="gemma")
+        self.assertEqual(manager.working_kv_tokens, 250)
+        reads = chat.reads
+        self.assertEqual(manager.working_kv_tokens, 250)
+        self.assertEqual(chat.reads, reads)
+        self.assertEqual(manager.respond("session", "запомни").kind, "reply")
+        self.assertEqual(manager.working_kv_tokens, 265)
+        self.assertEqual(manager.respond("session", "число").kind, "reply")
+        self.assertEqual(manager.working_kv_tokens, 278)
+        self.assertEqual(manager.respond("session", "/new").kind, "reply")
+        self.assertEqual(manager.working_kv_tokens, 250)
+        self.assertEqual(manager.respond("session", "снова").kind, "reply")
+        self.assertEqual(manager.working_kv_tokens, 263)
+        manager.release_session("session")
+        self.assertEqual(manager.working_kv_tokens, 250)
+
     def test_new_resets_only_manager_dialogue_without_inference_or_agent_calls(self):
         class FakeChat:
             base_kv_tokens = 250

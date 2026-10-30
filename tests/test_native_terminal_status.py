@@ -41,6 +41,7 @@ class NativeTuiStatusTests(unittest.TestCase):
         }
         tui.status = {
             "chat_open": True,
+            "manager_working_tokens": 1458,
             "state": "IDLE",
             "label": "",
             "pending": 0,
@@ -71,13 +72,28 @@ class NativeTuiStatusTests(unittest.TestCase):
         text = win.content
         self.assertIn("backend", text)
         self.assertIn("GPU", text)
-        self.assertIn("manager", text)
+        self.assertIn("MANAGER KV", text)
+        self.assertIn("working", text)
+        self.assertIn("1458 tok", text)
         self.assertIn("1166 tok", text)
         self.assertIn("FREE  KV 418", text)
         self.assertIn("TASK 2 done", text)
         self.assertIn("rc=?", text)
         self.assertIn("RUN 60s  next 45s", text)
         self.assertIn("LiteRT QUERY: get_outdoor_weather", text)
+
+    def test_working_kv_follows_status_without_changing_base(self):
+        tui = self.make_tui()
+        tui.status["manager_working_tokens"] = 1166
+        win = FakeWindow()
+        tui._draw_info(win)
+        self.assertRegex(win.content, r"working\s+1166 tok")
+        self.assertRegex(win.content, r"base\s+1166 tok")
+        tui.status["manager_working_tokens"] = 1577
+        win = FakeWindow()
+        tui._draw_info(win)
+        self.assertRegex(win.content, r"working\s+1577 tok")
+        self.assertRegex(win.content, r"base\s+1166 tok")
 
     def test_stopped_task_does_not_show_running_countdown(self):
         tui = self.make_tui(armed=False)

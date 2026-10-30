@@ -77,7 +77,7 @@ class NativeTerminalTUI(TerminalTUI):
             self._pending_query_ack[run_id] = 0.0
 
     def _draw_info(self, win) -> None:
-        """Per-conversation BASE KV and authoritative TASK timer telemetry."""
+        """Current MANAGER working KV, immutable BASE and TASK telemetry."""
         import curses
 
         height, width = win.getmaxyx()
@@ -117,8 +117,10 @@ class NativeTerminalTUI(TerminalTUI):
         put("chat", "open" if self.status.get("chat_open") else "closed")
         row += 1
 
-        put("BASE KV", bold=True)
-        put("manager", f"{self.core_info.get('manager_warm_tokens', '?')} tok")
+        put("MANAGER KV", bold=True)
+        working = self.status.get("manager_working_tokens")
+        put("working", f"{working if type(working) is int else '?'} tok")
+        put("base", f"{self.core_info.get('manager_warm_tokens', '?')} tok")
         agents = self.status.get("agents")
         recent = self.status.get("last_agent_runs")
         if not isinstance(recent, dict):
@@ -240,10 +242,12 @@ class NativeTerminalTUI(TerminalTUI):
             elif kind == "reply":
                 self._finalize_manager_text(str(item.get("text", "")))
             elif kind == "completed":
-                # New CORE does not stream old model_event chunks, but its
-                # final completion still carries the dialogue-open flag.
+                # Working KV is sampled by the model worker after the turn;
+                # a /new command therefore updates the panel immediately.
                 if isinstance(item.get("chat_open"), bool):
                     self.status["chat_open"] = item["chat_open"]
+                if type(item.get("manager_working_tokens")) is int:
+                    self.status["manager_working_tokens"] = item["manager_working_tokens"]
             elif kind == "notification":
                 # A legacy notification is not a TASK QUERY result and must
                 # not be ACKed via task_query_ack.

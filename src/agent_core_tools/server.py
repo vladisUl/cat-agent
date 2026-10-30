@@ -236,6 +236,9 @@ class CoreServer:
                     "label": "", "reason": "manager_not_connected_stage1",
                 }
             status = {"ready": True, **self._scheduler.snapshot()}
+            status["manager_working_tokens"] = getattr(
+                self._manager, "working_kv_tokens", None,
+            )
             status["background_jobs"] = [
                 job.snapshot() for job in self._backgrounds.values()
             ]
@@ -344,6 +347,10 @@ class CoreServer:
                 }
                 if agent_id is not None:
                     fields["agent_id"] = agent_id
+                else:
+                    fields["manager_working_tokens"] = getattr(
+                        self._manager, "working_kv_tokens", None,
+                    )
                 # Log the delivered result, not a stale response discarded
                 # after a client disconnect/session change.
                 LOGGER.info("%s -> USER kind=%s text=%r",
