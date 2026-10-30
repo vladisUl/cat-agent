@@ -20,7 +20,7 @@ class NativeManager:
     def __init__(
         self, chat, engine, *, model_name: str, backend_name: str = "cpu",
         agents: AgentPool | None = None, delegations: DelegationBroker | None = None,
-        query_chat=None,
+        query_chat=None, task_controller=None,
     ):
         self.chat = chat
         self.engine = engine
@@ -31,6 +31,7 @@ class NativeManager:
         self.delegations = delegations
         # Separate tool-free Conversation, never the interactive user's KV.
         self.query_chat = query_chat
+        self.task_controller = task_controller
 
     @property
     def base_kv_tokens(self):
@@ -50,13 +51,17 @@ class NativeManager:
         if self._closed:
             raise RuntimeError("Manager is closed")
         broker = self.delegations
-        if broker is None:
+        task_controller = self.task_controller
+        if broker is None and task_controller is None:
             answer = self.chat.ask(text)
             return ManagerTurn("reply", answer) if answer.strip() else ManagerTurn("silent")
-        broker.begin_turn()
+        if broker is not None:
+            broker.begin_turn()
+        if task_controller is not None:
+            task_controller.begin_turn()
         try:
             answer = self.chat.ask(text)
-            while (pending := broker.take_pending()):
+            while broker is not None and (pending := broker.take_pending()):
                 if not is_session_active():
                     LOGGER.info("Native delegation skipped after client release")
                     return ManagerTurn("silent")
@@ -104,7 +109,10 @@ class NativeManager:
                 )
             return ManagerTurn("reply", answer) if answer.strip() else ManagerTurn("silent")
         finally:
-            broker.finish_turn()
+            if task_controller is not None:
+                task_controller.finish_turn()
+            if broker is not None:
+                broker.finish_turn()
 
     def process_task_query(
         self, task_id: int, agent_result: str, *, failed: bool = False,

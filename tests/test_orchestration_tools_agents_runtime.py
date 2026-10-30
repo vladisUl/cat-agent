@@ -207,6 +207,69 @@ class RuntimeAgentTests(unittest.TestCase):
             finally:
                 manager.close()
 
+    def test_manager_periodic_tools_registered_and_blocked_outside_human_turn(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            model = root / "model.litertlm"
+            model.touch()
+            (root / "manager.md").write_text("Я MANAGER", encoding="utf-8")
+            (root / "query_manager.md").write_text("Я QUERY", encoding="utf-8")
+            (root / "agent_1.md").write_text("Я AGENT", encoding="utf-8")
+            config = root / "agents.json"
+            config.write_text(json.dumps({
+                "agents": [{"id": "agent_1", "prompt": "agent_1.md", "tools": []}],
+            }), encoding="utf-8")
+            fake = ModuleType("litert_lm")
+            fake.Engine = FakeEngine
+            fake.Backend = SimpleNamespace(CPU=lambda **kwargs: "cpu")
+            fake.SamplerConfig = lambda **kwargs: "sampler"
+            fake.ThinkingConfig = lambda **kwargs: "thinking"
+            FakeEngine.instances.clear()
+            with patch.dict(sys.modules, {"litert_lm": fake}), patch(
+                "task_system.client.TaskRPC",
+            ) as rpc_class:
+                rpc = rpc_class.return_value
+                rpc.call.return_value = {"task_id": 3}
+                manager = build_native_manager(
+                    model, root / "manager.md",
+                    agent_config=config, task_socket=root / "task.sock",
+                    enable_mqtt=True, enable_shell=False,
+                )
+            try:
+                conversations = FakeEngine.instances[0].created
+                self.assertEqual(len(conversations), 3)
+                names = [
+                    [tool.__name__ for tool in item["tools"]]
+                    for item in conversations
+                ]
+                self.assertIn("create_periodic_query", names[0])
+                self.assertIn("stop_periodic_query", names[0])
+                self.assertIn("list_periodic_queries", names[0])
+                self.assertNotIn("create_periodic_query", names[1])
+                self.assertEqual(names[2], [])
+                self.assertIn("ПЕРИОДИЧЕСКИЕ ЗАДАНИЯ", conversations[0]["messages"][0]["content"])
+                tool = next(tool for tool in conversations[0]["tools"]
+                            if tool.__name__ == "create_periodic_query")
+                # Even though registered during BASE warm-up, it cannot
+                # mutate TASK SYSTEM until MANAGER enters a human turn.
+                self.assertFalse(tool(60, "get_outdoor_weather", "Измерь температуру")["ok"])
+                self.assertFalse(rpc.call.called)
+
+                with patch.object(manager.chat, "ask", side_effect=lambda text: str(
+                    tool(60, "get_outdoor_weather", "Измерь температуру"),
+                )):
+                    result = manager.respond("session", "раз в минуту измеряй температуру")
+                self.assertIn("'status': 'scheduled'", result.text)
+                rpc.call.assert_called_once()
+                self.assertEqual(rpc.call.call_args.args[:2],
+                                 ("system", "create_periodic_task"))
+                self.assertEqual(rpc.call.call_args.kwargs,
+                                 {"method": "query", "executor": "litert"})
+                self.assertFalse(tool(60, "get_outdoor_weather", "Ещё раз")["ok"])
+                self.assertEqual(rpc.call.call_count, 1)
+            finally:
+                manager.close()
+
     def test_config_cannot_grant_disabled_or_unknown_shell(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -108,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
                 speculative=args.speculative, temperature=args.temperature,
                 top_p=args.top_p, trace_native_json=args.trace_native_json,
                 agent_config=args.agent_config,
+                task_socket=args.task_socket if args.enable_task_worker else None,
             )
         except (OSError, ValueError, RuntimeError) as exc:
             LOGGER.exception("TOOLS CORE manager initialization failed")

@@ -16,6 +16,7 @@ from .agent_config import effective_agent_tool_names, load_agent_specs
 from .agents import AgentPool, NativeAgent
 from .delegation import DelegationBroker, create_delegate_tool
 from .manager import NativeManager
+from .task_tools import NativeTaskController, create_task_tools
 
 LOGGER = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ def build_native_manager(
     temperature: float = 0.2,
     top_p: float = 1.0, trace_native_json: bool = False,
     agent_config: Path | None = None,
+    task_socket: Path | None = None,
 ) -> NativeManager:
     model = Path(model)
     system_file = Path(system_file)
@@ -94,6 +96,26 @@ def build_native_manager(
     delegations = DelegationBroker(tuple(spec.agent_id for spec in specs)) if specs else None
     if delegations is not None:
         tools.append(create_delegate_tool(delegations))
+    task_controller = None
+    if task_socket is not None:
+        if not specs:
+            raise ValueError("Native periodic tasks require configured AGENTs")
+        from task_system.client import TaskRPC
+        permissions = {
+            spec.agent_id: effective_agent_tool_names(spec, mqtt_names)
+            for spec in specs
+        }
+        task_controller = NativeTaskController(TaskRPC(task_socket), permissions)
+        tools.extend(create_task_tools(task_controller))
+        prompt += (
+            "\n\nПЕРИОДИЧЕСКИЕ ЗАДАНИЯ: если пользователь просит выполнять "
+            "действие регулярно (каждую минуту, каждый час и т.п.), "
+            "используй create_periodic_query, а НЕ delegate_task или Shell-цикл. "
+            "Таймер и уведомления обслуживает TASK SYSTEM. "
+            "Для однократного поручения используй delegate_task. "
+            "Не утверждай, что регулярное задание создано, пока инструмент "
+            "не вернул ok=true и task_id."
+        )
     LOGGER.info("native-tools MANAGER registered=%s",
                 tuple(fn.__name__ for fn in tools))
 
@@ -173,10 +195,12 @@ def build_native_manager(
             shell_gate.enabled = True
         if delegations is not None:
             delegations.enabled = True
+        if task_controller is not None:
+            task_controller.enabled = True
         return NativeManager(
             chat, engine, model_name=model.name, backend_name=backend_name,
             agents=AgentPool(agents), delegations=delegations,
-            query_chat=query_chat,
+            query_chat=query_chat, task_controller=task_controller,
         )
     except BaseException:
         for agent in reversed(agents):
