@@ -115,9 +115,13 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     agent_permissions = None
     if args.enable_task_worker:
-        from orchestration_tools.agent_config import load_agent_specs
+        from orchestration_tools.agent_config import effective_agent_tool_names, load_agent_specs
+        from litert_agent_tools.mqtt_tools import BUILTIN_MQTT_TOOL_NAMES
+        # TASK admission must use the same effective grants installed in
+        # each AGENT Conversation: built-in MQTT plus explicit JSON grants.
+        shared_names = () if args.disable_mqtt else BUILTIN_MQTT_TOOL_NAMES
         agent_permissions = {
-            spec.agent_id: spec.tool_names
+            spec.agent_id: effective_agent_tool_names(spec, shared_names)
             for spec in load_agent_specs(args.agent_config, prompt_dir=args.system_file.parent)
         }
     server = CoreServer(

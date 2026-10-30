@@ -157,9 +157,16 @@ readiness: openai
 - Один Engine исполняет вызовы последовательно. Начатый
   `Conversation.send_message()` и его native tool-chain не прерываются
   планировщиком посередине.
-- Рабочий native launcher включает `shell`, `delegate_task` и четыре
-  MQTT-инструмента температуры/влажности. `shell` выполняется с правами
-  процесса, не sandbox.
+- MANAGER получает четыре нативных MQTT-инструмента, `shell` и
+  `delegate_task`. Каждый AGENT **автоматически** получает те же четыре
+  read-only MQTT-инструмента, не перечисляя их в JSON. Параметр `tools`
+  в `config/native_agents*.example.json` задаёт дополнительные явно
+  разрешённые инструменты, в частности `shell`. Он остаётся
+  привилегированным: MANAGER имеет Shell при `--enable-shell`, а AGENT
+  только при явном разрешении в JSON. `delegate_task` доступен только
+  MANAGER, а отдельному QUERY MANAGER инструменты не выдаются.
+  Native TASK worker сверяет навыки с **тем же итоговым набором**
+  инструментов AGENT. Shell выполняется с правами процесса, не sandbox.
 - Web и Voice пока используют старые CORE и их IPC. Переноса истории
   человеческого диалога между CORE нет.
 - Старый OpenAI TUI/Web не читает автоматически новый QUERY inbox.
@@ -250,6 +257,21 @@ Launcher сам выбирает единственный JSON-файл ICD из
 `GetProfileSummary UNIMPLEMENTED` наблюдались даже при успешной
 генерации. Длительная стабильность, точность вычислений в разных
 сценариях и реальная производительность пока не проверены.
+
+## Разовая проверка общих MQTT-инструментов
+
+После обновления Git и перезапуска native CORE в его журнале должны появиться
+строки `native-tools MANAGER registered=...` и
+`native-tools agent_1 registered=...`; для обоих указывается
+`get_outdoor_weather`. В native TUI запрос:
+«Поручи AGENT_1 один раз измерить температуру на улице и сообщить
+фактическое значение». В LiteRT-журнале ожидается
+`MANAGER -> AGENT_1`, затем `native-tool CALL name=get_outdoor_weather`,
+`native-tool RESULT ...`, `AGENT_1 -> MANAGER` и ответ пользователю.
+
+**Периодический TASK пока не создаётся из диалога MANAGER:** для него
+понадобится отдельный нативный инструмент управления общим TASK SYSTEM.
+Новый доступ к MQTT решает именно однократное поручение.
 
 ## Журнал LiteRT CORE
 

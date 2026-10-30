@@ -14,6 +14,16 @@ from .config import MqttConfig
 LOGGER = logging.getLogger(__name__)
 
 
+# Built-in, read-only tools shared by MANAGER and every native AGENT.
+# A task worker must recognize the same names when matching TASK skills.
+BUILTIN_MQTT_TOOL_NAMES = (
+    "get_outdoor_weather",
+    "get_home_climate",
+    "get_aquarium_temperature",
+    "get_freezer_temperature",
+)
+
+
 TOPICS = {
     "outdoor": ("zigbee2mqtt/temp_ulica", ("temperature", "humidity")),
     "home": ("zigbee2mqtt/temp_tua", ("temperature", "humidity")),

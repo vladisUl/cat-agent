@@ -9,10 +9,10 @@ import logging
 
 from litert_agent_tools.config import MqttConfig
 from litert_agent_tools.conversation import NativeConversationChat
-from litert_agent_tools.mqtt_tools import create_mqtt_tools
+from litert_agent_tools.mqtt_tools import BUILTIN_MQTT_TOOL_NAMES, create_mqtt_tools
 from litert_agent_tools.shell_tools import ShellConfig, ShellGate, create_shell_tool
 
-from .agent_config import load_agent_specs
+from .agent_config import effective_agent_tool_names, load_agent_specs
 from .agents import AgentPool, NativeAgent
 from .delegation import DelegationBroker, create_delegate_tool
 from .manager import NativeManager
@@ -63,7 +63,14 @@ def build_native_manager(
             + ", ".join(spec.agent_id for spec in specs)
             + ". Для передачи задания используй инструмент delegate_task."
         )
-    tools = create_mqtt_tools(MqttConfig.from_env()) if enable_mqtt else []
+    # Read-only MQTT functions are built-in capabilities of both MANAGER
+    # and every native AGENT. Shell is privileged and remains opt-in for
+    # each AGENT through its explicit JSON tool grant.
+    mqtt_tools = create_mqtt_tools(MqttConfig.from_env()) if enable_mqtt else []
+    mqtt_names = tuple(fn.__name__ for fn in mqtt_tools)
+    if enable_mqtt and mqtt_names != BUILTIN_MQTT_TOOL_NAMES:
+        raise RuntimeError("MQTT tool registry does not match the native TASK skill registry")
+    tools = list(mqtt_tools)
     shell_gate = None
     if enable_shell:
         shell_gate = ShellGate()
@@ -87,6 +94,8 @@ def build_native_manager(
     delegations = DelegationBroker(tuple(spec.agent_id for spec in specs)) if specs else None
     if delegations is not None:
         tools.append(create_delegate_tool(delegations))
+    LOGGER.info("native-tools MANAGER registered=%s",
+                tuple(fn.__name__ for fn in tools))
 
     import litert_lm
 
@@ -134,7 +143,12 @@ def build_native_manager(
             trace_native_json=trace_native_json,
         )
         for spec in specs:
-            agent_tools = [available_tools[name] for name in spec.tool_names]
+            # Default MQTT tools require no per-agent JSON repetition.
+            # Explicit grants (for example shell) extend that safe baseline,
+            # without registering the same tool twice.
+            agent_tool_names = effective_agent_tool_names(spec, mqtt_names)
+            agent_tools = [available_tools[name] for name in agent_tool_names]
+            LOGGER.info("native-tools %s registered=%s", spec.agent_id, agent_tool_names)
             agent_chat = NativeConversationChat(
                 engine,
                 spec.prompt_file.read_text(encoding="utf-8"),

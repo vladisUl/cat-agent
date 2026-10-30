@@ -10,7 +10,8 @@ import unittest
 from unittest.mock import patch
 
 from agent_core_tools.server import CoreServer
-from orchestration_tools.agent_config import load_agent_specs
+from orchestration_tools.agent_config import effective_agent_tool_names, load_agent_specs
+from litert_agent_tools.mqtt_tools import BUILTIN_MQTT_TOOL_NAMES, create_mqtt_tools
 from orchestration_tools.agents import AgentPool, AgentState, NativeAgent
 
 
@@ -139,6 +140,26 @@ class AgentPoolTests(unittest.TestCase):
                     config.write_text(json.dumps(invalid), encoding="utf-8")
                     load_agent_specs(config)
 
+
+    def test_shared_tool_names_are_consistent_for_agent_and_task_worker(self):
+        from orchestration_tools.agent_config import AgentSpec
+
+        # The built-in list must not drift away from actual tool callables.
+        self.assertEqual(
+            BUILTIN_MQTT_TOOL_NAMES,
+            tuple(tool.__name__ for tool in create_mqtt_tools()),
+        )
+        agent = AgentSpec("agent_1", Path("/nonexistent/agent_1.md"),
+                          ("shell", "get_outdoor_weather"))
+        names = effective_agent_tool_names(agent, BUILTIN_MQTT_TOOL_NAMES)
+        self.assertEqual(names, BUILTIN_MQTT_TOOL_NAMES + ("shell",))
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(effective_agent_tool_names(agent), agent.tool_names)
+        limited = AgentSpec("agent_2", Path("/nonexistent/agent_2.md"), ())
+        self.assertEqual(effective_agent_tool_names(limited, BUILTIN_MQTT_TOOL_NAMES),
+                         BUILTIN_MQTT_TOOL_NAMES)
+        self.assertNotIn("shell",
+                         effective_agent_tool_names(limited, BUILTIN_MQTT_TOOL_NAMES))
 
     def test_external_prompt_directory_overrides_agent_config_location(self):
         with tempfile.TemporaryDirectory() as temp:

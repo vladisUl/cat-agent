@@ -49,3 +49,13 @@ def load_agent_specs(
         specs.append(AgentSpec(ident, prompt_path.resolve(), tuple(tools)))
         used.add(ident)
     return tuple(specs)
+
+
+def effective_agent_tool_names(
+    spec: AgentSpec, builtins: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Common read-only tools plus explicitly granted tools, without duplicates.
+
+    Native Conversation and TASK worker must use this same calculation.
+    """
+    return tuple(dict.fromkeys((*builtins, *spec.tool_names)))

@@ -114,6 +114,99 @@ class RuntimeAgentTests(unittest.TestCase):
             manager.close()
             self.assertTrue(engine.closed)
 
+    def test_builtin_mqtt_tools_are_registered_for_all_agents(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            model = root / "model.litertlm"
+            model.touch()
+            manager_prompt = root / "manager.md"
+            manager_prompt.write_text("Менеджер", encoding="utf-8")
+            (root / "query_manager.md").write_text("QUERY", encoding="utf-8")
+            for name in ("agent_1.md", "agent_2.md"):
+                (root / name).write_text("Исполнитель", encoding="utf-8")
+            config = root / "agents.json"
+            config.write_text(json.dumps({"agents": [
+                {"id": "agent_1", "prompt": "agent_1.md", "tools": ["shell"]},
+                {"id": "agent_2", "prompt": "agent_2.md", "tools": []},
+            ]}), encoding="utf-8")
+            fake = ModuleType("litert_lm")
+            fake.Engine = FakeEngine
+            fake.Backend = SimpleNamespace(CPU=lambda **kwargs: "cpu")
+            fake.SamplerConfig = lambda **kwargs: "sampler"
+            fake.ThinkingConfig = lambda **kwargs: "thinking"
+            FakeEngine.instances.clear()
+            with patch.dict(sys.modules, {"litert_lm": fake}):
+                manager = build_native_manager(
+                    model, manager_prompt, agent_config=config,
+                    enable_mqtt=True, enable_shell=True, shell_cwd=root,
+                )
+            try:
+                conversations = FakeEngine.instances[0].created
+                self.assertEqual(len(conversations), 4)
+                names = [
+                    [tool.__name__ for tool in item["tools"]]
+                    for item in conversations
+                ]
+                mqtt = (
+                    "get_outdoor_weather", "get_home_climate",
+                    "get_aquarium_temperature", "get_freezer_temperature",
+                )
+                self.assertEqual(tuple(names[0]), mqtt + ("shell", "delegate_task"))
+                self.assertEqual(tuple(names[1]), mqtt + ("shell",))
+                self.assertEqual(tuple(names[2]), mqtt)
+                self.assertEqual(names[3], [])  # QUERY cannot use any tool.
+                # The AGENT's actual registered callable can read real MQTT
+                # through the same implementation as the MANAGER.
+                agent_weather = next(
+                    tool for tool in conversations[1]["tools"]
+                    if tool.__name__ == "get_outdoor_weather"
+                )
+                with patch(
+                    "litert_agent_tools.mqtt_tools._read_measurement",
+                    return_value={"ok": True, "temperature_c": 8.2,
+                                  "humidity_percent": 81.5},
+                ) as read:
+                    self.assertEqual(agent_weather(), {
+                        "ok": True, "temperature_c": 8.2,
+                        "humidity_percent": 81.5,
+                    })
+                self.assertEqual(read.call_count, 1)
+                self.assertEqual(read.call_args.args[1], "zigbee2mqtt/temp_ulica")
+            finally:
+                manager.close()
+
+    def test_disabled_mqtt_does_not_leak_into_agent_tools(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            model = root / "model.litertlm"
+            model.touch()
+            (root / "manager.md").write_text("Менеджер", encoding="utf-8")
+            (root / "agent.md").write_text("Агент", encoding="utf-8")
+            (root / "query_manager.md").write_text("QUERY", encoding="utf-8")
+            config = root / "agents.json"
+            config.write_text(json.dumps({"agents": [
+                {"id": "agent_1", "prompt": "agent.md", "tools": ["shell"]},
+            ]}), encoding="utf-8")
+            fake = ModuleType("litert_lm")
+            fake.Engine = FakeEngine
+            fake.Backend = SimpleNamespace(CPU=lambda **kwargs: "cpu")
+            fake.SamplerConfig = lambda **kwargs: "sampler"
+            fake.ThinkingConfig = lambda **kwargs: "thinking"
+            FakeEngine.instances.clear()
+            with patch.dict(sys.modules, {"litert_lm": fake}):
+                manager = build_native_manager(
+                    model, root / "manager.md", agent_config=config,
+                    enable_mqtt=False, enable_shell=True, shell_cwd=root,
+                )
+            try:
+                conversations = FakeEngine.instances[0].created
+                self.assertEqual(
+                    [tool.__name__ for tool in conversations[1]["tools"]],
+                    ["shell"],
+                )
+            finally:
+                manager.close()
+
     def test_config_cannot_grant_disabled_or_unknown_shell(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
