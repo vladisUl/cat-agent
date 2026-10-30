@@ -264,6 +264,7 @@ class TaskWorkerTests(unittest.TestCase):
         self.assertEqual(self.rpc.call("notifications", "list"), [])
         self.assertEqual(next(iter(self.engine.runs.values()))["state"], "done")
         self.assertEqual(self.worker.snapshot()["last_agent_runs"]["agent_1"]["status_code"], 0)
+        self.assertEqual(next(iter(self.engine.runs.values()))["status_code"], 0)
 
     def test_failed_query_persists_status_without_user_notification(self):
         from orchestration_tools.agents import AgentOutcome, AgentState
@@ -277,6 +278,7 @@ class TaskWorkerTests(unittest.TestCase):
         self.assertEqual(self.rpc.call("notifications", "list"), [])
         self.assertEqual(next(iter(self.engine.runs.values()))["state"], "error")
         self.assertEqual(self.worker.snapshot()["last_agent_runs"]["agent_1"]["status_code"], 1)
+        self.assertEqual(next(iter(self.engine.runs.values()))["status_code"], 1)
 
     def test_query_store_outage_does_not_publish_or_rerun_model(self):
         events = []

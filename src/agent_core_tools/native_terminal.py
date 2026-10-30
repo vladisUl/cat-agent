@@ -140,7 +140,8 @@ class NativeTerminalTUI(TerminalTUI):
                     when = (time.strftime("%H:%M:%S", time.localtime(at))
                             if isinstance(at, (int, float)) else "?")
                     put("last run", f"TASK {last.get('task_id', '?')} "
-                                    f"{last.get('outcome', '?')} {when}")
+                                    f"{last.get('outcome', '?')} "
+                                    f"rc={last.get('status_code', '?')} {when}")
         row += 1
 
         put("TASKS / EVENTS", bold=True)

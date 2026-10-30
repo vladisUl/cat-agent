@@ -511,10 +511,14 @@ class TaskEngine:
             if run['state'] in TERMINAL:
                 return True
             outcome = kw.get('outcome', 'done')
+            status_code = kw.get('status_code', 0 if outcome == 'done' else 1)
+            if type(status_code) is not int or status_code < 0:
+                raise TaskStoreError('status_code must be a non-negative integer')
             if run['state'] == 'offered' and self._current(run):
                 self._return_pending(run)
             else:
-                run.update(state=outcome if outcome in TERMINAL else 'done', outcome=outcome)
+                run.update(state=outcome if outcome in TERMINAL else 'done',
+                           outcome=outcome, status_code=status_code)
             LOGGER.info('TASK finished id=%s run=%s state=%s', run['event']['task_id'], kw['run_id'], run['state'])
             return True
         raise TaskStoreError(f'unknown worker operation: {method}')

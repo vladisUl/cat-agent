@@ -57,7 +57,7 @@ class NativeTaskWorker:
         self._last_agent_runs: dict[str, dict] = {}
         self._seen: set[str] = set()
         self._reserved: set[str] = set()
-        self._pending_finishes: OrderedDict[str, tuple[dict, str]] = OrderedDict()
+        self._pending_finishes: OrderedDict[str, tuple[dict, str, int]] = OrderedDict()
         # A QUERY is never finished before its result is durably acknowledged.
         # During transient outages, retry publishing this immutable payload;
         # never replay either model invocation or a native tool call.
@@ -146,7 +146,7 @@ class NativeTaskWorker:
     def _finish_pending(self) -> bool:
         with self._lock:
             entries = tuple(self._pending_finishes.items())
-        for token, (event, outcome) in entries:
+        for token, (event, outcome, status_code) in entries:
             with self._lock:
                 result = self._pending_results.get(token)
             if result is not None:
@@ -165,6 +165,7 @@ class NativeTaskWorker:
                     LOGGER.warning("native-task QUERY STORE rejected run=%s",
                                    event["run_id"])
                     outcome = "cancelled"
+                    status_code = 1
                 else:
                     LOGGER.info("native-task QUERY STORED run=%s", event["run_id"])
                     if self.on_query_result is not None:
@@ -174,11 +175,12 @@ class NativeTaskWorker:
                             LOGGER.exception("native-task QUERY live notification failed")
                 with self._lock:
                     self._pending_results.pop(token, None)
-                    self._pending_finishes[token] = (event, outcome)
+                    self._pending_finishes[token] = (event, outcome, status_code)
             try:
                 acknowledged = self._rpc(
                     "finish", run_id=event["run_id"],
                     offer_id=event["offer_id"], outcome=outcome,
+                    status_code=status_code,
                 )
             except TaskStoreError as exc:
                 LOGGER.warning("native-task FINISH pending id=%s: %s", token, exc)
@@ -220,13 +222,6 @@ class NativeTaskWorker:
             with self._lock:
                 self._pending_defers.pop(token, None)
         return True
-
-    def _finish_started(self, token: str, event: dict, agent_id: str,
-                        outcome: str) -> None:
-        with self._lock:
-            self._reserved.discard(agent_id)
-            # Never discard a started RUN before its finish is acknowledged.
-            self._pending_finishes[token] = (event, outcome)
 
     def _select_agent(self, task: dict) -> str | None:
         required = task.get("skills")
@@ -342,6 +337,7 @@ class NativeTaskWorker:
         """Runs on THE ONLY native model worker; no nested inference."""
         token = event["offer_id"]
         outcome = "cancelled"
+        status_code = 1
         started = False
         try:
             if not self._can_run():
@@ -428,7 +424,7 @@ class NativeTaskWorker:
                 self._reserved.discard(agent_id)
                 if started:
                     # Retry only immutable RESULT/FINISH RPC, never AGENT tools.
-                    self._pending_finishes[token] = (event, outcome)
+                    self._pending_finishes[token] = (event, outcome, status_code)
                 else:
                     self._seen.discard(token)
 
