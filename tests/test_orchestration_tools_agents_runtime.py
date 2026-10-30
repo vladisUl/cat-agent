@@ -152,7 +152,7 @@ class RuntimeAgentTests(unittest.TestCase):
                     "get_aquarium_temperature", "get_freezer_temperature",
                 )
                 self.assertEqual(tuple(names[0]), mqtt + ("shell", "delegate_task"))
-                self.assertEqual(tuple(names[1]), mqtt + ("shell",))
+                self.assertEqual(tuple(names[1]), mqtt + ("record_outdoor_weather", "shell",))
                 self.assertEqual(tuple(names[2]), mqtt)
                 self.assertEqual(names[3], [])  # QUERY cannot use any tool.
                 # The AGENT's actual registered callable can read real MQTT

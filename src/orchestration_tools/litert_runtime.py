@@ -10,6 +10,7 @@ import logging
 from litert_agent_tools.config import MqttConfig
 from litert_agent_tools.conversation import NativeConversationChat
 from litert_agent_tools.mqtt_tools import BUILTIN_MQTT_TOOL_NAMES, create_mqtt_tools
+from litert_agent_tools.record_tools import create_record_outdoor_weather_tool
 from litert_agent_tools.shell_tools import ShellConfig, ShellGate, create_shell_tool
 
 from .agent_config import effective_agent_tool_names, load_agent_specs
@@ -74,14 +75,24 @@ def build_native_manager(
         raise RuntimeError("MQTT tool registry does not match the native TASK skill registry")
     tools = list(mqtt_tools)
     shell_gate = None
+    record_tool = None
     if enable_shell:
         shell_gate = ShellGate()
-        tools.append(create_shell_tool(ShellConfig(
+        shell_config = ShellConfig(
             shell_cwd, timeout_seconds=shell_timeout,
             max_output_bytes=shell_max_output,
-        ), gate=shell_gate))
+        )
+        tools.append(create_shell_tool(shell_config, gate=shell_gate))
+        if enable_mqtt:
+            # Narrow, audited file logging is available only to shell-granted
+            # AGENTs, not as a default read-only MQTT capability.
+            record_tool = create_record_outdoor_weather_tool(
+                MqttConfig.from_env(), shell_config.workdir, gate=shell_gate,
+            )
 
     available_tools = {fn.__name__: fn for fn in tools}
+    if record_tool is not None:
+        available_tools[record_tool.__name__] = record_tool
     for spec in specs:
         missing = set(spec.tool_names) - set(available_tools)
         if missing:
@@ -115,6 +126,12 @@ def build_native_manager(
             "Для однократного поручения используй delegate_task. "
             "Для остановки задания по ID используй stop_periodic_query(task_id), "
             "для просмотра списка — list_periodic_queries(). "
+            "Если требуется измерять температуру на улице И записывать "
+            "её в .txt файл, выбери skill_name=record_outdoor_weather "
+            "и укажи точное имя файла в instruction. Этот инструмент "
+            "читает MQTT и дописывает в файл за один проверяемый вызов; "
+            "он доступен только AGENT с разрешением shell. "
+            "Нельзя обещать запись файла после одного get_outdoor_weather. "
             "Не утверждай, что остановил или создал задание без ok=true " 
             "из результата инструмента. "
             "Не утверждай, что регулярное задание создано, пока инструмент "

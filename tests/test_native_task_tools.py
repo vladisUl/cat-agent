@@ -189,6 +189,68 @@ class NativePeriodicTaskTests(unittest.TestCase):
         finally:
             self.controller.finish_turn()
 
+    def test_periodic_file_request_requires_verified_recording_tool(self):
+        self.controller.enabled = True
+        self.controller.begin_turn(
+            "дай задание агенту раз в минуту смотреть температуру "
+            "и записывать в файл temp.txt"
+        )
+        try:
+            before = len(self.rpc.calls)
+            denied = self.controller.create(
+                "60", "get_outdoor_weather",
+                "получить текущую температуру на улице",
+            )
+            self.assertFalse(denied["ok"])
+            self.assertIn("record_outdoor_weather", denied["error"])
+            self.assertEqual(len(self.rpc.calls), before)
+        finally:
+            self.controller.finish_turn()
+
+        self.controller = NativeTaskController(
+            self.rpc, {"agent_1": ("get_outdoor_weather", "shell",
+                                    "record_outdoor_weather")},
+        )
+        self.controller.enabled = True
+        self.controller.begin_turn(
+            "дай задание агенту раз в минуту смотреть температуру "
+            "и записывать в файл temp.txt"
+        )
+        try:
+            item = self.controller.create(
+                "60", "get_outdoor_weather",
+                "получить текущую температуру на улице",
+            )
+            self.assertTrue(item["ok"], item)
+            self.assertEqual(item["skill"], "record_outdoor_weather")
+            self.assertEqual(item["file_name"], "temp.txt")
+            record = self.rpc.call("tasks", "require", item["task_id"])
+            self.assertEqual(record["skills"], ["record_outdoor_weather"])
+            self.assertIn("record_outdoor_weather(file_name='temp.txt')",
+                          record["text"])
+        finally:
+            self.controller.finish_turn()
+
+        # Model output alone cannot prove the append happened.
+        manager = FakeAgentManager()
+        scheduler = PriorityScheduler()
+        worker = NativeTaskWorker(
+            scheduler, manager, rpc=self.rpc,
+            agent_permissions={"agent_1": ("record_outdoor_weather",)},
+            poll_seconds=3600,
+        )
+        worker.start()
+        try:
+            self.engine.tick(now=time.monotonic() + 61)
+            self.assertTrue(worker.poll_once())
+            self._wait_one_notification(manager, expected=1, worker=worker)
+            notices = self.rpc.call("notifications", "list")
+            self.assertIn("Запись НЕ выполнена", notices[0]["text"])
+            self.assertIn("was not called", notices[0]["text"])
+        finally:
+            worker.close()
+            scheduler.close()
+
     def test_native_period_argument_types_are_normalized_exactly(self):
         self.controller.enabled = True
         for raw in (60.0, "60", " 60 ", "60.0", 60):

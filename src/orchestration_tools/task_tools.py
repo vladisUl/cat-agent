@@ -7,14 +7,20 @@ mutates persistent task state. A lost RPC reply is an UNKNOWN outcome.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping
 
+from litert_agent_tools.record_tools import RECORD_TOOL_NAME, extract_record_filename
 from orchestration.tasks import TaskStoreError
 
 LOGGER = logging.getLogger(__name__)
 MAX_PERIOD_SECONDS = 604800
 MAX_INSTRUCTION_CHARS = 2048
 TASK_PREFIX = "LiteRT QUERY: "
+_FILE_WRITE_INTENT = re.compile(
+    r"запис|запиш|допис|допиш|сохран|файл|write|append|save|file",
+    re.IGNORECASE,
+)
 
 
 def _period_seconds(value: object) -> int | None:
@@ -87,15 +93,18 @@ class NativeTaskController:
         self.enabled = False
         self.in_turn = False
         self._create_attempted = False
+        self._human_request = ""
 
-    def begin_turn(self) -> None:
+    def begin_turn(self, human_request: str = "") -> None:
         if self.in_turn:
             raise RuntimeError("Nested native TASK management turn")
         self.in_turn = True
         self._create_attempted = False
+        self._human_request = human_request if isinstance(human_request, str) else ""
 
     def finish_turn(self) -> None:
         self.in_turn = False
+        self._human_request = ""
 
     def _allowed(self) -> bool:
         return self.enabled and self.in_turn
@@ -144,10 +153,26 @@ class NativeTaskController:
             )
             return {"ok": False, "error": "period_seconds must be an integer in 10..604800"}
         period_seconds = normalized_period
-        if not isinstance(skill_name, str) or skill_name not in self.allowed_skills:
-            return {"ok": False, "error": "skill is not available to native AGENT"}
         if not isinstance(instruction, str) or not instruction.strip() or len(instruction) > MAX_INSTRUCTION_CHARS:
             return {"ok": False, "error": "instruction must be 1..2048 characters"}
+        # Validate against the *original human request* as well: the model
+        # previously erased the requested file write when choosing a skill.
+        request_text = self._human_request + "\n" + instruction
+        wants_file = bool(_FILE_WRITE_INTENT.search(request_text))
+        filename = None
+        if wants_file or skill_name == RECORD_TOOL_NAME:
+            filename = extract_record_filename(request_text)
+            if filename is None:
+                return {"ok": False, "error": "File recording requires one safe .txt filename"}
+            if skill_name not in ("get_outdoor_weather", RECORD_TOOL_NAME):
+                return {"ok": False, "error": "Outdoor file recording requires record_outdoor_weather"}
+            if RECORD_TOOL_NAME not in self.allowed_skills:
+                return {"ok": False, "error": "record_outdoor_weather is not enabled for an AGENT"}
+            LOGGER.info("native-task-tool FILE ROUTE skill=%s -> %s filename=%s",
+                        skill_name, RECORD_TOOL_NAME, filename)
+            skill_name = RECORD_TOOL_NAME
+        elif not isinstance(skill_name, str) or skill_name not in self.allowed_skills:
+            return {"ok": False, "error": "skill is not available to native AGENT"}
         if self._create_attempted:
             return {"ok": False, "error": "Already attempted creating a task in this turn; list tasks before retrying"}
         self._create_attempted = True
@@ -155,16 +180,29 @@ class NativeTaskController:
         description = TASK_PREFIX + instruction[:100]
         # The schedule belongs to SYSTEM, not the model or an AGENT shell.
         # Every timer tick starts an independently bounded single AGENT run.
-        action = _READONLY_MQTT_ACTIONS.get(skill_name, instruction)
-        task_text = (
-            "СЕЙЧАС выполни ОДИН раз: " + action + ". "
-            "Обязательно вызови нативный инструмент " + skill_name + "(), "
-            "дождись его результата, затем сообщи фактические значения "
-            "или причину ошибки. Не отвечай до вызова инструмента. "
-            "Не организуй циклы, ожидание, sleep, cron или собственное "
-            "расписание: следующий запуск сделает TASK SYSTEM.\n"
-            "Дополнительная инструкция: " + instruction
-        )
+        if skill_name == RECORD_TOOL_NAME:
+            task_text = (
+                "СЕЙЧАС ОДИН раз вызови нативный инструмент "
+                f"record_outdoor_weather(file_name={filename!r}). "
+                "Этот инструмент сам считывает MQTT и дописывает одну "
+                "строку в файл. НИКОГДА не сообщай об успешной записи "
+                "без ok=true в фактическом результате инструмента. "
+                "Не используй shell, циклы, sleep или cron. "
+                "Следующий запуск назначит TASK SYSTEM. "
+                "Сообщи путь файла и измеренные значения из результата.\n"
+                "Исходная просьба: " + request_text
+            )
+        else:
+            action = _READONLY_MQTT_ACTIONS.get(skill_name, instruction)
+            task_text = (
+                "СЕЙЧАС выполни ОДИН раз: " + action + ". "
+                "Обязательно вызови нативный инструмент " + skill_name + "(), "
+                "дождись его результата, затем сообщи фактические значения "
+                "или причину ошибки. Не отвечай до вызова инструмента. "
+                "Не организуй циклы, ожидание, sleep, cron или собственное "
+                "расписание: следующий запуск сделает TASK SYSTEM.\n"
+                "Дополнительная инструкция: " + instruction
+            )
         LOGGER.info(
             "native-task-tool CREATE period=%s skill=%s instruction=%r",
             period_seconds, skill_name, instruction,
@@ -179,11 +217,14 @@ class NativeTaskController:
             return self._rpc_error("CREATE", exc)
         LOGGER.info("native-task-tool CREATED id=%s period=%s skill=%s",
                     record["task_id"], period_seconds, skill_name)
-        return {
+        result = {
             "ok": True, "task_id": record["task_id"],
             "period_seconds": period_seconds, "skill": skill_name,
             "status": "scheduled", "delivery": "TASK QUERY notifications inbox",
         }
+        if filename is not None:
+            result["file_name"] = filename
+        return result
 
     def list_queries(self) -> dict:
         if not self._allowed():
@@ -239,6 +280,9 @@ def create_task_tools(controller: NativeTaskController) -> list:
         результат публикует через QUERY MANAGER в уведомлениях native TUI.
         Нельзя использовать Shell-циклы, sleep или cron вместо этого.
         Выбери skill_name из нативных инструментов AGENT.
+        Для температуры на улице + сохранения в .txt используй
+        record_outdoor_weather и укажи имя файла в instruction.
+        Одного get_outdoor_weather для записи файла недостаточно.
 
         Args:
             period_seconds (int): Интервал в секундах. Раз в минуту = 60.

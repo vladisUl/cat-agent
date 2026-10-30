@@ -63,7 +63,7 @@ class NativeManager:
         if broker is not None:
             broker.begin_turn()
         if task_controller is not None:
-            task_controller.begin_turn()
+            task_controller.begin_turn(text)
         try:
             answer = self.chat.ask(text)
             while broker is not None and (pending := broker.take_pending()):
