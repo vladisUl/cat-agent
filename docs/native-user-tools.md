@@ -28,3 +28,27 @@ Example: `config/native_tools/get_current_time.json`:
 - The launcher reads `config/native_tools` by default. Override its directory
   using `CAT_AGENT_NATIVE_TOOLS_DIR`; direct CLI also supports
   `--external-tools-dir`.
+
+## Native read_pic (existing image pipeline)
+
+`config/native_tools/read_pic.json` registers `read_pic(path: string)` as a
+native LiteRT tool. The `handler: "read_pic"` type is a deliberate special
+case: it reuses the existing `orchestration.image_tool.read_picture` implementation
+for DATA path isolation, PNG/JPEG validation and size limits. A shell command
+cannot deliver pixel content to the LiteRT model through a JSON tool response.
+
+The tool call queues one image, then `NativeConversationChat.ask()` delivers
+its bytes in a **second user turn** to the same vision-capable Conversation.
+This is a working compatibility path for LiteRT-LM 0.18's automatic tool
+calling, **not** an extra binary/script and **not** a zero-cost image callback.
+The intermediate model reply is not shown to the user; the final reply is
+generated after the image arrives. One image per user turn is supported.
+
+Example user query: `Прочитай изображение test.png и скажи, что на нём`
+(put `test.png` under `/opt/model/data` first). Requires the active LiteRT
+model and Engine `vision_backend` to support images; a text-only model cannot
+be made multimodal by registering a tool.
+
+The MANAGER has this tool automatically. To grant to an AGENT, include
+`"read_pic"` among that AGENT's explicit `tools`. Restart Native CORE to
+reload the catalog. Legacy `/work#read_pic.sh` paths remain unchanged.
