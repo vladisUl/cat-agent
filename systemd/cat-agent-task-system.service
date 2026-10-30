@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/cat-agent
-ExecStart=/opt/cat-agent/start_task_system.sh
+ExecStart=/opt/cat-agent/task_system.sh
 Restart=always
 RestartSec=2
 KillSignal=SIGTERM

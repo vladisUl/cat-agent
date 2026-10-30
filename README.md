@@ -162,21 +162,21 @@ A RUN that has already started is never silently moved to another CORE. If a
 CORE dies after execution began, the outcome may be unknown and that run is not
 automatically replayed: external side effects may already have happened.
 
-The same `./start_task_system.sh` starts the service with no arguments and
+The same `./task_system.sh` starts the service with no arguments and
 acts as its administration CLI when a subcommand is supplied.
 
 Useful administrative commands:
 
 ```bash
-./start_task_system.sh list
-./start_task_system.sh cores
-./start_task_system.sh runs
-./start_task_system.sh run 1
-./start_task_system.sh stop 1
-./start_task_system.sh start 1
-./start_task_system.sh period 1 120
-./start_task_system.sh executor 1 auto
-./start_task_system.sh delete 1
+./task_system.sh list
+./task_system.sh cores
+./task_system.sh runs
+./task_system.sh run 1
+./task_system.sh stop 1
+./task_system.sh start 1
+./task_system.sh period 1 120
+./task_system.sh executor 1 auto
+./task_system.sh delete 1
 ```
 
 See [docs/task-system.md](docs/task-system.md) for persistence, queue states,
@@ -385,7 +385,7 @@ For manual startup, start Task SYSTEM first and then one or both primary COREs:
 ```bash
 cd /opt/cat-agent
 
-./start_task_system.sh
+./task_system.sh
 ./start_native_core.sh
 ./start_openai_agent.sh
 ```

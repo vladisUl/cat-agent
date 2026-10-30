@@ -159,6 +159,12 @@ class CoreSocketsTest(unittest.TestCase):
 class TaskSystemUnifiedLauncherTest(unittest.TestCase):
     root = Path(__file__).resolve().parents[1]
 
+    def test_systemd_service_uses_unified_launcher(self):
+        unit = (self.root / "systemd/cat-agent-task-system.service").read_text(encoding="utf-8")
+        self.assertIn("ExecStart=/opt/cat-agent/task_system.sh", unit)
+        self.assertNotIn("start_task_system.sh", unit)
+
+
     def test_service_and_admin_share_one_script(self):
         with tempfile.TemporaryDirectory() as folder:
             fake = Path(folder) / "fake-python"
@@ -181,7 +187,7 @@ class TaskSystemUnifiedLauncherTest(unittest.TestCase):
             ):
                 with self.subTest(args=args):
                     result = subprocess.run(
-                        ["bash", str(self.root / "start_task_system.sh"), *args],
+                        ["bash", str(self.root / "task_system.sh"), *args],
                         env=env, text=True, capture_output=True,
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
