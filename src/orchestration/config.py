@@ -50,16 +50,17 @@ class Settings:
     reasoning_effort: str
     log_level: str
     mcp_servers: tuple[McpServerConfig, ...] = ()
+    # Independent of prompt_dir. Override only for isolated test deployments.
+    project_root: Path = Path(__file__).resolve().parents[2]
 
     @property
     def tool_dir(self) -> Path:
-        # Tool definitions remain part of the cat-agent code repository,
-        # regardless of where the user keeps authored prompts.
-        return Path(__file__).resolve().parents[2] / "tools"
+        # Tool definitions stay under the code root, not the prompt root.
+        return self.project_root / "tools"
 
     @property
     def mcp_dir(self) -> Path:
-        return Path(__file__).resolve().parents[2] / "mcp"
+        return self.project_root / "mcp"
 
     @classmethod
     def from_env(cls, *, require_model: bool = True) -> "Settings":
