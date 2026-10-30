@@ -63,7 +63,6 @@ class Settings:
 
     @classmethod
     def from_env(cls, *, require_model: bool = True) -> "Settings":
-        project_root = Path(__file__).resolve().parents[2]
         model = os.getenv("CAT_AGENT_MODEL", "").strip()
         if require_model and not model:
             raise ValueError("CAT_AGENT_MODEL must be set")
@@ -78,7 +77,7 @@ class Settings:
 
         return cls(
             workspace=Path(os.getenv("CAT_AGENT_WORKSPACE", "/opt/model")),
-            prompt_dir=Path(os.getenv("CAT_AGENT_PROMPT_DIR", str(project_root / "prompts"))),
+            prompt_dir=Path(os.getenv("CAT_AGENT_PROMPT_DIR", "/opt/prompt/prompts")),
             api_base_url=os.getenv(
                 "CAT_AGENT_API_BASE_URL", "http://127.0.0.1:9380/v1"
             ).rstrip("/"),
