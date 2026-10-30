@@ -242,22 +242,23 @@ class RuntimeAgentTests(unittest.TestCase):
                     [tool.__name__ for tool in item["tools"]]
                     for item in conversations
                 ]
-                self.assertIn("create_periodic_query", names[0])
+                self.assertIn("delegate_task", names[0])
+                self.assertNotIn("create_periodic_query", names[0])
                 self.assertIn("stop_periodic_query", names[0])
                 self.assertIn("list_periodic_queries", names[0])
-                self.assertNotIn("create_periodic_query", names[1])
+                self.assertNotIn("delegate_task", names[1])
                 self.assertEqual(names[2], [])
                 self.assertIn("ПЕРИОДИЧЕСКИЕ ЗАДАНИЯ", conversations[0]["messages"][0]["content"])
                 self.assertIn("stop_periodic_query", conversations[0]["messages"][0]["content"])
                 tool = next(tool for tool in conversations[0]["tools"]
-                            if tool.__name__ == "create_periodic_query")
+                            if tool.__name__ == "delegate_task")
                 # Even though registered during BASE warm-up, it cannot
                 # mutate TASK SYSTEM until MANAGER enters a human turn.
-                self.assertFalse(tool(60, "get_outdoor_weather", "Измерь температуру")["ok"])
+                self.assertFalse(tool("agent_1", "Измерь температуру", 60)["ok"])
                 self.assertFalse(rpc.call.called)
 
                 with patch.object(manager.chat, "ask", side_effect=lambda text: str(
-                    tool(60, "get_outdoor_weather", "Измерь температуру"),
+                    tool("agent_1", "Измерь температуру", 60),
                 )):
                     result = manager.respond("session", "раз в минуту измеряй температуру")
                 self.assertIn("'status': 'scheduled'", result.text)
@@ -265,8 +266,9 @@ class RuntimeAgentTests(unittest.TestCase):
                 self.assertEqual(rpc.call.call_args.args[:2],
                                  ("system", "create_periodic_task"))
                 self.assertEqual(rpc.call.call_args.kwargs,
-                                 {"method": "query", "executor": "litert"})
-                self.assertFalse(tool(60, "get_outdoor_weather", "Ещё раз")["ok"])
+                                 {"method": "query", "executor": "litert", "agent_id": "agent_1"})
+                self.assertEqual(rpc.call.call_args.args[3], "Измерь температуру")
+                self.assertFalse(tool("agent_1", "Ещё раз", 60)["ok"])
                 self.assertEqual(rpc.call.call_count, 1)
             finally:
                 manager.close()

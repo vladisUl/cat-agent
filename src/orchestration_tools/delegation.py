@@ -68,7 +68,7 @@ class DelegationBroker:
         zero = (
             (type(period_seconds) in (int, float) and period_seconds == 0)
             or (isinstance(period_seconds, str)
-                and re.fullmatch(r"0+(?:\\.0+)?", period_seconds.strip()) is not None)
+                and re.fullmatch(r"0+(?:\.0+)?", period_seconds.strip()) is not None)
         )
         if not zero:
             interval = _period_seconds(period_seconds)
