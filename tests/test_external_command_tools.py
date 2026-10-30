@@ -169,7 +169,7 @@ class ExternalCommandToolTests(unittest.TestCase):
                 second = chat._working.calls[-1]
                 self.assertEqual(second["role"], "user")
                 self.assertEqual(second["content"][1]["type"], "image")
-                self.assertEqual(second["content"][1]["blob"][:12], "iVBORw0KGgo="[:12])
+                self.assertTrue(second["content"][1]["blob"].startswith("iVBORw0KGgo"))
                 self.assertEqual(chat.execution_tool_calls, 1)
                 self.assertEqual(chat.execution_status_code, 0)
 
