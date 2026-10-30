@@ -90,6 +90,33 @@ class TaskWorkerTests(unittest.TestCase):
             time.sleep(0.005)
         self.fail("No model completion submitted for authoritative finish")
 
+    def test_display_countdown_reads_authoritative_system_timer(self):
+        task = self.engine.runtime.create_periodic_task(
+            "status-timer", "READ", ("shell",), 60,
+            method="query", executor="litert",
+        )
+        self.worker._refresh_task_display()
+        snapshot = self.worker.snapshot()
+        entry = next(t for t in snapshot["tasks"] if t["task_id"] == task.task_id)
+        self.assertEqual(entry["executor"], "litert")
+        self.assertEqual(entry["timer"]["period_seconds"], 60)
+        self.assertGreater(entry["timer"]["next_fire_monotonic"], time.monotonic())
+        self.assertIsNone(snapshot["task_display_error"])
+        task_rpc_reads = [op for _, op, _ in self.rpc.requests
+                          if op in ("task_snapshot", "task_timer_snapshot")]
+        self.assertEqual(task_rpc_reads[-2:], ["task_snapshot", "task_timer_snapshot"])
+        self.worker._refresh_task_display()
+        self.assertEqual(len([op for _, op, _ in self.rpc.requests
+                              if op in ("task_snapshot", "task_timer_snapshot")]),
+                         len(task_rpc_reads))
+        self.engine.runtime.stop_task(task.task_id)
+        self.worker._next_display_refresh = 0.0
+        self.worker._refresh_task_display()
+        item = next(t for t in self.worker.snapshot()["tasks"]
+                    if t["task_id"] == task.task_id)
+        self.assertFalse(item["enabled"])
+        self.assertFalse(item["timer"]["enabled"])
+
     def test_task_run_exactly_once_and_durable_finish(self):
         task = self.make_task()
         self.assertTrue(self.worker.poll_once())

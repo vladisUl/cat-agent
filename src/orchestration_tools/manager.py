@@ -37,6 +37,11 @@ class NativeManager:
     def base_kv_tokens(self):
         return self.chat.base_kv_tokens
 
+    @property
+    def query_base_kv_tokens(self):
+        return (self.query_chat.base_kv_tokens
+                if self.query_chat is not None else None)
+
     def respond(self, session_id: str, text: str) -> ManagerTurn:
         return self.respond_guarded(session_id, text, lambda: True)
 

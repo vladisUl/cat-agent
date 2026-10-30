@@ -19,6 +19,7 @@ from .priority_scheduler import QueueFullError
 LOGGER = logging.getLogger(__name__)
 POLL_SECONDS = 0.5
 HEARTBEAT_SECONDS = 5.0
+TASK_DISPLAY_REFRESH_SECONDS = 2.0
 MAX_UNACKNOWLEDGED = 32
 
 
@@ -50,6 +51,10 @@ class NativeTaskWorker:
         self._stop = threading.Event()
         self._thread = None
         self._next_heartbeat = 0.0
+        self._next_display_refresh = 0.0
+        self._display_tasks: list[dict] = []
+        self._display_error: str | None = None
+        self._last_agent_runs: dict[str, dict] = {}
         self._seen: set[str] = set()
         self._reserved: set[str] = set()
         self._pending_finishes: OrderedDict[str, tuple[dict, str]] = OrderedDict()
@@ -86,6 +91,50 @@ class NativeTaskWorker:
         self._thread = threading.Thread(target=self._loop, name="native-task-rpc", daemon=True)
         self._thread.start()
         LOGGER.info("native-task WORKER READY owner=%s", self.owner)
+
+    def _refresh_task_display(self) -> None:
+        """Read-only TASK SYSTEM telemetry, without a second timer.
+
+        The service supplies absolute next_fire_monotonic timestamps.
+        TUI interpolates the countdown using the same host monotonic clock.
+        """
+        now = self.clock()
+        if now < self._next_display_refresh:
+            return
+        self._next_display_refresh = now + TASK_DISPLAY_REFRESH_SECONDS
+        try:
+            records = self.rpc.call("system", "task_snapshot")
+            timers = self.rpc.call("system", "task_timer_snapshot")
+            if not isinstance(records, list) or not isinstance(timers, list):
+                raise ValueError("invalid TASK SYSTEM display snapshot")
+            by_task = {
+                timer["task_id"]: timer for timer in timers
+                if isinstance(timer, dict) and isinstance(timer.get("task_id"), int)
+            }
+            display: list[dict] = []
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                if record.get("executor") not in ("litert", "auto"):
+                    continue
+                display.append({
+                    "task_id": record.get("task_id"),
+                    "description": record.get("description", ""),
+                    "method": record.get("method", ""),
+                    "executor": record.get("executor"),
+                    "enabled": bool(record.get("enabled")),
+                    "timer": dict(by_task[record["task_id"]])
+                             if record.get("task_id") in by_task else None,
+                })
+        except (TaskStoreError, OSError, ValueError, TypeError, KeyError) as exc:
+            with self._lock:
+                self._display_tasks = []
+                self._display_error = str(exc)
+            LOGGER.warning("native-task DISPLAY unavailable: %s", exc)
+            return
+        with self._lock:
+            self._display_tasks = display
+            self._display_error = None
 
     def _heartbeat(self) -> bool:
         if self.clock() < self._next_heartbeat and self._ready:
@@ -437,6 +486,11 @@ class NativeTaskWorker:
             outcome = "error" if agent_failed else "done"
             LOGGER.info("native-task EXECUTED run=%s agent=%s outcome=%s",
                         event["run_id"], agent_id, outcome)
+            with self._lock:
+                self._last_agent_runs[agent_id] = {
+                    "task_id": event["task_id"], "outcome": outcome,
+                    "at_wall": time.time(),
+                }
             if task["method"] == "query":
                 # Yield to interactive requests BEFORE the second model call.
                 # Track queued continuations: shutdown may discard the queue
@@ -479,6 +533,7 @@ class NativeTaskWorker:
     def _loop(self) -> None:
         while not self._stop.wait(self.poll_seconds):
             try:
+                self._refresh_task_display()
                 self.poll_once()
             except Exception:
                 LOGGER.exception("native-task polling failed")
@@ -505,6 +560,12 @@ class NativeTaskWorker:
                 "offered": len(self._seen),
                 "deferred": len(self._deferred),
                 "pending_defers": len(self._pending_defers),
+                "tasks": [dict(item) for item in self._display_tasks],
+                "task_display_error": self._display_error,
+                "last_agent_runs": {
+                    agent_id: dict(item) for agent_id, item
+                    in self._last_agent_runs.items()
+                },
             }
 
     def close(self) -> None:

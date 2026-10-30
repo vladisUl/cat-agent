@@ -242,7 +242,11 @@ class CoreServer:
             if hasattr(self._manager, "agent_status"):
                 status["agents"] = self._manager.agent_status()
             if self._task_worker is not None:
-                status["task_worker"] = self._task_worker.snapshot()
+                worker_status = self._task_worker.snapshot()
+                status["task_worker"] = worker_status
+                status["tasks"] = worker_status["tasks"]
+                status["task_display_error"] = worker_status["task_display_error"]
+                status["last_agent_runs"] = worker_status["last_agent_runs"]
                 status["task_query_recent_cache"] = len(self._query_results)
             return status
 
@@ -720,6 +724,7 @@ class CoreServer:
                                   5 if self._task_worker is not None else
                                   4 if self._background_enabled else 2),
                         "manager_warm_tokens": getattr(self._manager, "base_kv_tokens", None),
+                        "query_warm_tokens": getattr(self._manager, "query_base_kv_tokens", None),
                     },
                     "status": self._status(),
                 })
