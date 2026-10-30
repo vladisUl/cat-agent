@@ -115,7 +115,8 @@ def build_native_manager(
             "Тактику выполнения и необходимость ответа определяет AGENT. "
             "Если сообщение не требуется, AGENT может закончить молча. "
             "Повторения организует TASK SYSTEM, не shell или AGENT. "
-            "Для остановки используй stop_periodic_query(task_id), "
+            "Для остановки (с сохранением TASK) используй stop_periodic_query(task_id), "
+            "для полного удаления сохранённого задания — delete_periodic_query(task_id), "
             "для списка — list_periodic_queries(). "
             "Не объявляй периодическое задание созданным без ok=true и task_id."
         )

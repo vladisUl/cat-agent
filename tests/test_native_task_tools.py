@@ -123,6 +123,69 @@ class UnifiedDelegationTests(unittest.TestCase):
         finally:
             self._end()
 
+    def test_delete_removes_stopped_task_and_frees_identifier(self):
+        self._begin()
+        try:
+            result = self.tool("agent_1", "Проверять температуру", 60)
+            task_id = result["task_id"]
+            stopped = self.management["stop_periodic_query"](task_id)
+            self.assertEqual(stopped, {"ok": True, "task_id": task_id, "enabled": False})
+            self.assertIsNotNone(self.rpc.call("tasks", "get", task_id))
+            deleted = self.management["delete_periodic_query"](str(task_id))
+            self.assertEqual(deleted, {"ok": True, "task_id": task_id, "deleted": True})
+            self.assertIsNone(self.rpc.call("tasks", "get", task_id))
+            self.assertFalse(any(t["task_id"] == task_id
+                                 for t in self.management["list_periodic_queries"]()["tasks"]))
+            self.assertFalse(any(t.task_id == task_id
+                                 for t in self.engine.runtime.task_timer_snapshot()))
+            self.assertFalse(self.management["delete_periodic_query"](task_id)["ok"])
+        finally:
+            self._end()
+        # Deletion frees the numeric slot; stop alone never does.
+        self._begin()
+        try:
+            recreated = self.tool("agent_1", "Новая задача", 90)
+            self.assertTrue(recreated["ok"], recreated)
+            self.assertEqual(recreated["task_id"], task_id)
+        finally:
+            self._end()
+
+    def test_delete_denies_non_native_tasks_and_invalid_or_inactive_requests(self):
+        tool = self.management["delete_periodic_query"]
+        self.assertEqual(tool(1)["error"], "task_management_not_in_active_turn")
+        self._begin()
+        try:
+            for identifier in (0, -1, True, 1.5, "not-an-id"):
+                self.assertEqual(tool(identifier)["error"], "task_id must be a positive integer")
+            foreign = self.engine.runtime.create_periodic_task(
+                "Other CORE task", "do stuff", ("shell",), 60,
+                method="query", executor="openai",
+            )
+            self.assertEqual(tool(foreign.task_id)["error"],
+                             "native periodic QUERY not found")
+            self.assertIsNotNone(self.rpc.call("tasks", "get", foreign.task_id))
+        finally:
+            self._end()
+
+    def test_delete_active_task_revokes_future_runs(self):
+        self._begin()
+        try:
+            result = self.tool("agent_1", "Проверять периодически", 60)
+            task_id = result["task_id"]
+            task = self.rpc.call("tasks", "require", task_id)
+            timer = self.engine.runtime._task_timers[task_id]
+            self.engine.tick(timer.next_fire_monotonic + 0.01)
+            run_id = next(rid for rid, run in self.engine.runs.items()
+                          if run["event"]["task_id"] == task_id)
+            removed = self.management["delete_periodic_query"](task_id)
+            self.assertTrue(removed["ok"])
+            self.engine.tick(timer.next_fire_monotonic + 61)
+            self.assertIsNone(self.rpc.call("tasks", "get", task_id))
+            self.assertEqual(self.engine.runs[run_id]["state"], "cancelled")
+            self.assertEqual(len(self.engine.runs), 1)
+        finally:
+            self._end()
+
     def test_periodic_executes_same_text_twice_on_selected_agent_and_stops(self):
         text = "Прочитать MQTT, добавить строку в temp.txt через shell"
         self._begin()
