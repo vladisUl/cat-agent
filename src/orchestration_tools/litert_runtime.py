@@ -183,6 +183,7 @@ def build_native_manager(
             max_output_tokens=max_output_tokens,
             thinking_config=thinking,
             trace_native_json=trace_native_json,
+            picture_root=shell_cwd,
         )
         for spec in specs:
             # Default MQTT tools require no per-agent JSON repetition.
@@ -199,6 +200,7 @@ def build_native_manager(
                 max_output_tokens=max_output_tokens,
                 thinking_config=thinking,
                 trace_native_json=trace_native_json,
+                picture_root=shell_cwd,
             )
             agents.append(NativeAgent(spec.agent_id, agent_chat))
         if shell_gate is not None:

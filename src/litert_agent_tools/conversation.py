@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from functools import wraps
+from pathlib import Path
 import logging
 import time
 from typing import Any
 
 from .clone import clone_conversation
 from .native_json_trace import attach_native_json_trace
+from .vision_input import native_picture_message
 
 
 LOGGER = logging.getLogger(__name__)
@@ -98,7 +100,6 @@ class ToolExecutionLedger:
         self.active = False
         self.calls = 0
         self.status_code = 0
-        self.pending_images: list[dict[str, str]] = []
 
     def _measure(self, function, *args, **kwargs):
         try:
@@ -115,18 +116,6 @@ class ToolExecutionLedger:
                 if (result.get("ok") is False or
                         (type(code) is int and code != 0)):
                     self.status_code = 1
-                image = result.get("__native_image__")
-                if image is not None:
-                    # Never serialize image/base64 into a tool-response JSON.
-                    if self.pending_images:
-                        self.status_code = 1
-                        return {"ok": False, "error": "only one read_pic image per turn"}
-                    if not (isinstance(image, dict) and isinstance(image.get("blob"), str)
-                            and isinstance(image.get("path"), str)):
-                        self.status_code = 1
-                        return {"ok": False, "error": "invalid native image result"}
-                    self.pending_images.append(image)
-                    return {"ok": True, "message": "Image queued for the next user message"}
         return result
 
     def wrap(self, function):
@@ -171,6 +160,7 @@ class NativeConversationChat:
         thinking_config: Any = None,
         warm_message: str = "warm",
         trace_native_json: bool = False,
+        picture_root: Path | None = None,
     ):
         if not system_prompt.strip():
             raise ValueError("The temporary system prompt must not be empty")
@@ -183,6 +173,7 @@ class NativeConversationChat:
         self._base_kv_tokens: int | None = None
         self._base_prefilled = False
         self._trace_native_json = trace_native_json
+        self._picture_root = Path(picture_root) if picture_root is not None else None
         self._tool_ledger = ToolExecutionLedger()
         self._base_warm_reply: str | None = None
         kwargs: dict[str, Any] = {
@@ -288,27 +279,15 @@ class NativeConversationChat:
         ledger = self._tool_ledger
         ledger.calls = 0
         ledger.status_code = 0
-        ledger.pending_images.clear()
         ledger.active = True
         try:
-            result = self._working.send_message(question)
-            if ledger.pending_images:
-                # LiteRT 0.18 Tool responses are JSON-only; the image must
-                # reach vision through a separate native Conversation message.
-                image = ledger.pending_images.pop()
-                result = self._working.send_message({
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": (
-                            "Изображение из вызова read_pic: " + image["path"]
-                            + ". Опиши его или ответь на исходный вопрос по изображению."
-                        )},
-                        {"type": "image", "blob": image["blob"]},
-                    ],
-                })
+            message = (
+                native_picture_message(question, self._picture_root)
+                if self._picture_root is not None else question
+            )
+            result = self._working.send_message(message)
         finally:
             ledger.active = False
-            ledger.pending_images.clear()
         after = _kv_tokens(self._working)
         last_prefill = _last_prefill_tokens(self._working)
         last_decode = _last_decode_tokens(self._working)

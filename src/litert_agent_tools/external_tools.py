@@ -11,7 +11,6 @@ import logging
 from pathlib import Path
 import re
 import shlex
-from types import SimpleNamespace
 
 from .shell_tools import MAX_COMMAND_CHARS, ShellConfig, ShellGate, _execute
 
@@ -32,61 +31,6 @@ def load_external_command_tools(
 ) -> list:
     """Create distinct native Tool objects sharing one command executor."""
     import litert_lm  # Keep pure-Python IPC/tests independent of LiteRT installation.
-
-    class ReadPictureTool(litert_lm.Tool):
-        """A native tool backed by the existing cat-agent image reader."""
-
-        def __init__(self, name: str, description: str):
-            self.name = name
-            self.description = description
-
-        def get_tool_description(self) -> dict:
-            return {
-                "type": "function",
-                "function": {
-                    "name": self.name,
-                    "description": self.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {
-                                "type": "string",
-                                "description": "Relative PNG/JPEG path within the DATA workspace",
-                            },
-                        },
-                        "required": ["path"],
-                    },
-                },
-            }
-
-        def execute(self, param) -> dict:
-            if not gate.enabled:
-                return {"ok": False, "error": "read_pic disabled during BASE warm-up"}
-            if (not isinstance(param, dict) or set(param) != {"path"} or
-                    not isinstance(param["path"], str) or not param["path"].strip()):
-                return {"ok": False, "error": "read_pic requires a nonempty path string"}
-            from orchestration.image_tool import read_picture
-
-            # Reuse the legacy path isolation, signature and size checks.
-            content = read_picture(
-                "read_pic.sh " + shlex.quote(param["path"]),
-                SimpleNamespace(root=config.workdir, skill_names=("read_pic",)),
-                SimpleNamespace(supports_images=True),
-                require_assignment=False,
-            )
-            if isinstance(content, str):
-                LOGGER.warning("native-tool RESULT name=%s error=%s", self.name, content)
-                return {"ok": False, "error": content}
-            url = content[1]["image_url"]["url"]
-            blob = url.split(",", 1)[1]
-            LOGGER.info("native-tool RESULT name=%s image=%r", self.name, param["path"])
-            return {
-                "ok": True,
-                "__native_image__": {
-                    "blob": blob,
-                    "path": param["path"],
-                },
-            }
 
     class ExternalCommandTool(litert_lm.Tool):
         def __init__(self, name: str, description: str, command: tuple[str, ...]):
@@ -128,34 +72,23 @@ def load_external_command_tools(
             spec = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise ValueError(f"Invalid external tool JSON {path}: {exc}") from exc
-        if not isinstance(spec, dict):
-            raise ValueError(f"{path}: expected a JSON object")
-        is_picture = spec.get("handler") == "read_pic"
-        allowed_keys = ({"name", "description", "handler"}
-                        if is_picture else {"name", "description", "command"})
-        if set(spec) != allowed_keys:
-            raise ValueError(f"{path}: expected {sorted(allowed_keys)} only")
-        name, description = spec["name"], spec["description"]
+        if not isinstance(spec, dict) or set(spec) != {"name", "description", "command"}:
+            raise ValueError(f"{path}: expected name, description, command only")
+        name, description, command = spec["name"], spec["description"], spec["command"]
         if not isinstance(name, str) or not TOOL_NAME.fullmatch(name):
             raise ValueError(f"{path}: invalid tool name: {name!r}")
         if name in used:
             raise ValueError(f"{path}: duplicate tool name: {name}")
         if not isinstance(description, str) or not description.strip():
             raise ValueError(f"{path}: tool description must be nonempty")
-        if is_picture:
-            if name != "read_pic":
-                raise ValueError(f"{path}: read_pic handler must use tool name read_pic")
-            tools.append(ReadPictureTool(name, description))
-        else:
-            command = spec["command"]
-            if (not isinstance(command, list) or not command or
-                    not all(isinstance(arg, str) and arg and "\x00" not in arg for arg in command)):
-                raise ValueError(f"{path}: command must be a nonempty string array without NUL")
-            if not Path(command[0]).is_absolute():
-                raise ValueError(f"{path}: executable path must be absolute")
-            if len(shlex.join(command)) > MAX_COMMAND_CHARS:
-                raise ValueError(f"{path}: command exceeds {MAX_COMMAND_CHARS} characters")
-            tools.append(ExternalCommandTool(name, description, tuple(command)))
+        if (not isinstance(command, list) or not command or
+                not all(isinstance(arg, str) and arg and "\x00" not in arg for arg in command)):
+            raise ValueError(f"{path}: command must be a nonempty string array without NUL")
+        if not Path(command[0]).is_absolute():
+            raise ValueError(f"{path}: executable path must be absolute")
+        if len(shlex.join(command)) > MAX_COMMAND_CHARS:
+            raise ValueError(f"{path}: command exceeds {MAX_COMMAND_CHARS} characters")
+        tools.append(ExternalCommandTool(name, description, tuple(command)))
         used.add(name)
     LOGGER.info("native-tools EXTERNAL loaded=%s from=%s", tuple(sorted(used)), directory)
     return tools

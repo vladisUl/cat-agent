@@ -28,27 +28,33 @@ Example: `config/native_tools/get_current_time.json`:
 - The launcher reads `config/native_tools` by default. Override its directory
   using `CAT_AGENT_NATIVE_TOOLS_DIR`; direct CLI also supports
   `--external-tools-dir`.
+ 
+## Изображения в Native CORE — не tools
 
-## Native read_pic (existing image pipeline)
+Изображения передаются напрямую через стандартное мультимодальное сообщение
+`Conversation.send_message()`. При наличии единственного имени PNG/JPEG в
+сообщении (например «Что изображено на test.png?») CORE берёт файл из DATA
+каталога (`<workspace>/data/test.png`) и отправляет одно сообщение:
 
-`config/native_tools/read_pic.json` registers `read_pic(path: string)` as a
-native LiteRT tool. The `handler: "read_pic"` type is a deliberate special
-case: it reuses the existing `orchestration.image_tool.read_picture` implementation
-for DATA path isolation, PNG/JPEG validation and size limits. A shell command
-cannot deliver pixel content to the LiteRT model through a JSON tool response.
+```python
+{"role": "user", "content": [
+    {"type": "text", "text": original_user_question},
+    {"type": "image", "path": "/opt/model/data/test.png"},
+]}
+```
 
-The tool call queues one image, then `NativeConversationChat.ask()` delivers
-its bytes in a **second user turn** to the same vision-capable Conversation.
-This is a working compatibility path for LiteRT-LM 0.18's automatic tool
-calling, **not** an extra binary/script and **not** a zero-cost image callback.
-The intermediate model reply is not shown to the user; the final reply is
-generated after the image arrives. One image per user turn is supported.
+Исходный текст вопроса передаётся **без изменений**. Файл проверяется
+существующим `orchestration.image_tool.validated_picture_path()` с прежними
+ограничениями DATA, PNG/JPEG и размера. Никаких `blob`, дополнительной
+генерации, `read_pic` native Tool или сгенерированного текста нет.
 
-Example user query: `Прочитай изображение test.png и скажи, что на нём`
-(put `test.png` under `/opt/model/data` first). Requires the active LiteRT
-model and Engine `vision_backend` to support images; a text-only model cannot
-be made multimodal by registering a tool.
+Поддерживается и явная команда `/work#read_pic.sh test.png`, либо
+`read_pic.sh test.png` отдельной строкой; она не запускает shell.
+Для путей с пробелами используйте явную команду с кавычками.
+Если в запросе указано два изображения, путь следует уточнить: одно изображение
+на один вход. Без упоминания PNG/JPEG вопрос передаётся модели как обычный текст.
 
-The MANAGER has this tool automatically. To grant to an AGENT, include
-`"read_pic"` among that AGENT's explicit `tools`. Restart Native CORE to
-reload the catalog. Legacy `/work#read_pic.sh` paths remain unchanged.
+Изображения доступны только в том случае, когда выбранная модель и
+`vision_backend` поддерживают их. Прежняя ветка `read_pic.sh` для legacy
+runtime сохранена. JSON-команда `get_current_time` остаётся независимым
+примером пользовательского native tool.

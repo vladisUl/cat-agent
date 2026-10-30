@@ -8,6 +8,26 @@ import shlex
 from .data_paths import resolve_data_path
 
 
+def validated_picture_path(runtime, logical_path: str):
+    """Use the legacy DATA restrictions, PNG/JPEG checks and size limit."""
+    path = resolve_data_path(runtime, logical_path, must_exist=True)
+    if path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+        raise ValueError("only PNG and JPEG images are supported")
+    limit = int(os.getenv("CAT_AGENT_MAX_IMAGE_BYTES", str(20 * 1024 * 1024)))
+    if limit <= 0:
+        raise ValueError("CAT_AGENT_MAX_IMAGE_BYTES must be positive")
+    with path.open("rb") as source:
+        signature = source.read(8)
+        source.seek(0, os.SEEK_END)
+        length = source.tell()
+    if length > limit:
+        raise ValueError(f"image exceeds {limit} bytes")
+    if not (signature.startswith(b"\\x89PNG\\r\\n\\x1a\\n") or
+            signature.startswith(b"\\xff\\xd8\\xff")):
+        raise ValueError("file does not contain a PNG or JPEG image")
+    return path
+
+
 def read_picture(
     command,
     runtime,
@@ -43,16 +63,8 @@ def read_picture(
         enabled = {name.strip() for name in os.getenv("CAT_AGENT_ENABLED_SKILLS", "shell,mqtt,read_pic").split(",")}
         if "read_pic" not in enabled:
             raise ValueError("read_pic disabled by runtime policy")
-        path = resolve_data_path(runtime, logical_path, must_exist=True)
-        if path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
-            raise ValueError("only PNG and JPEG images are supported")
-        limit = int(os.getenv("CAT_AGENT_MAX_IMAGE_BYTES", str(20 * 1024 * 1024)))
-        if limit <= 0:
-            raise ValueError("CAT_AGENT_MAX_IMAGE_BYTES must be positive")
-        with path.open("rb") as source:
-            data = source.read(limit + 1)
-        if len(data) > limit:
-            raise ValueError(f"image exceeds {limit} bytes")
+        path = validated_picture_path(runtime, logical_path)
+        data = path.read_bytes()
         if data.startswith(b"\x89PNG\r\n\x1a\n"):
             mime = "image/png"
         elif data.startswith(b"\xff\xd8\xff"):
