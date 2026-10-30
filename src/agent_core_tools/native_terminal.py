@@ -77,30 +77,111 @@ class NativeTerminalTUI(TerminalTUI):
             self._pending_query_ack[run_id] = 0.0
 
     def _draw_info(self, win) -> None:
-        """Native CORE metrics only; avoid misleading legacy status fields."""
+        """Per-conversation BASE KV and authoritative TASK timer telemetry."""
+        import curses
+
         height, width = win.getmaxyx()
         row = 1
 
-        def put(key: str, value: object = "") -> None:
+        def put(key: str, value: object = "", *, bold: bool = False) -> None:
             nonlocal row
             if row >= height - 1:
                 return
             self._safe_addstr(
                 win, row, 2,
                 f"{key:<12} {value}" if value != "" else key,
-                0, max(0, width - 4),
+                curses.A_BOLD if bold else 0,
+                max(0, width - 4),
             )
             row += 1
 
-        put("NATIVE CORE")
+        def timer_line(task: dict) -> tuple[str, bool]:
+            timer = task.get("timer")
+            if not isinstance(timer, dict):
+                return ("EXTERNAL" if task.get("enabled") else "STOP", False)
+            period = timer.get("period_seconds")
+            period_text = self._number(period)
+            armed = bool(task.get("enabled")) and bool(timer.get("enabled"))
+            if not armed:
+                return f"STOP {period_text}s", False
+            next_fire = timer.get("next_fire_monotonic")
+            if isinstance(next_fire, (int, float)) and not isinstance(next_fire, bool):
+                next_in = max(0.0, float(next_fire) - time.monotonic())
+                return f"RUN {period_text}s  next {next_in:.0f}s", True
+            return f"RUN {period_text}s  next --", True
+
+        put("NATIVE CORE", bold=True)
         put("model", self.core_info.get("model") or "?")
         put("backend", self.core_info.get("backend") or "?")
         put("stage", self.core_info.get("stage", "?"))
-        put("base KV", self.core_info.get("manager_warm_tokens", "?"))
         put("chat", "open" if self.status.get("chat_open") else "closed")
         row += 1
 
-        put("SCHEDULER")
+        put("BASE KV", bold=True)
+        put("manager", f"{self.core_info.get('manager_warm_tokens', '?')} tok")
+        put("query", f"{self.core_info.get('query_warm_tokens', '?')} tok")
+        agents = self.status.get("agents")
+        recent = self.status.get("last_agent_runs")
+        if not isinstance(recent, dict):
+            recent = {}
+        row += 1
+
+        put("AGENTS", bold=True)
+        if not isinstance(agents, list) or not agents:
+            put("agents", "none")
+        else:
+            for agent in agents:
+                if not isinstance(agent, dict):
+                    continue
+                agent_id = str(agent.get("agent_id", "agent"))
+                put(agent_id, f"{agent.get('state', '?')}  KV {agent.get('base_kv_tokens', '?')}")
+                last = recent.get(agent_id)
+                if isinstance(last, dict):
+                    at = last.get("at_wall")
+                    when = (time.strftime("%H:%M:%S", time.localtime(at))
+                            if isinstance(at, (int, float)) else "?")
+                    put("last run", f"TASK {last.get('task_id', '?')} "
+                                    f"{last.get('outcome', '?')} {when}")
+        row += 1
+
+        put("TASKS / EVENTS", bold=True)
+        tasks = self.status.get("tasks")
+        error = self.status.get("task_display_error")
+        if error:
+            put("tasks", "unavailable")
+        elif not isinstance(tasks, list):
+            put("tasks", "not connected")
+        elif not tasks:
+            put("tasks", "none")
+        else:
+            for task in tasks:
+                if not isinstance(task, dict):
+                    continue
+                text, armed = timer_line(task)
+                # For an auto executor this is a SYSTEM schedule, not
+                # necessarily a future native-AGENT invocation.
+                if task.get("executor") == "auto":
+                    text += " auto"
+                if row >= height - 1:
+                    break
+                label = f"TASK {task.get('task_id', '?')}"
+                lead = f"{label:<12} "
+                self._safe_addstr(win, row, 2, lead, 0, max(0, width - 4))
+                x = 2 + len(lead)
+                if x < width - 2:
+                    self._safe_addstr(win, row, x, "●",
+                                      self._event_indicator_attr(armed), 1)
+                    self._safe_addstr(win, row, x + 2, text, 0,
+                                      max(0, width - x - 4))
+                row += 1
+                description = str(task.get("description", ""))
+                if description and row < height - 1:
+                    self._safe_addstr(win, row, 4, description,
+                                      curses.A_DIM, max(0, width - 6))
+                    row += 1
+        row += 1
+
+        put("SCHEDULER", bold=True)
         put("state", self.status.get("state", "UNKNOWN"))
         put("active", self.status.get("label", "") or "-")
         put("queued", self.status.get("pending", "?"))
@@ -112,22 +193,13 @@ class NativeTerminalTUI(TerminalTUI):
 
         worker = self.status.get("task_worker")
         if isinstance(worker, dict):
-            put("TASK SYSTEM")
+            put("TASK SYSTEM", bold=True)
             put("ready", worker.get("ready", False))
             put("offered", worker.get("offered", 0))
             put("running", len(worker.get("reserved_agents", [])))
             put("finishes", worker.get("unacknowledged", 0))
             put("query RPC", worker.get("pending_query_validations", 0))
             put("inbox ACK", len(self._pending_query_ack))
-            row += 1
-
-        agents = self.status.get("agents")
-        if isinstance(agents, list) and agents:
-            put("AGENTS")
-            for agent in agents:
-                if isinstance(agent, dict):
-                    put(str(agent.get("agent_id", "agent")),
-                        agent.get("state", "?"))
 
     def _poll_core(self) -> None:
         while True:
