@@ -22,6 +22,7 @@ def _export_common(config: AppConfig, *, reasoning_effort: str) -> None:
 
     _export("CAT_AGENT_WORKSPACE", runtime.workspace)
     _export("CAT_AGENT_PROMPT_DIR", runtime.prompt_dir)
+    _export("CAT_AGENT_PROMPTS_TOOLS_DIR", runtime.prompts_tools_dir)
     _export("CAT_AGENT_AGENT_COUNT", agent.count)
     _export("CAT_AGENT_MAX_MANAGER_STEPS", agent.manager_max_steps)
     _export("CAT_AGENT_MAX_AGENT_STEPS", agent.agent_max_steps)

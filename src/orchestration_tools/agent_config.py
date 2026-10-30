@@ -17,7 +17,9 @@ class AgentSpec:
     tool_names: tuple[str, ...]
 
 
-def load_agent_specs(path: Path) -> tuple[AgentSpec, ...]:
+def load_agent_specs(
+    path: Path, *, prompt_dir: Path | None = None,
+) -> tuple[AgentSpec, ...]:
     path = Path(path)
     root = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(root, dict) or set(root) != {"agents"} or not isinstance(root["agents"], list):
@@ -41,7 +43,7 @@ def load_agent_specs(path: Path) -> tuple[AgentSpec, ...]:
             raise ValueError(f"{ident}: duplicate tool names")
         prompt_path = Path(prompt)
         if not prompt_path.is_absolute():
-            prompt_path = path.parent / prompt_path
+            prompt_path = (Path(prompt_dir) if prompt_dir is not None else path.parent) / prompt_path
         if not prompt_path.is_file():
             raise ValueError(f"{ident}: prompt not found: {prompt_path}")
         specs.append(AgentSpec(ident, prompt_path.resolve(), tuple(tools)))

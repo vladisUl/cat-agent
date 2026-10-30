@@ -35,7 +35,7 @@ cd /opt/cat-agent
 PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
   -m litert_agent_tools \
   --model /storage/models/litert/gemma-4-E4B-it.litertlm \
-  --system-file /opt/cat-agent/prompts_tools/manager.md \
+  --system-file /opt/prompt/prompts_tools/manager.md \
   --enable-shell \
   --shell-timeout 15 \
   --shell-max-output 16384
@@ -96,7 +96,7 @@ CPU-supported .litertlm model. The WSL host must reach the MQTT broker.
   export PYTHONPATH=/opt/cat-agent/src
   /opt/litert-lm-venv/bin/python3 -m litert_agent_tools \
       --model /storage/models/litert/gemma-4-E4B-it.litertlm \
-      --system-file /opt/cat-agent/prompts_tools/manager.md
+      --system-file /opt/prompt/prompts_tools/manager.md
 
 Override MQTT broker/port with CAT_AGENT_MQTT_HOST, CAT_AGENT_MQTT_PORT,
 and LITERT_TOOLS_MQTT_WAIT (default 5 s).
@@ -156,7 +156,7 @@ Test command:
 PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
   -m litert_agent_tools \
   --model /storage/models/litert/gemma-4-E4B-it.litertlm \
-  --system-file /opt/cat-agent/prompts_tools/manager.md \
+  --system-file /opt/prompt/prompts_tools/manager.md \
   --enable-shell --trace-native-json
 ```
 

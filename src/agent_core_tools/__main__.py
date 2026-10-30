@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         from orchestration_tools.agent_config import load_agent_specs
         agent_permissions = {
             spec.agent_id: spec.tool_names
-            for spec in load_agent_specs(args.agent_config)
+            for spec in load_agent_specs(args.agent_config, prompt_dir=args.system_file.parent)
         }
     server = CoreServer(
         args.socket, manager=manager,

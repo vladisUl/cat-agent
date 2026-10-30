@@ -50,7 +50,13 @@ def build_native_manager(
     if activation_dtype is not None and activation_dtype not in ('fp32', 'fp16', 'int16', 'int8'):
         raise ValueError(f'Unsupported LiteRT activation dtype: {activation_dtype!r}')
 
-    specs = load_agent_specs(agent_config) if agent_config is not None else ()
+    # The manager, AGENT and QUERY prompts share the same external directory.
+    # Relative AGENT paths are resolved against the manager prompt's directory.
+    prompt_dir = system_file.parent
+    specs = (
+        load_agent_specs(agent_config, prompt_dir=prompt_dir)
+        if agent_config is not None else ()
+    )
     if specs:
         prompt += (
             "\n\nДоступные независимые исполнители AGENT: "
@@ -142,7 +148,7 @@ def build_native_manager(
         # 5B: independent tool-free manager. An autonomous QUERY must
         # NEVER inject a user-role message into the human manager session,
         # nor trigger shell/MQTT/delegation while reading agent output.
-        query_prompt_file = Path(__file__).resolve().parents[2] / "prompts_tools/query_manager.md"
+        query_prompt_file = prompt_dir / "query_manager.md"
         query_prompt = query_prompt_file.read_text(encoding="utf-8")
         query_chat = NativeConversationChat(
             engine, query_prompt, [], sampler_config=sampler,

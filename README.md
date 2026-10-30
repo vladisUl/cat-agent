@@ -13,6 +13,28 @@ The current deployment is centered on ARM64 hardware and uses fixed paths such
 as `/opt/cat-agent` and `/opt/model`. Those paths are part of the deployment
 today, not a portability promise.
 
+## Prompt files outside the Git working tree
+
+The single YAML setting `runtime.prompt_root: /opt/prompt` controls both
+prompt families. OpenAI uses `/opt/prompt/prompts` and the LiteRT
+MANAGER, AGENT, and QUERY MANAGER use `/opt/prompt/prompts_tools`.
+Prompts are read at CORE startup: edit freely outside `/opt/cat-agent`,
+then restart the affected CORE to reload BASE prompts.
+
+On the target machine, before launching the updated COREs, copy the
+existing checked-in prompts **without overwriting** external edits:
+
+```bash
+install -d /opt/prompt/prompts /opt/prompt/prompts_tools
+cp -an /opt/cat-agent/prompts/. /opt/prompt/prompts/
+cp -an /opt/cat-agent/prompts_tools/. /opt/prompt/prompts_tools/
+```
+
+The repository copies are retained temporarily as migration seeds.
+Once the external files and both COREs are verified, they can be
+removed from Git in a separate cleanup. Details in
+[docs/shared-native-core.md](docs/shared-native-core.md).
+
 ## Native LiteRT CORE (October 2026)
 
 The native-tools implementation is **separate** from the legacy LiteRT

@@ -11,6 +11,7 @@ from unittest import mock
 import yaml
 
 from orchestration.config_env import main as config_env_main
+from orchestration.config import Settings
 from orchestration.yaml_config import load_app_config
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "cat-agent.yaml"
@@ -48,6 +49,46 @@ class YamlConfigTest(unittest.TestCase):
         self.assertEqual(config.openai.active.model, "koboldcpp/gemma-4-12B-it-Q4_K_M")
         self.assertEqual(config.openai.active.readiness, "openai")
         self.assertEqual(config.notifications.firebase_channel_id, "101")
+
+    def test_prompt_root_controls_both_prompt_directories(self) -> None:
+        source = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        source["runtime"]["prompt_root"] = "/tmp/independent-prompt-root"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "cat-agent.yaml"
+            path.write_text(yaml.safe_dump(source, allow_unicode=True), encoding="utf-8")
+            config = load_app_config(path)
+            self.assertEqual(config.runtime.prompt_root, "/tmp/independent-prompt-root")
+            self.assertEqual(config.runtime.prompt_dir, "/tmp/independent-prompt-root/prompts")
+            self.assertEqual(config.runtime.prompts_tools_dir,
+                             "/tmp/independent-prompt-root/prompts_tools")
+            for target in ("litert", "openai"):
+                with self.subTest(target=target):
+                    exported = self._capture(target, config_path=path)
+                    self.assertIn("export CAT_AGENT_PROMPT_DIR=/tmp/independent-prompt-root/prompts",
+                                  exported)
+                    self.assertIn("export CAT_AGENT_PROMPTS_TOOLS_DIR=/tmp/independent-prompt-root/prompts_tools",
+                                  exported)
+
+    def test_external_prompts_never_move_tools_or_mcp(self) -> None:
+        with mock.patch.dict(os.environ, {
+            "CAT_AGENT_PROMPT_DIR": "/tmp/independent-prompt-root/prompts",
+            "CAT_AGENT_CONFIG": str(self.config_path),
+        }):
+            settings = Settings.from_env(require_model=False)
+        self.assertEqual(settings.prompt_dir,
+                         Path("/tmp/independent-prompt-root/prompts"))
+        project_root = Path(__file__).resolve().parents[1]
+        self.assertEqual(settings.tool_dir, project_root / "tools")
+        self.assertEqual(settings.mcp_dir, project_root / "mcp")
+
+    def test_prompt_root_must_be_absolute(self) -> None:
+        source = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        source["runtime"]["prompt_root"] = "relative/prompts"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "cat-agent.yaml"
+            path.write_text(yaml.safe_dump(source), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "runtime.prompt_root must be an absolute path"):
+                load_app_config(path)
 
     def test_active_profile_controls_litert_export(self) -> None:
         source = yaml.safe_load((self.config_path).read_text(encoding="utf-8"))
@@ -163,7 +204,8 @@ class YamlConfigTest(unittest.TestCase):
             "export CAT_AGENT_TEMPERATURE=0.0",
             "export CAT_AGENT_TOP_P=1.0",
             "export CAT_AGENT_WORKSPACE=/opt/model",
-            "export CAT_AGENT_PROMPT_DIR=/opt/cat-agent/prompts",
+            "export CAT_AGENT_PROMPT_DIR=/opt/prompt/prompts",
+            "export CAT_AGENT_PROMPTS_TOOLS_DIR=/opt/prompt/prompts_tools",
             "export CAT_AGENT_COMMAND_TIMEOUT_SECONDS=20",
             "export CAT_AGENT_HTTP_TIMEOUT_SECONDS=180",
             "export CAT_AGENT_REQUEST_RETRIES=0",

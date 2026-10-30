@@ -74,9 +74,9 @@ def build_bundle(settings: Settings) -> LlamaRuntimeBundle:
     prompt_store = PromptStore(settings.prompt_dir, settings.agent_count)
     prompt_store.validate()
     skill_base = build_tool_catalog(
-        settings.prompt_dir.parent / "tools",
+        settings.tool_dir,
         settings.mcp_servers,
-        snapshot_dir=settings.prompt_dir.parent / "mcp",
+        snapshot_dir=settings.mcp_dir,
     )
     try:
         dispatcher = ToolDispatcher(getattr(skill_base, "mcp_runtime", None))

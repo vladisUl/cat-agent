@@ -2,12 +2,12 @@
   "agents": [
     {
       "id": "agent_1",
-      "prompt": "/opt/cat-agent/prompts_tools/agent_1.md",
+      "prompt": "agent_1.md",
       "tools": ["shell"]
     },
     {
       "id": "agent_2",
-      "prompt": "/opt/cat-agent/prompts_tools/agent_2.md",
+      "prompt": "agent_2.md",
       "tools": []
     }
   ]

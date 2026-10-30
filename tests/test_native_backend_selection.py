@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from types import SimpleNamespace
 import sys
 import tempfile
@@ -92,6 +93,54 @@ class NativeBackendSelectionTests(unittest.TestCase):
             backend_name="gpu", vision_backend_name="gpu",
         )
         self.assertEqual(settings["vision_backend"], ("gpu", None))
+
+    def test_external_prompt_root_supplies_manager_agent_and_query(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            external = root / "external" / "prompts_tools"
+            external.mkdir(parents=True)
+            manager_file = external / "manager.md"
+            manager_file.write_text("EXTERNAL MANAGER", encoding="utf-8")
+            (external / "agent_1.md").write_text("EXTERNAL AGENT", encoding="utf-8")
+            (external / "query_manager.md").write_text("EXTERNAL QUERY", encoding="utf-8")
+            config = root / "app" / "agents.json"
+            config.parent.mkdir()
+            config.write_text(json.dumps({"agents": [{
+                "id": "agent_1", "prompt": "agent_1.md", "tools": [],
+            }]}), encoding="utf-8")
+
+            class FakeBackend:
+                @staticmethod
+                def CPU(thread_count=None):
+                    return ("cpu", thread_count)
+
+            class FakeEngine:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def __enter__(self):
+                    return self
+
+                def close(self):
+                    pass
+
+            fake_litert = SimpleNamespace(
+                Engine=FakeEngine, Backend=FakeBackend,
+                SamplerConfig=lambda **kw: kw,
+                ThinkingConfig=lambda **kw: kw,
+            )
+            with patch.dict(sys.modules, {"litert_lm": fake_litert}):
+                with patch("orchestration_tools.litert_runtime.NativeConversationChat") as chat:
+                    with patch("orchestration_tools.litert_runtime.NativeManager"):
+                        build_native_manager(
+                            self.model, manager_file, enable_mqtt=False,
+                            agent_config=config,
+                        )
+            self.assertEqual(len(chat.call_args_list), 3)
+            prompts = [call.args[1] for call in chat.call_args_list]
+            self.assertTrue(prompts[0].startswith("EXTERNAL MANAGER"))
+            self.assertEqual(prompts[1], "EXTERNAL AGENT")
+            self.assertEqual(prompts[2], "EXTERNAL QUERY")
 
     def test_unknown_vision_backend_rejected(self):
         with self.assertRaisesRegex(ValueError, "vision backend"):

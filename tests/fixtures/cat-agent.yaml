@@ -50,7 +50,7 @@ agent:
 
 runtime:
   workspace: /opt/model
-  prompt_dir: /opt/cat-agent/prompts
+  prompt_root: /opt/prompt
   command_timeout: 20
   http_timeout: 180
   request_retries: 0

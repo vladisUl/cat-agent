@@ -131,12 +131,20 @@ class AgentConfig:
 @dataclass(frozen=True, slots=True)
 class RuntimeConfig:
     workspace: str
-    prompt_dir: str
+    prompt_root: str
     command_timeout: int
     http_timeout: int
     request_retries: int
     retry_delay: float
     max_file_bytes: int
+
+    @property
+    def prompt_dir(self) -> str:
+        return str(Path(self.prompt_root) / "prompts")
+
+    @property
+    def prompts_tools_dir(self) -> str:
+        return str(Path(self.prompt_root) / "prompts_tools")
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,7 +345,7 @@ def _parse_runtime(data: Any) -> RuntimeConfig:
         "runtime",
         {
             "workspace",
-            "prompt_dir",
+            "prompt_root",
             "command_timeout",
             "http_timeout",
             "request_retries",
@@ -345,9 +353,12 @@ def _parse_runtime(data: Any) -> RuntimeConfig:
             "max_file_bytes",
         },
     )
+    prompt_root = _string(section, "prompt_root", "runtime")
+    if not Path(prompt_root).is_absolute():
+        raise ValueError("runtime.prompt_root must be an absolute path")
     return RuntimeConfig(
         workspace=_string(section, "workspace", "runtime"),
-        prompt_dir=_string(section, "prompt_dir", "runtime"),
+        prompt_root=prompt_root,
         command_timeout=_int(section, "command_timeout", "runtime", minimum=1),
         http_timeout=_int(section, "http_timeout", "runtime", minimum=1),
         request_retries=_int(section, "request_retries", "runtime", minimum=0),

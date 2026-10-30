@@ -112,8 +112,10 @@ agent:
 runtime:
   # Agent command workspace.
   workspace: /opt/model
-  # Directory containing Manager/Agent/system prompt files.
-  prompt_dir: /opt/cat-agent/prompts
+  # One external prompt root, independent from cat-agent Git.
+  # Older OpenAI CORE reads <prompt_root>/prompts;
+  # LiteRT MANAGER/AGENT/QUERY read <prompt_root>/prompts_tools.
+  prompt_root: /opt/prompt
   # Maximum execution time in seconds for one external/tool command.
   command_timeout: 20
   # HTTP request timeout in seconds for the OpenAI-compatible backend.

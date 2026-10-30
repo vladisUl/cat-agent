@@ -51,6 +51,16 @@ class Settings:
     log_level: str
     mcp_servers: tuple[McpServerConfig, ...] = ()
 
+    @property
+    def tool_dir(self) -> Path:
+        # Tool definitions remain part of the cat-agent code repository,
+        # regardless of where the user keeps authored prompts.
+        return Path(__file__).resolve().parents[2] / "tools"
+
+    @property
+    def mcp_dir(self) -> Path:
+        return Path(__file__).resolve().parents[2] / "mcp"
+
     @classmethod
     def from_env(cls, *, require_model: bool = True) -> "Settings":
         project_root = Path(__file__).resolve().parents[2]

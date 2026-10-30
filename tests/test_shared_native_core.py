@@ -193,6 +193,11 @@ class NativeSharedLauncherTests(unittest.TestCase):
         self.model.write_bytes(b"test-only")
         self.prompt = self.root / "manager.md"
         self.prompt.write_text("Native manager", encoding="utf-8")
+        self.external_prompt_dir = self.root / "independent" / "prompts_tools"
+        self.external_prompt_dir.mkdir(parents=True)
+        (self.external_prompt_dir / "manager.md").write_text(
+            "External manager", encoding="utf-8",
+        )
         self.agents = self.root / "agents.json"
         self.agents.write_text('{"agents": []}', encoding="utf-8")
         self.stub_config = self.root / "config-interpreter"
@@ -212,6 +217,7 @@ class NativeSharedLauncherTests(unittest.TestCase):
             'if [ -n "$NATIVE_FAKE_D3D12_ADAPTER" ]; then\n'
             '  printf "export LITERT_AGENT_D3D12_ADAPTER=%s\\n" "$NATIVE_FAKE_D3D12_ADAPTER"\n'
             'fi\n'
+            'printf "export CAT_AGENT_PROMPTS_TOOLS_DIR=%s\\n" "$NATIVE_FAKE_PROMPTS_TOOLS_DIR"\n'
             'printf "export CAT_AGENT_WORKSPACE=/opt/model\\n"\n',
             encoding="utf-8",
         )
@@ -244,6 +250,7 @@ class NativeSharedLauncherTests(unittest.TestCase):
             "CAT_AGENT_NATIVE_AGENT_CONFIG": str(self.agents),
             "NATIVE_FAKE_PROFILE_MODEL": str(self.model),
             "NATIVE_FAKE_BACKEND": "cpu",
+            "NATIVE_FAKE_PROMPTS_TOOLS_DIR": str(self.external_prompt_dir),
             "NATIVE_CAPTURE": str(self.capture),
             "NATIVE_ENV_CAPTURE": str(self.capture_env),
         }
@@ -276,6 +283,15 @@ class NativeSharedLauncherTests(unittest.TestCase):
         self.assertEqual(opts[opts.index("--vision-backend") + 1], "cpu")
         self.assertNotIn("--speculative", opts)
         self.assertIn("--enable-shell", opts)
+
+    def test_yaml_external_prompts_tools_dir_sets_manager_prompt(self):
+        result = self.launch(CAT_AGENT_NATIVE_MANAGER_PROMPT=None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        opts = json.loads(self.capture.read_text(encoding="utf-8"))[2:]
+        self.assertEqual(
+            opts[opts.index("--system-file") + 1],
+            str(self.external_prompt_dir / "manager.md"),
+        )
 
     def test_inherited_gpu_profile_cannot_contaminate_cpu_launch(self):
         with patch.dict(os.environ, {

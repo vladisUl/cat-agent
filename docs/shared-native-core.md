@@ -1,5 +1,39 @@
 # Новый native LiteRT CORE и общий TASK SYSTEM
 
+## Промпты вынесены из Git-дерева (миграция)
+
+Единственный параметр в `cat-agent.yaml`:
+`runtime.prompt_root: /opt/prompt`. Схема каталогов:
+
+```text
+/opt/prompt/
+├── prompts/           # OpenAI CORE: sys_prompt_manager.md, mqtt.md, sys_prompt_agent_*.md
+└── prompts_tools/     # LiteRT CORE: manager.md, agent_*.md, query_manager.md
+```
+
+Путь старого CORE экспортируется как `CAT_AGENT_PROMPT_DIR=/opt/prompt/prompts`.
+Native LiteRT берёт `manager.md` из `prompts_tools`, а пути AGENT
+в `config/native_agents*.example.json` теперь относительные и
+разрешаются относительно каталога `manager.md`; `query_manager.md`
+тоже читается из того же внешнего каталога. Внешнее редактирование не
+меняет Git-файлы, однако промпты применяются лишь при **перезапуске** CORE
+(после прогрева BASE).
+
+Перед первым запуском обновлённого кода на WSL скопировать исходные
+файлы, не затирая уже существующие:
+
+```bash
+cd /opt/cat-agent
+install -d /opt/prompt/prompts /opt/prompt/prompts_tools
+cp -an prompts/. /opt/prompt/prompts/
+cp -an prompts_tools/. /opt/prompt/prompts_tools/
+```
+
+Оригиналы в `cat-agent/prompts*` пока сохранены в Git как резерв миграции.
+После проверки наличия файлов и успешного запуска обоих CORE можно отдельно
+убрать эти копии из репозитория. Отсутствующие внешние промпты **не**
+подменяются незаметно файлами из Git: запуск завершается ошибкой.
+
 ## Что переделано (октябрь 2026)
 
 Для `cat-agent` создан **второй, независимый LiteRT CORE** с нативным

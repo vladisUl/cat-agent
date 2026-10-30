@@ -36,7 +36,7 @@ PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
 PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
   -m orchestration_tools.probe_contexts \
   --model /storage/models/litert/gemma-4-E4B-it.litertlm \
-  --system-file /opt/cat-agent/prompts_tools/manager.md
+  --system-file /opt/prompt/prompts_tools/manager.md
 ```
 
 Не нужно задавать `--enable-shell`: в этом пробнике он намеренно

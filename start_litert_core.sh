@@ -51,7 +51,7 @@ if [[ "$BACKEND" == "gpu" && -n "${VK_DRIVER_FILES:-}" ]]; then
 fi
 
 MODEL="${CAT_AGENT_NATIVE_MODEL_PATH:-${LITERT_AGENT_MODEL_PATH:-}}"
-PROMPT="${CAT_AGENT_NATIVE_MANAGER_PROMPT:-${ROOT}/prompts_tools/manager.md}"
+PROMPT="${CAT_AGENT_NATIVE_MANAGER_PROMPT:-${CAT_AGENT_PROMPTS_TOOLS_DIR:?Missing prompts_tools dir from YAML}/manager.md}"
 AGENTS="${CAT_AGENT_NATIVE_AGENT_CONFIG:-${ROOT}/config/native_agents.example.json}"
 WORKSPACE="${CAT_AGENT_NATIVE_SHELL_CWD:-${CAT_AGENT_WORKSPACE:-/opt/model}}"
 CORE_SOCKET="${CAT_AGENT_NATIVE_CORE_SOCKET:-/run/cat-agent/litert-tools.sock}"

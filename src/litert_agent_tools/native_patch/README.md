@@ -50,7 +50,7 @@ the native package separately. No rebuilt binary is included here.
     PYTHONPATH=/opt/cat-agent/src /opt/litert-lm-venv/bin/python3 \
       -m litert_agent_tools \
       --model /storage/models/litert/gemma-4-E4B-it.litertlm \
-      --system-file /opt/cat-agent/prompts_tools/manager.md \
+      --system-file /opt/prompt/prompts_tools/manager.md \
       --require-prefilled-base
 
 Expected log sequence when the native patch is truly active:

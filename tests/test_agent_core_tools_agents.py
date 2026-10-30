@@ -140,6 +140,29 @@ class AgentPoolTests(unittest.TestCase):
                     load_agent_specs(config)
 
 
+    def test_external_prompt_directory_overrides_agent_config_location(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            yaml_prompt_root = root / "outside-git" / "prompts_tools"
+            yaml_prompt_root.mkdir(parents=True)
+            (yaml_prompt_root / "agent_1.md").write_text(
+                "EXTERNAL AGENT PROMPT", encoding="utf-8",
+            )
+            config_dir = root / "cat-agent" / "config"
+            config_dir.mkdir(parents=True)
+            config_path = config_dir / "native_agents.json"
+            config_path.write_text(json.dumps({"agents": [{
+                "id": "agent_1", "prompt": "agent_1.md", "tools": [],
+            }]}), encoding="utf-8")
+
+            specs = load_agent_specs(config_path, prompt_dir=yaml_prompt_root)
+            self.assertEqual(specs[0].prompt_file,
+                             (yaml_prompt_root / "agent_1.md").resolve())
+            with self.assertRaisesRegex(ValueError, "prompt not found"):
+                load_agent_specs(config_path)
+
+
+
 class FakeRuntimeManager:
     model_name = "gemma"
     base_kv_tokens = 250
