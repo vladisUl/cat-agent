@@ -63,7 +63,10 @@ class AgentPoolTests(unittest.TestCase):
         self.assertEqual(chat.reset_count, 2)
         chat.fail = False
         chat.empty = True
-        self.assertEqual(agent.run("пустой").state, AgentState.FAILED)
+        silent = agent.run("пустой")
+        self.assertEqual(silent.state, AgentState.FREE)
+        self.assertEqual(silent.status_code, 0)
+        self.assertEqual(silent.text, "")
         self.assertEqual(chat.reset_count, 3)
         pool = AgentPool([agent])
         self.assertEqual(pool.status()[0]["base_kv_tokens"], 250)

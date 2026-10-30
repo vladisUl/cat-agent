@@ -245,7 +245,6 @@ class TaskWorkerTests(unittest.TestCase):
         self.assertEqual(len(notices), 1)
         self.assertEqual(self.manager.events, ["TASK_TEST_ACTION"])
         self.assertEqual(notices[0]["text"], "TASK_TEST_ACTION")
-        self.assertEqual(notices[0]["status_code"], 0)
         self.assertEqual(self.manager.agent_chat.working_kv_tokens, 200)
         self.assertEqual(next(iter(self.engine.runs.values()))["state"], "done")
 

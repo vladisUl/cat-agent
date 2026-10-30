@@ -412,7 +412,6 @@ class NativeTaskWorker:
                         "source": event.get("source", ""),
                         "agent_id": agent_id,
                         "agent_ok": True,
-                        "status_code": 0,
                         "text": result.text[:4096],
                     }
         except Exception:
