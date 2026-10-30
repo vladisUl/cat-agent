@@ -28,7 +28,7 @@ Dozen from YAML, without manual Vulkan environment exports or long CLI flags.
 - Cloud/OpenAI terminal: `./start_tui.sh openai`.
 - Native LiteRT terminal: `./start_tui_tools.sh`.
 - Native LiteRT CORE: `./start_native_core.sh` (CPU/GPU from `litert.active_profile` in `cat-agent.yaml`).
-- `./start_tui.sh litert` still connects to the **legacy** LiteRT CORE.
+- `./start_tui.sh litert` still speaks the **legacy** IPC protocol and is not a native CORE terminal.
 
 ## Architecture (legacy CORE and shared services)
 
@@ -319,7 +319,7 @@ Start it with:
 
 ```bash
 cd /opt/cat-agent
-./start_litert_agent.sh
+./start_native_core.sh
 ```
 
 The profile is selected by `litert.active_profile` in YAML; the launcher no
@@ -383,9 +383,14 @@ For manual startup, start Task SYSTEM first and then one or both primary COREs:
 cd /opt/cat-agent
 
 ./start_task_system.sh
-./start_litert_agent.sh
+./start_native_core.sh
 ./start_openai_agent.sh
 ```
+
+The LiteRT systemd unit runs `start_native_core.sh` using `Type=simple`,
+not the legacy `litert_agent.main` process. For manual native dialogue
+use `./start_tui_tools.sh`; legacy `start_tui.sh litert` is not compatible.
+
 
 Run each long-lived process separately or under a service manager.
 
@@ -401,7 +406,7 @@ manage:
 
 ```text
 cat-agent-task-system.service
-cat-agent-litert.service
+cat-agent-litert.service  (Native CORE, listens on litert-tools.sock)
 cat-agent-openai.service
 ```
 
