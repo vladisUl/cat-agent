@@ -4,8 +4,9 @@
 
 Для `cat-agent` создан **второй, независимый LiteRT CORE** с нативным
 `Conversation` / Tool Calling вместо текстовых команд `/work#`.
-Старые OpenAI CORE и LiteRT CORE не заменены; OpenAI продолжает работать
-с облачными моделями через OpenAI-compatible API.
+OpenAI CORE остаётся без изменений и продолжает работать через
+OpenAI-compatible API. Старый LiteRT CORE сохранён в исходниках,
+но штатная служба и launcher переведены на native CORE.
 
 - `litert_agent_tools` — LiteRT Engine, прогретый BASE, независимые
   Conversation/KV и Python-инструменты, вызываемые моделью нативно.
