@@ -173,53 +173,17 @@ class DelegationTests(unittest.TestCase):
             broker.finish_turn()
         manager.close()
 
-    def test_query_manager_is_independent_of_interactive_dialogue(self):
-        manager, _, _, events, chat, pool, engine = self.make_manager()
-        class QueryChat:
-            def __init__(self):
-                self.prompts = []
-                self.resets = 0
-                self.closed = False
-            def ask(self, question):
-                self.prompts.append(question)
-                return "Итог задания: каталог /opt/model"
-            def new_dialogue(self):
-                self.resets += 1
-            def close(self):
-                self.closed = True
-        query = QueryChat()
-        manager.query_chat = query
-        self.assertEqual(manager.respond("human-1", "Привет").kind, "reply")
-        prior_prompts = list(chat.prompts)
-        outcome = manager.process_task_query(3, "/opt/model")
-        self.assertEqual(outcome.kind, "reply")
-        self.assertIn("Итог задания", outcome.text)
-        self.assertEqual(chat.prompts, prior_prompts)
-        self.assertEqual(query.resets, 1)
-        self.assertEqual(len(query.prompts), 1)
-        self.assertIn("SYSTEM_QUERY_RESULT TASK 3", query.prompts[0])
-        self.assertIn('"task_id":3', query.prompts[0])
-        manager.close()
-        self.assertTrue(query.closed)
-        self.assertTrue(chat.closed)
-        self.assertTrue(engine.closed)
-
-    def test_query_manager_reset_even_if_inference_fails(self):
-        manager, _, _, _, _, _, _ = self.make_manager()
-        class FailedQuery:
-            def __init__(self):
-                self.resets = 0
-            def ask(self, question):
-                raise RuntimeError("query manager failed")
-            def new_dialogue(self):
-                self.resets += 1
-            def close(self):
-                pass
-        chat = FailedQuery()
-        manager.query_chat = chat
-        with self.assertRaisesRegex(RuntimeError, "query manager failed"):
-            manager.process_task_query(1, "data")
-        self.assertEqual(chat.resets, 1)
+    def test_silent_agent_completion_does_not_interrupt_manager_dialogue(self):
+        manager, broker, _, events, chat, pool, _ = self.make_manager()
+        from orchestration_tools.agents import AgentOutcome, AgentState
+        pool.run = lambda task, agent_id: (
+            events.append("agent_inference")
+            or AgentOutcome(agent_id, AgentState.FREE, "", 300)
+        )
+        outcome = manager.respond("client", "Поручи задание без ответа")
+        self.assertEqual(outcome.kind, "silent")
+        self.assertNotIn("manager_follows_up", events)
+        self.assertFalse(broker._turn_active)
         manager.close()
 
     def test_builder_closes_model_and_pool(self):

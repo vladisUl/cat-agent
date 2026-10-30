@@ -86,13 +86,11 @@ class RuntimeAgentTests(unittest.TestCase):
                 )
             engine = FakeEngine.instances[0]
             self.assertEqual(len(FakeEngine.instances), 1)
-            self.assertEqual(len(engine.created), 3)
+            self.assertEqual(len(engine.created), 2)
             self.assertTrue(engine.created[0]["messages"][0]["content"].startswith("Я менеджер"))
             self.assertIn("agent_1", engine.created[0]["messages"][0]["content"])
             self.assertEqual(engine.created[1]["messages"][0]["content"], "Я агент")
             self.assertEqual(engine.created[1]["tools"], [])
-            self.assertEqual(engine.created[2]["tools"], [])
-            self.assertIn("TASK QUERY", engine.created[2]["messages"][0]["content"])
             self.assertEqual(len(engine.created[0]["tools"]), 1)
             self.assertEqual(engine.created[0]["tools"][0].__name__, "delegate_task")
             self.assertEqual(
@@ -142,7 +140,7 @@ class RuntimeAgentTests(unittest.TestCase):
                 )
             try:
                 conversations = FakeEngine.instances[0].created
-                self.assertEqual(len(conversations), 4)
+                self.assertEqual(len(conversations), 3)
                 names = [
                     [tool.__name__ for tool in item["tools"]]
                     for item in conversations
@@ -154,7 +152,6 @@ class RuntimeAgentTests(unittest.TestCase):
                 self.assertEqual(tuple(names[0]), mqtt + ("shell", "delegate_task"))
                 self.assertEqual(tuple(names[1]), mqtt + ("shell",))
                 self.assertEqual(tuple(names[2]), mqtt)
-                self.assertEqual(names[3], [])  # QUERY cannot use any tool.
                 # The AGENT's actual registered callable can read real MQTT
                 # through the same implementation as the MANAGER.
                 agent_weather = next(
@@ -237,7 +234,7 @@ class RuntimeAgentTests(unittest.TestCase):
                 )
             try:
                 conversations = FakeEngine.instances[0].created
-                self.assertEqual(len(conversations), 3)
+                self.assertEqual(len(conversations), 2)
                 names = [
                     [tool.__name__ for tool in item["tools"]]
                     for item in conversations
@@ -247,7 +244,6 @@ class RuntimeAgentTests(unittest.TestCase):
                 self.assertIn("stop_periodic_query", names[0])
                 self.assertIn("list_periodic_queries", names[0])
                 self.assertNotIn("delegate_task", names[1])
-                self.assertEqual(names[2], [])
                 self.assertIn("delegate_task(agent_id, task, period_seconds)", conversations[0]["messages"][0]["content"])
                 self.assertIn("stop_periodic_query", conversations[0]["messages"][0]["content"])
                 tool = next(tool for tool in conversations[0]["tools"]

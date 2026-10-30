@@ -12,7 +12,6 @@ from agent_core_tools.priority_scheduler import PriorityScheduler
 from agent_core_tools.task_worker import NativeTaskWorker
 from orchestration.tasks import TaskStoreError
 from orchestration_tools.agents import AgentOutcome, AgentState
-from orchestration_tools.contracts import ManagerTurn
 from orchestration_tools.delegation import DelegationBroker, create_delegate_tool
 from orchestration_tools.task_tools import NativeTaskController, create_task_tools
 from task_system.engine import TaskEngine
@@ -46,8 +45,7 @@ class FakeManager:
         self.calls.append((agent_id, text))
         return AgentOutcome(agent_id, AgentState.FREE, "Сделано", 250)
 
-    def process_task_query(self, task_id, text, failed=False):
-        return ManagerTurn("reply", f"TASK {task_id}: {text}")
+
 
 
 class UnifiedDelegationTests(unittest.TestCase):

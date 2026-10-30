@@ -94,7 +94,7 @@ class NativeBackendSelectionTests(unittest.TestCase):
         )
         self.assertEqual(settings["vision_backend"], ("gpu", None))
 
-    def test_external_prompt_root_supplies_manager_agent_and_query(self):
+    def test_external_prompt_root_supplies_manager_and_agent_without_query(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             external = root / "external" / "prompts_tools"
@@ -136,11 +136,10 @@ class NativeBackendSelectionTests(unittest.TestCase):
                             self.model, manager_file, enable_mqtt=False,
                             agent_config=config,
                         )
-            self.assertEqual(len(chat.call_args_list), 3)
+            self.assertEqual(len(chat.call_args_list), 2)
             prompts = [call.args[1] for call in chat.call_args_list]
             self.assertTrue(prompts[0].startswith("EXTERNAL MANAGER"))
             self.assertEqual(prompts[1], "EXTERNAL AGENT")
-            self.assertEqual(prompts[2], "EXTERNAL QUERY")
 
     def test_unknown_vision_backend_rejected(self):
         with self.assertRaisesRegex(ValueError, "vision backend"):
