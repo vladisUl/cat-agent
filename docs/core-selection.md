@@ -119,11 +119,16 @@ Native LiteRT CORE:  /run/cat-agent/litert-tools.sock
 Shared TASK SYSTEM:  /run/cat-agent/tasks.sock
 ```
 
-`./start_native_core.sh` запускает native CORE по активному CPU-профилю
+`./start_native_core.sh` запускает native CORE по активному CPU/GPU-профилю
 `litert` из `cat-agent.yaml`. Его терминал — `./start_tui_tools.sh`.
+`cat-agent-litert.service` теперь тоже запускает именно native CORE через
+`start_native_core.sh` с `Type=simple`.
 Старый `./start_tui.sh litert` **не переключается** на native CORE:
 он продолжает обращаться к прежнему LiteRT-порту
-`/run/cat-agent/litert.sock`. Для совместного режима сейчас
-запускайте OpenAI и **только один** LiteRT CORE (native или старый).
+`/run/cat-agent/litert.sock`. Старый `litert_agent.main` больше не стартует штатным скриптом или
+systemd-службой. Стандартные `start_tui.sh`, Web и Voice пока используют
+прежний IPC и **не** совместимы с `litert-tools.sock`. Для native CORE
+используйте `start_tui_tools.sh`. Автовыбор через старые интерфейсы
+сам по себе не переключает их на новый протокол.
 
 Полная схема, ограничения и команды: [shared-native-core.md](shared-native-core.md).
