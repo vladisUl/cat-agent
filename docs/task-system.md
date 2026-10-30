@@ -48,29 +48,32 @@ OpenAI, иначе READY LiteRT; если оба NOT_READY, RUN остаётся
 Явные `executor=litert` и `executor=openai` — административное закрепление.
 Прежние TASK не переводятся в auto. Управление из любого CORE одинаково.
 
+Для запуска самого сервиса используйте `./start_task_system.sh` без аргументов.
+С аргументами тот же скрипт работает как административный клиент.
+
 Без участия модели доступны команды:
 
 ```sh
-./task_system.sh list
-./task_system.sh cores
-./task_system.sh runs
-./task_system.sh stop 1
-./task_system.sh start 1
-./task_system.sh period 1 120
-./task_system.sh executor 1 openai
-./task_system.sh executor 1 auto
-./task_system.sh delete 1
+./start_task_system.sh list
+./start_task_system.sh cores
+./start_task_system.sh runs
+./start_task_system.sh stop 1
+./start_task_system.sh start 1
+./start_task_system.sh period 1 120
+./start_task_system.sh executor 1 openai
+./start_task_system.sh executor 1 auto
+./start_task_system.sh delete 1
 ```
 
 Создать периодическое задание с указанным исполнителем:
 
 ```sh
-./task_system.sh create --executor openai --period 60 --skill shell \
+./start_task_system.sh create --executor openai --period 60 --skill shell \
   --description 'Проверка файла' \
   --text 'Проверить наличие user.txt и сообщить результат'
 ```
 
-`./task_system.sh run 1` ставит один дополнительный запуск включённого задания
+`./start_task_system.sh run 1` ставит один дополнительный запуск включённого задания
 в очередь. Для него действует та же политика TASK: auto либо явное закрепление.
 
 В обработчике команд модели поддержаны прежний синтаксис и необязательный
@@ -127,7 +130,7 @@ STOP/DELETE/смена периода или исполнителя меняют
 1. Создать TASK через OpenAI CORE, проверить его наличие через LiteRT CORE.
 2. Выполнить STOP, смену периода и START через другой CORE; проверить общий список.
 3. Назначить `openai`, остановить OpenAI CORE, дождаться срока TASK.
-   В `./task_system.sh runs` должен остаться `pending`; LiteRT его не выполняет.
+   В `./start_task_system.sh runs` должен остаться `pending`; LiteRT его не выполняет.
 4. Запустить OpenAI CORE: ожидающий запуск должен перейти в `running`, затем
    завершиться один раз. В логе Task SYSTEM видны номер TASK, `run` и исполнитель.
 5. Проверить удаление TASK через другой CORE и отсутствие последующих запусков.
@@ -194,8 +197,8 @@ CORE и может завершиться обычной ошибкой API. П�
 Диагностика:
 
 ```sh
-./task_system.sh cores
-./task_system.sh runs
+./start_task_system.sh cores
+./start_task_system.sh runs
 ```
 
 Пример состояния:
@@ -228,19 +231,19 @@ export OLLAMA_API_KEY
 Если существующий `.env.openai` задаёт ту же переменную, launcher применит значение
 из него. Код проверки самостоятельно файлов с ключами не читает.
 
-После прогрева проверить `./task_system.sh cores`. Новый TASK без `--executor`
+После прогрева проверить `./start_task_system.sh cores`. Новый TASK без `--executor`
 получает auto. Для безопасной проверки создать задание только на чтение:
 
 ```sh
-./task_system.sh create --period 3600 --skill shell \
+./start_task_system.sh create --period 3600 --skill shell \
   --description 'Проверка auto' --text 'Выполни pwd и верни текущий каталог'
 ```
 
 Далее использовать номер, выданный при создании (ниже пример для TASK 1):
 
 ```sh
-./task_system.sh run 1
-./task_system.sh runs
+./start_task_system.sh run 1
+./start_task_system.sh runs
 ```
 
 1. При обоих READY фактический executor RUN должен быть openai, даже если
@@ -251,10 +254,10 @@ export OLLAMA_API_KEY
    openai; уже начатый RUN на litert не переносится.
 4. Остановить оба CORE и поставить RUN — он останется pending. Запустить LiteRT:
    до окончания инициализации RUN ждёт, затем выполняется автоматически.
-5. Для проверки закрепления выполнить `./task_system.sh executor 1 openai`:
+5. Для проверки закрепления выполнить `./start_task_system.sh executor 1 openai`:
    при отключённом OpenAI LiteRT этот TASK не берёт. Вернуть автоматический
-   режим командой `./task_system.sh executor 1 auto`.
-6. Удалить тестовое задание: `./task_system.sh delete 1`.
+   режим командой `./start_task_system.sh executor 1 auto`.
+6. Удалить тестовое задание: `./start_task_system.sh delete 1`.
 
 Исчерпание квоты, ошибки API, истечение lease и потеря offer проверяются
 автоматическими тестами с управляемым временем и ответами HTTP; реальную квоту
