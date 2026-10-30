@@ -251,6 +251,53 @@ class NativePeriodicTaskTests(unittest.TestCase):
             worker.close()
             scheduler.close()
 
+    def test_recording_worker_uses_tool_receipt_not_agent_claim(self):
+        from litert_agent_tools.tool_audit import record_task_tool_result
+
+        controller = NativeTaskController(
+            self.rpc, {"agent_1": ("get_outdoor_weather", "shell",
+                                    "record_outdoor_weather")},
+        )
+        controller.enabled = True
+        controller.begin_turn("каждую минуту записывай температуру в temp.txt")
+        try:
+            item = controller.create(60, "get_outdoor_weather", "температура на улице")
+        finally:
+            controller.finish_turn()
+        self.assertTrue(item["ok"], item)
+
+        class ReceiptManager(FakeAgentManager):
+            def run_agent(self, agent_id, text):
+                self.calls.append((agent_id, text))
+                record_task_tool_result("record_outdoor_weather", {
+                    "ok": True, "file_path": "/opt/model/temp.txt",
+                    "bytes_written": 43, "temperature_c": 10.5,
+                    "humidity_percent": 76.5,
+                })
+                return AgentOutcome(agent_id, AgentState.FREE,
+                                    "Недостоверный ответ агента", 250)
+
+        manager = ReceiptManager()
+        scheduler = PriorityScheduler()
+        worker = NativeTaskWorker(
+            scheduler, manager, rpc=self.rpc,
+            agent_permissions={"agent_1": ("record_outdoor_weather",)},
+            poll_seconds=3600,
+        )
+        worker.start()
+        try:
+            self.engine.tick(now=time.monotonic() + 61)
+            self.assertTrue(worker.poll_once())
+            self._wait_one_notification(manager, expected=1, worker=worker)
+            notice = self.rpc.call("notifications", "list")[0]
+            self.assertIn("/opt/model/temp.txt", notice["text"])
+            self.assertIn("10.5°C", notice["text"])
+            self.assertNotIn("Недостоверный", notice["text"])
+            self.assertTrue(notice["agent_ok"])
+        finally:
+            worker.close()
+            scheduler.close()
+
     def test_native_period_argument_types_are_normalized_exactly(self):
         self.controller.enabled = True
         for raw in (60.0, "60", " 60 ", "60.0", 60):
