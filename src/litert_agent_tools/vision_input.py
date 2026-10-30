@@ -16,7 +16,7 @@ from orchestration.image_tool import validated_picture_path
 # Single filename reference in an ordinary question (including DATA subfolders).
 # Quoted paths containing spaces are supported through explicit read_pic.sh syntax.
 PICTURE_REF = re.compile(
-    r"(?<![\\w./-])/?(?:[\\w.-]+/)*[\\w.-]+\\.(?:png|jpe?g)(?![\\w-])",
+    r"(?<![\w./-])/?(?:[\w.-]+/)*[\w.-]+\.(?:png|jpe?g)(?![\w-])",
     re.IGNORECASE,
 )
 

@@ -22,8 +22,8 @@ def validated_picture_path(runtime, logical_path: str):
         length = source.tell()
     if length > limit:
         raise ValueError(f"image exceeds {limit} bytes")
-    if not (signature.startswith(b"\\x89PNG\\r\\n\\x1a\\n") or
-            signature.startswith(b"\\xff\\xd8\\xff")):
+    if not (signature.startswith(b"\x89PNG\r\n\x1a\n") or
+            signature.startswith(b"\xff\xd8\xff")):
         raise ValueError("file does not contain a PNG or JPEG image")
     return path
 
