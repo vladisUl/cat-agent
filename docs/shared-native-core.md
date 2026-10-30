@@ -62,9 +62,9 @@ OpenAI-compatible API. Старый LiteRT CORE сохранён в исходн
 Проверка общего состояния и очереди:
 
 ```bash
-./task_system.sh cores
-./task_system.sh list
-./task_system.sh runs
+./start_task_system.sh cores
+./start_task_system.sh list
+./start_task_system.sh runs
 ```
 
 `./start_tui.sh litert` использует **старый** LiteRT IPC на `litert.sock`
