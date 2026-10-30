@@ -75,6 +75,7 @@ class NativeTuiStatusTests(unittest.TestCase):
         self.assertIn("1166 tok", text)
         self.assertIn("FREE  KV 418", text)
         self.assertIn("TASK 2 done", text)
+        self.assertIn("rc=?", text)
         self.assertIn("RUN 60s  next 45s", text)
         self.assertIn("LiteRT QUERY: get_outdoor_weather", text)
 

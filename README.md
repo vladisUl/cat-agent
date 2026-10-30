@@ -17,7 +17,8 @@ today, not a portability promise.
 
 The single YAML setting `runtime.prompt_root: /opt/prompt` controls both
 prompt families. OpenAI uses `/opt/prompt/prompts` and the LiteRT
-MANAGER, AGENT, and QUERY MANAGER use `/opt/prompt/prompts_tools`.
+MANAGER and AGENT use `/opt/prompt/prompts_tools`.
+The old `query_manager.md` file is no longer loaded by native CORE.
 Prompts are read at CORE startup: edit freely outside `/opt/cat-agent`,
 then restart the affected CORE to reload BASE prompts.
 

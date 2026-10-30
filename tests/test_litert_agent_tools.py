@@ -437,6 +437,39 @@ class NativeExecutionStatusTests(unittest.TestCase):
         self.assertEqual(ledger.status_code, 1)
         ledger.active = False
 
+    def test_chat_tracks_real_tool_calls_with_empty_model_output(self):
+        class CallingConversation(StubConversation):
+            def clone(self):
+                fresh = CallingConversation(self.messages, self.tools)
+                fresh.calls = list(self.calls)
+                fresh.token_count = self.token_count
+                return fresh
+
+            def send_message(self, question):
+                if question == "warm":
+                    return super().send_message(question)
+                self.calls.append(question)
+                self.token_count += 10
+                self.tools[0](question)
+                return {"role": "assistant", "content": ""}
+
+        class CallingEngine:
+            def create_conversation(self, **kwargs):
+                return CallingConversation(kwargs["messages"], kwargs["tools"])
+
+        def write_file(command: str) -> dict:
+            """Mock side effect that returns a result without model text."""
+            return {"ok": command == "good"}
+
+        with NativeConversationChat(CallingEngine(), "Test", [write_file]) as chat:
+            self.assertEqual(chat.ask("good"), "")
+            self.assertEqual(chat.execution_status_code, 0)
+            self.assertEqual(chat.execution_tool_calls, 1)
+            chat.new_dialogue()
+            self.assertEqual(chat.ask("bad"), "")
+            self.assertEqual(chat.execution_status_code, 1)
+            self.assertEqual(chat.execution_tool_calls, 1)
+
     def test_native_agent_accepts_empty_reply_and_reports_status(self):
         from orchestration_tools.agents import AgentState, NativeAgent
 

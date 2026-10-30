@@ -8,15 +8,15 @@
 ```text
 /opt/prompt/
 ├── prompts/           # OpenAI CORE: sys_prompt_manager.md, mqtt.md, sys_prompt_agent_*.md
-└── prompts_tools/     # LiteRT CORE: manager.md, agent_*.md, query_manager.md
+└── prompts_tools/     # LiteRT CORE: manager.md, agent_*.md
 ```
 
 Путь старого CORE экспортируется как `CAT_AGENT_PROMPT_DIR=/opt/prompt/prompts`.
 Native LiteRT берёт `manager.md` из `prompts_tools`, а пути AGENT
 в `config/native_agents*.example.json` теперь относительные и
-разрешаются относительно каталога `manager.md`; `query_manager.md`
-тоже читается из того же внешнего каталога. Внешнее редактирование не
-меняет Git-файлы, однако промпты применяются лишь при **перезапуске** CORE
+разрешаются относительно каталога `manager.md`. Файл
+`query_manager.md` больше не используется native CORE. Внешнее
+редактирование не меняет Git-файлы, однако промпты применяются лишь при **перезапуске** CORE
 (после прогрева BASE).
 
 Перед первым запуском обновлённого кода на WSL скопировать исходные
@@ -164,7 +164,7 @@ readiness: openai
   разрешённые инструменты, в частности `shell`. Он остаётся
   привилегированным: MANAGER имеет Shell при `--enable-shell`, а AGENT
   только при явном разрешении в JSON. `delegate_task` доступен только
-  MANAGER, а отдельному QUERY MANAGER инструменты не выдаются.
+  MANAGER. Дополнительной модельной роли QUERY MANAGER больше нет.
   Native TASK worker сверяет навыки с **тем же итоговым набором**
   инструментов AGENT. Shell выполняется с правами процесса, не sandbox.
 - Web и Voice пока используют старые CORE и их IPC. Переноса истории
@@ -199,7 +199,8 @@ Dawn отказался создавать Vulkan adapter:
 - Минимальный Engine/Conversation: `warm -> OK`.
 - Три независимых BASE и три рабочих клона в одном GPU Engine
   (изолированный тест без инструментов):
-  MANAGER 400, AGENT_1 183, QUERY MANAGER 153 KV-токенов.
+  MANAGER 400, AGENT_1 183, QUERY MANAGER 153 KV-токенов (исторический тест
+  до удаления третьей роли; сейчас запускаются только MANAGER и AGENT).
   После работы клонов исходные BASE KV не изменились.
 - Native Python Tool Calling на клоне: реальный вызов `gpu_probe`,
   модель вернула контрольный код `RTX3050_TOOL_OK`.

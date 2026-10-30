@@ -167,7 +167,8 @@ structure after *each* model inference (initial tool call and follow-up).
 `native-json RESPONSE` includes role, whether content is empty, tool call
 count, and response fields. If the native final response is empty, the
 `native-json EMPTY-FINAL` log includes the returned JSON bytes (up to
-4096 bytes); the CLI then also writes `native-conversation EMPTY-REPLY`.
+4096 bytes); the CLI then also writes `native-conversation SILENT-REPLY`
+at INFO level. Silence is a valid task result, not a failure.
 This distinguishes a native empty generation from a response-text extraction
 problem. Instrumentation does not change the tool loop or send extra prompts.
 
