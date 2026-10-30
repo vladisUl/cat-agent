@@ -66,9 +66,25 @@
 ./task_system.sh runs
 ```
 
-`./start_tui.sh litert` — **старый** LiteRT CORE на `litert.sock`, а
-**не** новый native CORE. Не запускайте старый и новый LiteRT workers
-одновременно под одним `executor=litert`.
+`./start_tui.sh litert` использует **старый** LiteRT IPC на `litert.sock`
+и не может подключиться к новому native CORE. Для нового CORE используйте
+`./start_tui_tools.sh`.
+
+После перехода на native CORE команда запуска одна:
+`./start_native_core.sh`. Промежуточная обёртка
+`start_litert_agent_tools.sh` и прежний `start_litert_agent.sh`
+удалены. Внутри launcher напрямую исполняется
+`/opt/litert-lm-venv/bin/python3 -m agent_core_tools`,
+с сохранением `CAT_AGENT_TOOLS_PYTHON` для отладки и тестов.
+
+`systemd/cat-agent-litert.service` также запускает
+`start_native_core.sh`. Его тип — `simple`, а не `notify`,
+поскольку native CORE не отправляет `sd_notify(READY=1)`.
+При установке systemd-unit вне репозитория его надо обновить
+отдельно; `git pull` не перезаписывает `/etc/systemd/system`.
+Прежние TUI/Web/Voice для `litert.sock` пока не поддерживают
+протокол нового CORE, поэтому для диалога используйте
+`start_tui_tools.sh`.
 
 `start_native_core.sh` берёт активный CPU/GPU-профиль из `cat-agent.yaml`
 (`litert.active_profile`), `prompts_tools/manager.md`, 
