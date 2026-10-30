@@ -66,7 +66,7 @@ class McpDispatchTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root=Path(tmp.name)
         self.prompts=self.root/'prompts'
-        shutil.copytree(ROOT/'prompts',self.prompts)
+        shutil.copytree(ROOT/'tests/fixtures/prompts',self.prompts)
         self.tools=self.root/'tools'
         shutil.copytree(ROOT/'tools',self.tools)
         self.mcp=FakeMcp()

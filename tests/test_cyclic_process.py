@@ -104,7 +104,7 @@ class CyclicProcessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             prompt_dir = root / "prompts"
-            shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+            shutil.copytree(Path(__file__).resolve().parent / "fixtures" / "prompts", prompt_dir)
             workspace = self._workspace(root)
 
             client = FakeClient(

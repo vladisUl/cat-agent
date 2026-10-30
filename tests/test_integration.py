@@ -35,7 +35,7 @@ class IntegrationTest(unittest.TestCase):
             root = Path(temp)
             prompt_dir = root / "prompts"
             project_root = Path(__file__).resolve().parents[1]
-            shutil.copytree(project_root / "prompts", prompt_dir)
+            shutil.copytree(project_root / "tests" / "fixtures" / "prompts", prompt_dir)
             tools_dir = root / "tools"
             shutil.copytree(project_root / "tools", tools_dir)
             workspace = root / "workspace"
@@ -101,7 +101,7 @@ class IntegrationTest(unittest.TestCase):
             root = Path(temp)
             prompt_dir = root / "prompts"
             project_root = Path(__file__).resolve().parents[1]
-            shutil.copytree(project_root / "prompts", prompt_dir)
+            shutil.copytree(project_root / "tests" / "fixtures" / "prompts", prompt_dir)
             tools_dir = root / "tools"
             shutil.copytree(project_root / "tools", tools_dir)
             workspace = root / "workspace"
@@ -149,7 +149,7 @@ class IntegrationTest(unittest.TestCase):
             root = Path(temp)
             prompt_dir = root / "prompts"
             project_root = Path(__file__).resolve().parents[1]
-            shutil.copytree(project_root / "prompts", prompt_dir)
+            shutil.copytree(project_root / "tests" / "fixtures" / "prompts", prompt_dir)
             tools_dir = root / "tools"
             shutil.copytree(project_root / "tools", tools_dir)
             workspace = root / "workspace"
@@ -199,7 +199,7 @@ class IntegrationTest(unittest.TestCase):
             root = Path(temp)
             prompt_dir = root / "prompts"
             project_root = Path(__file__).resolve().parents[1]
-            shutil.copytree(project_root / "prompts", prompt_dir)
+            shutil.copytree(project_root / "tests" / "fixtures" / "prompts", prompt_dir)
             tools_dir = root / "tools"
             shutil.copytree(project_root / "tools", tools_dir)
             workspace = root / "workspace"

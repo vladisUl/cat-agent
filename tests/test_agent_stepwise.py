@@ -30,7 +30,7 @@ class AgentStepwiseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             prompt_dir = root / "prompts"
-            shutil.copytree(Path(__file__).resolve().parents[1] / "prompts", prompt_dir)
+            shutil.copytree(Path(__file__).resolve().parent / "fixtures" / "prompts", prompt_dir)
             tools_dir = root / "tools"
             shutil.copytree(Path(__file__).resolve().parents[1] / "tools", tools_dir)
             workspace = root / "workspace"

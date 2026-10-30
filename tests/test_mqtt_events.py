@@ -11,7 +11,7 @@ from orchestration.mqtt_events import MqttEventMonitor, MqttTopicCatalog
 class MqttEventTest(unittest.TestCase):
     def test_repository_markdown_catalog_parses_discrete_rules(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        catalog = MqttTopicCatalog(root / "prompts" / "mqtt.md")
+        catalog = MqttTopicCatalog(root / "tests" / "fixtures" / "prompts" / "mqtt.md")
 
         motion = catalog.require("zigbee2mqtt/dvigen_verh", "occupancy")
         self.assertEqual(motion.value_type, "boolean")

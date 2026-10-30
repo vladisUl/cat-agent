@@ -169,7 +169,7 @@ class WarmStubEngine:
 
 class ConversationTests(unittest.TestCase):
     def test_agent_1_prompt_covers_service_warm_without_tools(self):
-        prompt = (Path(__file__).resolve().parents[1] / "prompts_tools/agent_1.md").read_text(encoding="utf-8")
+        prompt = (Path(__file__).resolve().parents[1] / "tests/fixtures/prompts_tools/agent_1.md").read_text(encoding="utf-8")
         self.assertIn("служебный вход warm", prompt)
         self.assertIn("без обращения к инструментам", prompt)
 

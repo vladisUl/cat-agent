@@ -34,7 +34,7 @@ class TaskMethodTest(unittest.TestCase):
     def _runtime(self, root: Path, replies: list[str]) -> tuple[ManagerRuntime, SystemRuntime, FakeClient]:
         prompt_dir = root / "prompts"
         project_root = Path(__file__).resolve().parents[1]
-        shutil.copytree(project_root / "prompts", prompt_dir)
+        shutil.copytree(project_root / "tests" / "fixtures" / "prompts", prompt_dir)
         tools_dir = root / "tools"
         shutil.copytree(project_root / "tools", tools_dir)
         workspace = root / "workspace"

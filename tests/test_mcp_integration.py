@@ -99,7 +99,7 @@ class McpSdkIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             temp_root=Path(temp)
             prompts=temp_root/'prompts'
-            shutil.copytree(ROOT/'prompts',prompts)
+            shutil.copytree(ROOT/'tests/fixtures/prompts',prompts)
             shutil.copytree(ROOT/'tools',temp_root/'tools')
             settings=replace(Settings.from_env(require_model=False), model='test', prompt_dir=prompts,
                 project_root=temp_root, workspace=Path(temp),agent_count=1,

@@ -172,7 +172,7 @@ class LlamaRuntimeTest(unittest.TestCase):
                 "CAT_AGENT_MODEL": "/storage/models/test.gguf",
                 "CAT_AGENT_AGENT_COUNT": "3",
                 # Unit test uses repository fixtures, not the user's /opt/prompt.
-                "CAT_AGENT_PROMPT_DIR": str(Path(__file__).resolve().parents[1] / "prompts"),
+                "CAT_AGENT_PROMPT_DIR": str(Path(__file__).resolve().parent / "fixtures" / "prompts"),
             },
             clear=False,
         ):
