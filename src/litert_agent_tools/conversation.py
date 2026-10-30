@@ -86,6 +86,8 @@ class ToolExecutionLedger:
         self.status_code = 0
 
     def wrap(self, function):
+        if not callable(function):
+            return function
         @wraps(function)
         def measured(*args, **kwargs):
             try:
