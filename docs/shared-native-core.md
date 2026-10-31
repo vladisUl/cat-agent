@@ -157,9 +157,12 @@ readiness: openai
 - Один Engine исполняет вызовы последовательно. Начатый
   `Conversation.send_message()` и его native tool-chain не прерываются
   планировщиком посередине.
-- MANAGER получает четыре нативных MQTT-инструмента, `shell` и
-  `delegate_task`. Каждый AGENT **автоматически** получает те же четыре
-  read-only MQTT-инструмента, не перечисляя их в JSON. Параметр `tools`
+- MANAGER получает MQTT-инструменты из `config/mqtt_tools.json`,
+  брокеры настраиваются в `config/mqtt.json`. Каждый AGENT **автоматически**
+  получает тот же набор read-only MQTT-инструментов без перечисления их
+  в JSON. Новый набор применяется после перезапуска CORE.
+  `shell` и `delegate_task` остаются отдельными инструментами.
+  Параметр `tools`
   в `config/native_agents*.example.json` задаёт дополнительные явно
   разрешённые инструменты, в частности `shell`. Он остаётся
   привилегированным: MANAGER имеет Shell при `--enable-shell`, а AGENT
