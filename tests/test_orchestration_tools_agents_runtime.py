@@ -9,6 +9,7 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from litert_agent_tools.mqtt_tools import create_mqtt_tools
 from orchestration_tools.litert_runtime import build_native_manager
 
 
@@ -121,13 +122,38 @@ class RuntimeAgentTests(unittest.TestCase):
                 {"id": "agent_1", "prompt": "agent_1.md", "tools": ["shell"]},
                 {"id": "agent_2", "prompt": "agent_2.md", "tools": []},
             ]}), encoding="utf-8")
+            # Extend an isolated copy of the real JSON without touching
+            # production configuration; registration must accept new MQTT tools.
+            mqtt_dir = root / "mqtt"
+            mqtt_dir.mkdir()
+            source = Path(__file__).resolve().parents[1] / "config"
+            (mqtt_dir / "mqtt.json").write_text(
+                (source / "mqtt.json").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            specs = json.loads((source / "mqtt_tools.json").read_text(encoding="utf-8"))
+            specs["tools"].append({
+                "name": "test_added_mqtt_sensor",
+                "description": "Read test MQTT occupancy",
+                "server": "old_server",
+                "topic": "zigbee2mqtt/test_added_mqtt_sensor",
+                "fields": {"occupancy": "motion"},
+                "validation": {"occupancy": {"type": "boolean"}},
+            })
+            (mqtt_dir / "mqtt_tools.json").write_text(
+                json.dumps(specs), encoding="utf-8",
+            )
+            mqtt = tuple(entry["name"] for entry in specs["tools"])
             fake = ModuleType("litert_lm")
             fake.Engine = FakeEngine
             fake.Backend = SimpleNamespace(CPU=lambda **kwargs: "cpu")
             fake.SamplerConfig = lambda **kwargs: "sampler"
             fake.ThinkingConfig = lambda **kwargs: "thinking"
             FakeEngine.instances.clear()
-            with patch.dict(sys.modules, {"litert_lm": fake}):
+            with patch.dict(sys.modules, {"litert_lm": fake}), patch(
+                "orchestration_tools.litert_runtime.create_mqtt_tools",
+                side_effect=lambda: create_mqtt_tools(mqtt_dir),
+            ):
                 manager = build_native_manager(
                     model, manager_prompt, agent_config=config,
                     enable_mqtt=True, enable_shell=True, shell_cwd=root,
@@ -139,13 +165,19 @@ class RuntimeAgentTests(unittest.TestCase):
                     [tool.__name__ for tool in item["tools"]]
                     for item in conversations
                 ]
-                mqtt = (
-                    "get_outdoor_weather", "get_home_climate",
-                    "get_aquarium_temperature", "get_freezer_temperature",
-                )
+                self.assertEqual(manager.shared_tool_names, mqtt)
                 self.assertEqual(tuple(names[0]), mqtt + ("shell", "delegate_task"))
                 self.assertEqual(tuple(names[1]), mqtt + ("shell",))
                 self.assertEqual(tuple(names[2]), mqtt)
+                added = next(tool for tool in conversations[2]["tools"]
+                             if tool.__name__ == "test_added_mqtt_sensor")
+                with patch(
+                    "litert_agent_tools.mqtt_tools._read_measurement",
+                    return_value={"ok": True, "motion": True},
+                ) as read:
+                    self.assertEqual(added(), {"ok": True, "motion": True})
+                self.assertEqual(read.call_args.args[1],
+                                 "zigbee2mqtt/test_added_mqtt_sensor")
                 # The AGENT's actual registered callable can read real MQTT
                 # through the same implementation as the MANAGER.
                 agent_weather = next(
