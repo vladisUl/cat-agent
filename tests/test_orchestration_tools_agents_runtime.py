@@ -276,16 +276,20 @@ class RuntimeAgentTests(unittest.TestCase):
                 self.assertIn("delete_periodic_query", names[0])
                 self.assertIn("list_periodic_queries", names[0])
                 self.assertNotIn("delegate_task", names[1])
-                self.assertIn("delegate_task(agent_id, task, period_seconds)", conversations[0]["messages"][0]["content"])
+                system_prompt = conversations[0]["messages"][0]["content"]
                 self.assertEqual(
                     (root / "full_manager.md").read_text(encoding="utf-8"),
-                    conversations[0]["messages"][0]["content"],
+                    system_prompt,
                 )
-                self.assertIn("start_periodic_query", conversations[0]["messages"][0]["content"])
-                self.assertIn("stop_periodic_query", conversations[0]["messages"][0]["content"])
-                self.assertIn("delete_periodic_query", conversations[0]["messages"][0]["content"])
+                # Periodic tools remain registered without injecting their
+                # usage instructions into the authored system prompt.
+                self.assertNotIn("delegate_task(agent_id, task, period_seconds)", system_prompt)
+                self.assertNotIn("start_periodic_query", system_prompt)
+                self.assertNotIn("stop_periodic_query", system_prompt)
+                self.assertNotIn("delete_periodic_query", system_prompt)
                 tool = next(tool for tool in conversations[0]["tools"]
                             if tool.__name__ == "delegate_task")
+                self.assertIn("period_seconds", tool.__doc__)
                 # Even though registered during BASE warm-up, it cannot
                 # mutate TASK SYSTEM until MANAGER enters a human turn.
                 self.assertFalse(tool("agent_1", "Измерь температуру", 60)["ok"])
