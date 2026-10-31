@@ -529,7 +529,7 @@ class NativeExecutionStatusTests(unittest.TestCase):
                     return super().send_message(question)
                 self.calls.append(question)
                 self.token_count += 10
-                self.tools_by_name["get_outdoor_weather"](question)
+                self.tools[0](question)
                 return {"role": "assistant", "content": ""}
 
         class CallingEngine:
