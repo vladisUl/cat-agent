@@ -65,8 +65,11 @@ class PictureInputTests(unittest.TestCase):
                 self.calls = [] if calls is None else calls
                 self.token_count = count
                 self.closed = False
+                self.automatic_tool_calling = True
+                self.tool_modes = []
 
             def send_message(self, payload):
+                self.tool_modes.append(self.automatic_tool_calling)
                 self.calls.append(payload)
                 self.token_count += 10
                 return {"content": "OK"}
@@ -91,6 +94,8 @@ class PictureInputTests(unittest.TestCase):
             self.assertEqual(chat._working.calls[0]["content"][0]["text"], question)
             self.assertEqual(chat._working.calls[0]["content"][1]["type"], "image")
             self.assertEqual(len(chat._working.calls), 1)
+            self.assertEqual(chat._working.tool_modes, [False])
+            self.assertTrue(chat._working.automatic_tool_calling)
 
 
 if __name__ == "__main__":
