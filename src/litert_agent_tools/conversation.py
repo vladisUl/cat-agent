@@ -285,7 +285,18 @@ class NativeConversationChat:
                 native_picture_message(question, self._picture_root)
                 if self._picture_root is not None else question
             )
-            result = self._working.send_message(message)
+            if isinstance(message, Mapping):
+                # Image and text stay in the same Conversation/KV history.
+                # Do not execute native tools during a multimodal turn.
+                previous_auto = self._working.automatic_tool_calling
+                self._working.automatic_tool_calling = False
+                LOGGER.info("native-conversation IMAGE automatic_tool_calling=off")
+                try:
+                    result = self._working.send_message(message)
+                finally:
+                    self._working.automatic_tool_calling = previous_auto
+            else:
+                result = self._working.send_message(message)
         finally:
             ledger.active = False
         after = _kv_tokens(self._working)
