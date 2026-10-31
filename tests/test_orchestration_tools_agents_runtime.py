@@ -90,7 +90,7 @@ class RuntimeAgentTests(unittest.TestCase):
             self.assertEqual(len(engine.created), 2)
             self.assertTrue(engine.created[0]["messages"][0]["content"].startswith("Я менеджер"))
             self.assertIn("agent_1", engine.created[0]["messages"][0]["content"])
-            self.assertTrue(engine.created[1]["messages"][0]["content"].startswith("Я агент"))
+            self.assertEqual(engine.created[1]["messages"][0]["content"], "Я агент")
             self.assertEqual(engine.created[1]["tools"], [])
             self.assertEqual(len(engine.created[0]["tools"]), 1)
             self.assertEqual(engine.created[0]["tools"][0].__name__, "delegate_task")
@@ -166,11 +166,6 @@ class RuntimeAgentTests(unittest.TestCase):
                     for item in conversations
                 ]
                 self.assertEqual(manager.shared_tool_names, mqtt)
-                for registration in conversations:
-                    self.assertIn(
-                        "Изображения PNG/JPEG передаются непосредственно",
-                        registration["messages"][0]["content"],
-                    )
                 self.assertEqual(tuple(names[0]), mqtt + ("shell", "delegate_task"))
                 self.assertEqual(tuple(names[1]), mqtt + ("shell",))
                 self.assertEqual(tuple(names[2]), mqtt)
@@ -200,30 +195,6 @@ class RuntimeAgentTests(unittest.TestCase):
                     })
                 self.assertEqual(read.call_count, 1)
                 self.assertEqual(read.call_args.args[1], "zigbee2mqtt/temp_ulica")
-
-                # Native vision must remain a direct multimodal message even
-                # with a dynamically extended MQTT tool registry.
-                image = root / "data" / "vision_probe.png"
-                image.parent.mkdir()
-                image.write_bytes(bytes.fromhex("89504e470d0a1a0a") + b"fixture")
-                with patch.object(
-                    manager.chat._working, "send_message",
-                    return_value={"role": "assistant", "content": "IMAGE_OK"},
-                ) as send:
-                    with self.assertLogs(
-                        "litert_agent_tools.conversation", level="INFO",
-                    ) as logs:
-                        self.assertEqual(
-                            manager.chat.ask("Что на vision_probe.png?"), "IMAGE_OK",
-                        )
-                message = send.call_args.args[0]
-                self.assertEqual(message["role"], "user")
-                self.assertEqual(message["content"][0]["text"], "Что на vision_probe.png?")
-                self.assertEqual(
-                    message["content"][1],
-                    {"type": "image", "path": str(image)},
-                )
-                self.assertIn("native-vision IMAGE-ATTACHED", "\n".join(logs.output))
             finally:
                 manager.close()
 
@@ -249,21 +220,12 @@ class RuntimeAgentTests(unittest.TestCase):
                 manager = build_native_manager(
                     model, root / "manager.md", agent_config=config,
                     enable_mqtt=False, enable_shell=True, shell_cwd=root,
-                    vision_backend_name="none",
                 )
             try:
                 conversations = FakeEngine.instances[0].created
                 self.assertEqual(
                     [tool.__name__ for tool in conversations[1]["tools"]],
                     ["shell"],
-                )
-                self.assertNotIn(
-                    "Изображения PNG/JPEG передаются непосредственно",
-                    conversations[0]["messages"][0]["content"],
-                )
-                self.assertNotIn(
-                    "Изображения PNG/JPEG передаются непосредственно",
-                    conversations[1]["messages"][0]["content"],
                 )
             finally:
                 manager.close()
