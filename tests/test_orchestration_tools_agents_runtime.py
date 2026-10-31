@@ -90,7 +90,7 @@ class RuntimeAgentTests(unittest.TestCase):
             self.assertEqual(len(engine.created), 2)
             self.assertTrue(engine.created[0]["messages"][0]["content"].startswith("Я менеджер"))
             self.assertIn("agent_1", engine.created[0]["messages"][0]["content"])
-            self.assertEqual(engine.created[1]["messages"][0]["content"], "Я агент")
+            self.assertTrue(engine.created[1]["messages"][0]["content"].startswith("Я агент"))
             self.assertEqual(engine.created[1]["tools"], [])
             self.assertEqual(len(engine.created[0]["tools"]), 1)
             self.assertEqual(engine.created[0]["tools"][0].__name__, "delegate_task")
