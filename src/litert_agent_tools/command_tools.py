@@ -177,7 +177,7 @@ def _make_tool(name: str, description: str, executable: Path, directory: Path,
     arguments = ", ".join(key for key, _, _, _ in parameters)
     scope = {"_invoke": invoke, "__name__": __name__}
     exec(compile(f"def {name}({signature}) -> dict:\n    return _invoke({arguments})\n",
-                 "<native-command-tools>", "exec"), scope)
+                 "<native-command-tools>", "exec", dont_inherit=True), scope)
     tool = scope[name]
     lines = [description]
     if parameters:
