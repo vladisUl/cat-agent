@@ -285,6 +285,18 @@ class NativeConversationChat:
                 native_picture_message(question, self._picture_root)
                 if self._picture_root is not None else question
             )
+            image_attached = isinstance(message, Mapping) and isinstance(
+                message.get("content"), list
+            ) and any(
+                isinstance(part, Mapping) and part.get("type") == "image"
+                for part in message["content"]
+            )
+            if image_attached:
+                image_path = next(
+                    part["path"] for part in message["content"]
+                    if isinstance(part, Mapping) and part.get("type") == "image"
+                )
+                LOGGER.info("native-vision IMAGE-ATTACHED path=%s", image_path)
             result = self._working.send_message(message)
         finally:
             ledger.active = False
