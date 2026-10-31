@@ -20,6 +20,16 @@ from .task_tools import NativeTaskController, create_task_tools
 
 LOGGER = logging.getLogger(__name__)
 
+# Instructions for native multimodal input, independent of the number or type
+# of registered tools. External prompts under /opt/prompt are not modified by Git.
+VISION_SYSTEM_NOTE = (
+    "Изображения PNG/JPEG передаются непосредственно в пользовательском "
+    "сообщении как мультимодальное вложение (image), а не через Tool Calling. "
+    "Если изображение приложено к текущему сообщению, анализируй его напрямую "
+    "и отвечай на вопрос пользователя. Инструмент read_pic для этого не нужен. "
+    "Если изображение отсутствует, не утверждай, что видел его."
+)
+
 
 def build_native_manager(
     model: Path, system_file: Path, *, enable_shell: bool = False,
@@ -66,6 +76,8 @@ def build_native_manager(
             + ", ".join(spec.agent_id for spec in specs)
             + ". Для передачи задания используй инструмент delegate_task."
         )
+    if vision_backend_name != "none":
+        prompt += "\n\n" + VISION_SYSTEM_NOTE
     # Read-only MQTT functions are built-in capabilities of both MANAGER
     # and every native AGENT. Shell is privileged and remains opt-in for
     # each AGENT through its explicit JSON tool grant.
@@ -188,9 +200,12 @@ def build_native_manager(
             agent_tool_names = effective_agent_tool_names(spec, mqtt_names)
             agent_tools = [available_tools[name] for name in agent_tool_names]
             LOGGER.info("native-tools %s registered=%s", spec.agent_id, agent_tool_names)
+            agent_prompt = spec.prompt_file.read_text(encoding="utf-8")
+            if vision_backend_name != "none":
+                agent_prompt += "\n\n" + VISION_SYSTEM_NOTE
             agent_chat = NativeConversationChat(
                 engine,
-                spec.prompt_file.read_text(encoding="utf-8"),
+                agent_prompt,
                 agent_tools,
                 sampler_config=sampler,
                 max_output_tokens=max_output_tokens,
