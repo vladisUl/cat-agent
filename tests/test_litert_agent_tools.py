@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import inspect
 from importlib import metadata
 import json
 import subprocess
@@ -38,22 +39,36 @@ class MqttToolTests(unittest.TestCase):
         config["timeout"] = 3
         config_path.write_text(json.dumps(config), encoding="utf-8")
         self.tools = create_mqtt_tools(self.config_dir)
+        self.tools_by_name = {tool.__name__: tool for tool in self.tools}
 
     def test_tools_are_zero_arg_and_named_for_model(self):
-        self.assertEqual([t.__name__ for t in self.tools], [
-            "get_outdoor_weather", "get_home_climate",
-            "get_aquarium_temperature", "get_freezer_temperature",
-        ])
-        self.assertEqual(len(self.tools), 4)
-        self.assertTrue(all(t.__doc__ for t in self.tools))
+        definitions = json.loads(
+            (self.config_dir / "mqtt_tools.json").read_text(encoding="utf-8")
+        )["tools"]
+        self.assertEqual([tool.__name__ for tool in self.tools],
+                         [entry["name"] for entry in definitions])
+        self.assertEqual([tool.__doc__ for tool in self.tools],
+                         [entry["description"] for entry in definitions])
+        self.assertTrue(all(not inspect.signature(tool).parameters
+                            for tool in self.tools))
 
     def test_reads_exact_topic_and_normalizes_payload(self):
+        names = (
+            "get_outdoor_weather", "get_home_climate",
+            "get_aquarium_temperature", "get_freezer_temperature",
+        )
         payloads = [
             {"temperature": 16.75, "humidity": 60.2},
             {"temperature": 23, "humidity": 41},
             {"temperature": 27.1},
             {"temperature": -18.5},
         ]
+        definitions = {
+            entry["name"]: entry
+            for entry in json.loads(
+                (self.config_dir / "mqtt_tools.json").read_text(encoding="utf-8")
+            )["tools"]
+        }
         with patch(
             "litert_agent_tools.mqtt_tools.subprocess.run",
             side_effect=[
@@ -61,14 +76,15 @@ class MqttToolTests(unittest.TestCase):
                 for p in payloads
             ],
         ) as run:
-            results = [tool() for tool in self.tools]
+            results = [self.tools_by_name[name]() for name in names]
         self.assertTrue(all(r["ok"] for r in results))
         self.assertEqual(results[0]["humidity_percent"], 60.2)
         self.assertEqual(results[2]["temperature_c"], 27.1)
         self.assertEqual(results[3]["temperature_c"], -18.5)
-        for index, call in enumerate(run.call_args_list):
+        self.assertEqual(run.call_count, len(names))
+        for name, call in zip(names, run.call_args_list):
             cmd = call.args[0]
-            self.assertEqual(cmd[cmd.index("-t") + 1], json.loads((self.config_dir / 'mqtt_tools.json').read_text())['tools'][index]['topic'])
+            self.assertEqual(cmd[cmd.index("-t") + 1], definitions[name]["topic"])
             self.assertEqual(cmd[cmd.index("-h") + 1], "localhost")
             self.assertEqual(cmd[cmd.index("-W") + 1], "3")
             self.assertNotIn("shell", call.kwargs)
@@ -80,14 +96,14 @@ class MqttToolTests(unittest.TestCase):
                 "litert_agent_tools.mqtt_tools.subprocess.run",
                 return_value=subprocess.CompletedProcess([], 0, payload, ""),
             ):
-                self.assertFalse(self.tools[0]()["ok"])
+                self.assertFalse(self.tools_by_name["get_outdoor_weather"]()["ok"])
 
     def test_logs_real_tool_call_and_mqtt_result(self):
         with patch(
             "litert_agent_tools.mqtt_tools.subprocess.run",
             return_value=subprocess.CompletedProcess([], 0, '{"temperature":24.66,"humidity":26.24}', ""),
         ), self.assertLogs("litert_agent_tools.mqtt_tools", level="INFO") as captured:
-            result = self.tools[1]()
+            result = self.tools_by_name["get_home_climate"]()
         self.assertTrue(result["ok"])
         self.assertIn("native-tool CALL name=get_home_climate topic=zigbee2mqtt/temp_tua", captured.output[0])
         self.assertIn("native-tool RESULT name=get_home_climate", captured.output[1])
@@ -97,14 +113,14 @@ class MqttToolTests(unittest.TestCase):
     def test_missing_mqtt_binary_and_timeout(self):
         for error in (FileNotFoundError(), subprocess.TimeoutExpired(["mosquitto_sub"], 3)):
             with patch("litert_agent_tools.mqtt_tools.subprocess.run", side_effect=error):
-                self.assertFalse(self.tools[0]()["ok"])
+                self.assertFalse(self.tools_by_name["get_outdoor_weather"]()["ok"])
 
     def test_nonzero_exit_is_reported(self):
         with patch(
             "litert_agent_tools.mqtt_tools.subprocess.run",
             return_value=subprocess.CompletedProcess([], 27, "", "Timed out"),
         ):
-            result = self.tools[0]()
+            result = self.tools_by_name["get_outdoor_weather"]()
         self.assertFalse(result["ok"])
         self.assertIn("27", result["error"])
 
@@ -123,15 +139,15 @@ class MqttToolTests(unittest.TestCase):
         path = self.config_dir / "mqtt_tools.json"
         spec = json.loads(path.read_text(encoding="utf-8"))
         spec["tools"].append({
-            "name": "get_motion", "description": "Read motion",
+            "name": "test_added_motion_sensor", "description": "Read motion",
             "server": "new_server", "topic": "zigbee2mqtt/motion",
             "fields": {"occupancy": "motion"},
             "validation": {"occupancy": {"type": "boolean"}},
         })
         path.write_text(json.dumps(spec), encoding="utf-8")
         functions = create_mqtt_tools(self.config_dir)
-        self.assertEqual(len(functions), 5)
-        self.assertEqual(functions[-1].__name__, "get_motion")
+        self.assertEqual(len(functions), len(self.tools) + 1)
+        self.assertEqual(functions[-1].__name__, "test_added_motion_sensor")
         self.assertEqual(functions[-1].__doc__, "Read motion")
         with patch("litert_agent_tools.mqtt_tools.subprocess.run",
                    return_value=subprocess.CompletedProcess([], 0, '{"occupancy":true}', "")) as run:
@@ -513,7 +529,7 @@ class NativeExecutionStatusTests(unittest.TestCase):
                     return super().send_message(question)
                 self.calls.append(question)
                 self.token_count += 10
-                self.tools[0](question)
+                self.tools_by_name["get_outdoor_weather"](question)
                 return {"role": "assistant", "content": ""}
 
         class CallingEngine:
