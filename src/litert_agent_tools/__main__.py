@@ -7,7 +7,6 @@ import logging
 from pathlib import Path
 import sys
 
-from .config import MqttConfig
 from .conversation import InvalidUserTextError, NativeConversationChat
 from .mqtt_tools import create_mqtt_tools
 from .shell_tools import DEFAULT_SHELL_CWD, ShellConfig, ShellGate, create_shell_tool
@@ -48,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("System prompt is empty")
 
     shell_gate = None
-    native_tools = create_mqtt_tools(MqttConfig.from_env())
+    native_tools = create_mqtt_tools()
     if args.enable_shell:
         try:
             shell_config = ShellConfig(

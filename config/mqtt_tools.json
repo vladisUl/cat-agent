@@ -1,0 +1,72 @@
+{
+  "tools": [
+    {
+      "name": "get_outdoor_weather",
+      "description": "Получить текущие температуру на улице (°C) и влажность воздуха (%).",
+      "server": "old_server",
+      "topic": "zigbee2mqtt/temp_ulica",
+      "fields": {
+        "temperature": "temperature_c",
+        "humidity": "humidity_percent"
+      },
+      "validation": {
+        "temperature": {
+          "type": "number"
+        },
+        "humidity": {
+          "type": "number",
+          "min": 0,
+          "max": 100
+        }
+      }
+    },
+    {
+      "name": "get_home_climate",
+      "description": "Получить текущие температуру дома (°C) и влажность воздуха (%).",
+      "server": "old_server",
+      "topic": "zigbee2mqtt/temp_tua",
+      "fields": {
+        "temperature": "temperature_c",
+        "humidity": "humidity_percent"
+      },
+      "validation": {
+        "temperature": {
+          "type": "number"
+        },
+        "humidity": {
+          "type": "number",
+          "min": 0,
+          "max": 100
+        }
+      }
+    },
+    {
+      "name": "get_aquarium_temperature",
+      "description": "Получить текущую температуру воды в аквариуме (°C).",
+      "server": "old_server",
+      "topic": "zigbee2mqtt/temp_akva",
+      "fields": {
+        "temperature": "temperature_c"
+      },
+      "validation": {
+        "temperature": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "name": "get_freezer_temperature",
+      "description": "Получить текущую температуру в морозильнике (°C).",
+      "server": "old_server",
+      "topic": "zigbee2mqtt/temp_moroz",
+      "fields": {
+        "temperature": "temperature_c"
+      },
+      "validation": {
+        "temperature": {
+          "type": "number"
+        }
+      }
+    }
+  ]
+}

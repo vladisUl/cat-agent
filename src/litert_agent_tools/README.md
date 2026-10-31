@@ -5,9 +5,7 @@ client, MCP, /work#, and TASK SYSTEM. None of their code or prompts is modified.
 
 ## Scope
 
-- Four native zero-argument Python tools registered in Conversation(tools=...):
-  outdoor temperature/humidity, home temperature/humidity, aquarium temperature
-  and freezer temperature. Topics are the existing entries in prompts/mqtt.md.
+- Any number of native zero-argument MQTT functions registered in Conversation(tools=...), generated from `config/mqtt.json` and `config/mqtt_tools.json`.
 - MQTT tools are read-only; each invokes mosquitto_sub once. They return JSON
   with ok=false on errors.
 - Optional native shell(command: str) is available with --enable-shell. It
@@ -98,8 +96,7 @@ CPU-supported .litertlm model. The WSL host must reach the MQTT broker.
       --model /storage/models/litert/gemma-4-E4B-it.litertlm \
       --system-file /opt/prompt/prompts_tools/manager.md
 
-Override MQTT broker/port with CAT_AGENT_MQTT_HOST, CAT_AGENT_MQTT_PORT,
-and LITERT_TOOLS_MQTT_WAIT (default 5 s).
+Configure broker IPs/port/timeout in `config/mqtt.json` and tools/topics/fields in `config/mqtt_tools.json`; no environment overrides.
 
 The terminal keeps a dialogue until /new, which discards the user's conversation
 while retaining the service warm/response exchange. /exit closes everything.

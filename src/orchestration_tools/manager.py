@@ -20,7 +20,7 @@ class NativeManager:
     def __init__(
         self, chat, engine, *, model_name: str, backend_name: str = "cpu",
         agents: AgentPool | None = None, delegations: DelegationBroker | None = None,
-        task_controller=None,
+        task_controller=None, shared_tool_names: tuple[str, ...] = (),
     ):
         self.chat = chat
         self.engine = engine
@@ -30,6 +30,7 @@ class NativeManager:
         self.agents = agents if agents is not None else AgentPool([])
         self.delegations = delegations
         self.task_controller = task_controller
+        self.shared_tool_names = shared_tool_names
         # Read LiteRT's native token count only on the serialized model
         # worker; socket snapshot requests use this cached scalar.
         self._working_kv_tokens = getattr(chat, "working_kv_tokens", chat.base_kv_tokens)

@@ -7,10 +7,9 @@ from __future__ import annotations
 from pathlib import Path
 import logging
 
-from litert_agent_tools.config import MqttConfig
 from litert_agent_tools.conversation import NativeConversationChat
 from litert_agent_tools.external_tools import load_external_command_tools, native_tool_name
-from litert_agent_tools.mqtt_tools import BUILTIN_MQTT_TOOL_NAMES, create_mqtt_tools
+from litert_agent_tools.mqtt_tools import create_mqtt_tools
 from litert_agent_tools.shell_tools import ShellConfig, ShellGate, create_shell_tool
 
 from .agent_config import effective_agent_tool_names, load_agent_specs
@@ -70,11 +69,8 @@ def build_native_manager(
     # Read-only MQTT functions are built-in capabilities of both MANAGER
     # and every native AGENT. Shell is privileged and remains opt-in for
     # each AGENT through its explicit JSON tool grant.
-    mqtt_tools = create_mqtt_tools(MqttConfig.from_env()) if enable_mqtt else []
-    mqtt_names = tuple(fn.__name__ for fn in mqtt_tools)
-    if enable_mqtt and mqtt_names != BUILTIN_MQTT_TOOL_NAMES:
-        raise RuntimeError("MQTT tool registry does not match the native TASK skill registry")
-    tools = list(mqtt_tools)
+    tools = create_mqtt_tools() if enable_mqtt else []
+    mqtt_names = tuple(fn.__name__ for fn in tools)
     shell_gate = ShellGate() if enable_shell or external_tools_dir is not None else None
     if enable_shell:
         tools.append(create_shell_tool(ShellConfig(
@@ -213,6 +209,7 @@ def build_native_manager(
             chat, engine, model_name=model.name, backend_name=backend_name,
             agents=AgentPool(agents), delegations=delegations,
             task_controller=task_controller,
+            shared_tool_names=mqtt_names,
         )
     except BaseException:
         for agent in reversed(agents):

@@ -14,26 +14,37 @@ import unittest
 from unittest.mock import patch
 
 from litert_agent_tools.clone import ConversationCloneError, clone_conversation
-from litert_agent_tools.config import MqttConfig
 from litert_agent_tools.conversation import (
     InvalidUserTextError, NativeConversationChat, ToolExecutionLedger,
     _last_decode_tokens, response_text,
 )
-from litert_agent_tools.mqtt_tools import TOPICS, create_mqtt_tools
+from litert_agent_tools.mqtt_tools import create_mqtt_tools
 from litert_agent_tools.native_patch.enable_prefill import CHANGES, change_source
 
 
 class MqttToolTests(unittest.TestCase):
     def setUp(self):
-        self.config = MqttConfig(host="localhost", port=1884, wait_seconds=3)
-        self.tools = create_mqtt_tools(self.config)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.config_dir = Path(self.temp.name)
+        reference = Path(__file__).resolve().parents[1] / "config"
+        for filename in ("mqtt.json", "mqtt_tools.json"):
+            (self.config_dir / filename).write_text(
+                (reference / filename).read_text(encoding="utf-8"), encoding="utf-8")
+        config_path = self.config_dir / "mqtt.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["servers"]["old_server"] = "localhost"
+        config["port"] = 1884
+        config["timeout"] = 3
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        self.tools = create_mqtt_tools(self.config_dir)
 
     def test_tools_are_zero_arg_and_named_for_model(self):
         self.assertEqual([t.__name__ for t in self.tools], [
             "get_outdoor_weather", "get_home_climate",
             "get_aquarium_temperature", "get_freezer_temperature",
         ])
-        self.assertEqual(len(TOPICS), 4)
+        self.assertEqual(len(self.tools), 4)
         self.assertTrue(all(t.__doc__ for t in self.tools))
 
     def test_reads_exact_topic_and_normalizes_payload(self):
@@ -57,7 +68,7 @@ class MqttToolTests(unittest.TestCase):
         self.assertEqual(results[3]["temperature_c"], -18.5)
         for index, call in enumerate(run.call_args_list):
             cmd = call.args[0]
-            self.assertEqual(cmd[cmd.index("-t") + 1], list(TOPICS.values())[index][0])
+            self.assertEqual(cmd[cmd.index("-t") + 1], json.loads((self.config_dir / 'mqtt_tools.json').read_text())['tools'][index]['topic'])
             self.assertEqual(cmd[cmd.index("-h") + 1], "localhost")
             self.assertEqual(cmd[cmd.index("-W") + 1], "3")
             self.assertNotIn("shell", call.kwargs)
@@ -98,10 +109,50 @@ class MqttToolTests(unittest.TestCase):
         self.assertIn("27", result["error"])
 
     def test_config_validation(self):
-        for values in ({"port": 0}, {"wait_seconds": 0}, {"host": " "}):
-            with self.subTest(values=values):
+        path = self.config_dir / "mqtt.json"
+        original = json.loads(path.read_text(encoding="utf-8"))
+        for key, value in (("port", 0), ("timeout", 0), ("servers", {})):
+            with self.subTest(key=key):
+                invalid = dict(original)
+                invalid[key] = value
+                path.write_text(json.dumps(invalid), encoding="utf-8")
                 with self.assertRaises(ValueError):
-                    MqttConfig(**values)
+                    create_mqtt_tools(self.config_dir)
+
+    def test_new_tool_and_new_server_need_no_python_changes(self):
+        path = self.config_dir / "mqtt_tools.json"
+        spec = json.loads(path.read_text(encoding="utf-8"))
+        spec["tools"].append({
+            "name": "get_motion", "description": "Read motion",
+            "server": "new_server", "topic": "zigbee2mqtt/motion",
+            "fields": {"occupancy": "motion"},
+            "validation": {"occupancy": {"type": "boolean"}},
+        })
+        path.write_text(json.dumps(spec), encoding="utf-8")
+        functions = create_mqtt_tools(self.config_dir)
+        self.assertEqual(len(functions), 5)
+        self.assertEqual(functions[-1].__name__, "get_motion")
+        self.assertEqual(functions[-1].__doc__, "Read motion")
+        with patch("litert_agent_tools.mqtt_tools.subprocess.run",
+                   return_value=subprocess.CompletedProcess([], 0, '{"occupancy":true}', "")) as run:
+            self.assertEqual(functions[-1](), {"ok": True, "motion": True})
+        self.assertEqual(run.call_args.args[0][2], "192.168.0.140")
+
+    def test_malformed_tool_config_rejected(self):
+        path = self.config_dir / "mqtt_tools.json"
+        spec = json.loads(path.read_text(encoding="utf-8"))
+        original = spec["tools"][0]
+        for change in (
+            {"name": "bad-name"},
+            {"server": "missing"},
+            {"fields": {"x": "same", "y": "same"}},
+            {"validation": {"unknown": {"type": "number"}}},
+        ):
+            with self.subTest(change=change):
+                path.write_text(json.dumps({"tools": [dict(original, **change)]}),
+                                encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    create_mqtt_tools(self.config_dir)
 
 
 class StubConversation:
