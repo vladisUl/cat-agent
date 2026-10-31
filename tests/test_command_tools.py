@@ -1,6 +1,7 @@
 """Native LiteRT JSON command tool factory: no model installation required."""
 from __future__ import annotations
 
+from datetime import datetime
 import inspect
 import json
 from pathlib import Path
@@ -48,6 +49,21 @@ class CommandToolTests(unittest.TestCase):
 
     def _load(self, **kwargs):
         return create_command_tools(self.root, self.specs, gate=self.gate, **kwargs)
+
+    def test_repo_get_date_time_tool_runs_as_native_zero_arg_function(self):
+        repo = Path(__file__).resolve().parents[1]
+        executable_dir = repo / "native_commands"
+        definitions = repo / "config/command_tools.json"
+        tools = create_command_tools(executable_dir, definitions, gate=self.gate)
+        self.assertEqual([tool.__name__ for tool in tools], ["get_date_time"])
+        self.assertEqual(str(inspect.signature(tools[0])), "() -> dict")
+        self.assertIn("дату и время", tools[0].__doc__)
+        self.assertFalse(tools[0]()["ok"])
+        self.gate.enabled = True
+        result = tools[0]()
+        self.assertTrue(result["ok"], result)
+        measured = datetime.strptime(result["result"], "%Y-%m-%d %H:%M:%S %z")
+        self.assertIsNotNone(measured.tzinfo)
 
     def test_real_typed_python_signatures_and_docstrings(self):
         tools = self._load()

@@ -1,3 +1,9 @@
 {
-  "tools": []
+  "tools": [
+    {
+      "name": "get_date_time",
+      "description": "Получить текущие дату и время сервера с указанием часового пояса.",
+      "command": "get_date_time"
+    }
+  ]
 }

@@ -54,5 +54,18 @@ Native shell (`--shell-timeout`, `--shell-max-output`), without using
 a shell interpreter. The warm-up gate prevents executable calls before
 the Native manager finishes BASE creation.
 
-The committed `config/command_tools.json` starts empty. Add definitions only
-after installing their executables in the YAML directory.
+## Initial date/time tool
+
+`get_date_time()` is the first configured tool. Its executable is included
+as `native_commands/get_date_time`, and delegates to `/usr/bin/date`.
+
+Install the executable once in the directory configured as `litert.command_dir`
+(currently `/opt/model/bin`), before restarting Native CORE:
+
+```bash
+install -D -m 755 /opt/cat-agent/native_commands/get_date_time /opt/model/bin/get_date_time
+```
+
+The tool returns local server time with its numeric time zone offset as text
+(e.g. `2026-10-31 19:30:00 +0500`). Further executables can be added by
+copying them into the same directory and editing the JSON definitions.
