@@ -90,6 +90,10 @@ class RuntimeAgentTests(unittest.TestCase):
             self.assertEqual(len(engine.created), 2)
             self.assertTrue(engine.created[0]["messages"][0]["content"].startswith("Я менеджер"))
             self.assertIn("agent_1", engine.created[0]["messages"][0]["content"])
+            self.assertEqual(
+                (root / "full_manager.md").read_text(encoding="utf-8"),
+                engine.created[0]["messages"][0]["content"],
+            )
             self.assertEqual(engine.created[1]["messages"][0]["content"], "Я агент")
             self.assertEqual(engine.created[1]["tools"], [])
             self.assertEqual(len(engine.created[0]["tools"]), 1)
@@ -273,6 +277,10 @@ class RuntimeAgentTests(unittest.TestCase):
                 self.assertIn("list_periodic_queries", names[0])
                 self.assertNotIn("delegate_task", names[1])
                 self.assertIn("delegate_task(agent_id, task, period_seconds)", conversations[0]["messages"][0]["content"])
+                self.assertEqual(
+                    (root / "full_manager.md").read_text(encoding="utf-8"),
+                    conversations[0]["messages"][0]["content"],
+                )
                 self.assertIn("start_periodic_query", conversations[0]["messages"][0]["content"])
                 self.assertIn("stop_periodic_query", conversations[0]["messages"][0]["content"])
                 self.assertIn("delete_periodic_query", conversations[0]["messages"][0]["content"])
