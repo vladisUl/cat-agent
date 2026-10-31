@@ -23,11 +23,12 @@ class FakeChat:
 
     def ask(self, question):
         self.prompts.append(question)
-        if "CAT_AGENT_DELEGATION_RESULTS" in question:
-            self.events.append("manager_follows_up")
-            payload = json.loads(question.split("\n")[-1])
-            results = payload["results"]
-            return "Итог: " + "; ".join(str(item["result"]) for item in results)
+        if question.startswith("{"):
+            payload = json.loads(question)
+            if payload.get("kind") == "agent_results":
+                self.events.append("manager_follows_up")
+                results = payload["results"]
+                return "Итог: " + "; ".join(str(item["result"]) for item in results)
         if question.startswith("Поручи"):
             self.events.append("manager_inference")
             self.tool("agent_1", "Выполни shell pwd")
@@ -90,6 +91,13 @@ class DelegationTests(unittest.TestCase):
         manager, broker, tool, events, chat, pool, _ = self.make_manager()
         reply = manager.respond("client", "Поручи агенту проверить pwd")
         self.assertEqual(reply.text, "Итог: /opt/model")
+        self.assertEqual(json.loads(chat.prompts[1]), {
+            "kind": "agent_results",
+            "results": [{
+                "call_id": "delegation_1", "agent_id": "agent_1",
+                "ok": True, "status_code": 0, "result": "/opt/model",
+            }],
+        })
         self.assertEqual(events, [
             "manager_inference", "agent_inference", "manager_follows_up",
         ])
@@ -100,10 +108,14 @@ class DelegationTests(unittest.TestCase):
         manager.close()
 
     def test_agent_failure_is_reported_once_without_retry(self):
-        manager, broker, _, events, _, pool, _ = self.make_manager()
+        manager, broker, _, events, chat, pool, _ = self.make_manager()
         pool.fail = True
         answer = manager.respond("client", "Поручи задачу")
         self.assertIn("ошибка", answer.text)
+        payload = json.loads(chat.prompts[1])
+        self.assertEqual(payload["kind"], "agent_results")
+        self.assertEqual(payload["results"][0]["ok"], False)
+        self.assertEqual(payload["results"][0]["status_code"], 1)
         self.assertEqual(len(pool.calls), 1)
         self.assertEqual(events.count("manager_follows_up"), 1)
         manager.close()
