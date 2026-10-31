@@ -249,12 +249,21 @@ class RuntimeAgentTests(unittest.TestCase):
                 manager = build_native_manager(
                     model, root / "manager.md", agent_config=config,
                     enable_mqtt=False, enable_shell=True, shell_cwd=root,
+                    vision_backend_name="none",
                 )
             try:
                 conversations = FakeEngine.instances[0].created
                 self.assertEqual(
                     [tool.__name__ for tool in conversations[1]["tools"]],
                     ["shell"],
+                )
+                self.assertNotIn(
+                    "Изображения PNG/JPEG передаются непосредственно",
+                    conversations[0]["messages"][0]["content"],
+                )
+                self.assertNotIn(
+                    "Изображения PNG/JPEG передаются непосредственно",
+                    conversations[1]["messages"][0]["content"],
                 )
             finally:
                 manager.close()
