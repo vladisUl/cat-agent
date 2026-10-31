@@ -136,6 +136,11 @@ def build_native_manager(
         raise ValueError(f"Duplicate MANAGER tool names: {manager_tool_names}")
     LOGGER.info("native-tools MANAGER registered=%s", tuple(manager_tool_names))
 
+    # Keep an exact snapshot of the system message sent to MANAGER.
+    full_prompt_file = system_file.with_name("full_manager.md")
+    full_prompt_file.write_text(prompt, encoding="utf-8")
+    LOGGER.info("native-tools MANAGER full prompt saved to %s", full_prompt_file)
+
     import litert_lm
 
     model_backend = (
