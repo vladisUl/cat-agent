@@ -35,6 +35,7 @@ class YamlConfigTest(unittest.TestCase):
     def test_fixture_config_uses_selected_profiles(self) -> None:
         config = load_app_config(self.config_path)
         self.assertEqual(config.litert.active_profile, "e4b")
+        self.assertEqual(config.litert.command_dir, "/opt/model/bin")
         self.assertEqual(
             config.litert.active.model,
             "/storage/models/litertlm/gemma-4-E4B-it.litertlm",
@@ -89,6 +90,20 @@ class YamlConfigTest(unittest.TestCase):
             path.write_text(yaml.safe_dump(source), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "runtime.prompt_root must be an absolute path"):
                 load_app_config(path)
+
+    def test_litert_command_directory_is_exported_only_to_native(self) -> None:
+        source = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        source["litert"]["command_dir"] = "/opt/custom commands"
+        self.config_path.write_text(yaml.safe_dump(source), encoding="utf-8")
+        config = load_app_config(self.config_path)
+        self.assertEqual(config.litert.command_dir, "/opt/custom commands")
+        self.assertIn("export CAT_AGENT_NATIVE_COMMAND_DIR='/opt/custom commands'",
+                      self._capture("litert"))
+        self.assertNotIn("CAT_AGENT_NATIVE_COMMAND_DIR", self._capture("openai"))
+        source["litert"]["command_dir"] = "relative/path"
+        self.config_path.write_text(yaml.safe_dump(source), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "litert.command_dir"):
+            load_app_config(self.config_path)
 
     def test_active_profile_controls_litert_export(self) -> None:
         source = yaml.safe_load((self.config_path).read_text(encoding="utf-8"))

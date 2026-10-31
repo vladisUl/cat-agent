@@ -293,6 +293,7 @@ class NativeSharedLauncherTests(unittest.TestCase):
         self.assertEqual(opts[opts.index("--vision-backend") + 1], "cpu")
         self.assertNotIn("--speculative", opts)
         self.assertIn("--enable-shell", opts)
+        self.assertEqual(opts[opts.index("--command-dir") + 1], "/opt/model/bin")
 
     def test_yaml_external_prompts_tools_dir_sets_manager_prompt(self):
         result = self.launch(CAT_AGENT_NATIVE_MANAGER_PROMPT=None)

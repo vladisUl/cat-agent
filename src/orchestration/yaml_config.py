@@ -93,6 +93,7 @@ class LiteRTProfile:
 class LiteRTConfig:
     active_profile: str
     profiles: dict[str, LiteRTProfile]
+    command_dir: str
 
     @property
     def active(self) -> LiteRTProfile:
@@ -190,8 +191,12 @@ class AppConfig:
 
 def _parse_litert(data: Any) -> LiteRTConfig:
     section = _mapping(data, "litert")
-    _check_keys(section, "litert", {"active_profile", "profiles"})
+    _check_keys(section, "litert", {"active_profile", "profiles", "command_dir"})
     active_profile = _string(section, "active_profile", "litert")
+    command_dir = section.get("command_dir", "/opt/model/bin")
+    if (not isinstance(command_dir, str) or not command_dir.strip()
+            or not Path(command_dir).is_absolute()):
+        raise ValueError("litert.command_dir must be an absolute directory path")
     raw_profiles = _mapping(section.get("profiles"), "litert.profiles")
     if not raw_profiles:
         raise ValueError("litert.profiles must not be empty")
@@ -262,7 +267,8 @@ def _parse_litert(data: Any) -> LiteRTConfig:
 
     if active_profile not in profiles:
         raise ValueError(f"litert.active_profile references unknown profile {active_profile!r}")
-    return LiteRTConfig(active_profile=active_profile, profiles=profiles)
+    return LiteRTConfig(active_profile=active_profile, profiles=profiles,
+                        command_dir=command_dir)
 
 
 def _parse_openai(data: Any) -> OpenAIConfig:

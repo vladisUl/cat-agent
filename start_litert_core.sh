@@ -85,6 +85,7 @@ args=(
     --vision-backend "${LITERT_AGENT_VISION_BACKEND:-cpu}"
     --system-file "$PROMPT"
     --agent-config "$AGENTS"
+    --command-dir "${CAT_AGENT_NATIVE_COMMAND_DIR:-/opt/model/bin}"
     --shell-cwd "$WORKSPACE"
     --enable-task-worker
     --enable-shell

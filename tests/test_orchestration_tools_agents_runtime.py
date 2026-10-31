@@ -312,6 +312,55 @@ class RuntimeAgentTests(unittest.TestCase):
             finally:
                 manager.close()
 
+    def test_command_tools_register_for_manager_and_agents(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            model = root / "model.litertlm"
+            model.touch()
+            (root / "manager.md").write_text("MANAGER", encoding="utf-8")
+            (root / "agent.md").write_text("AGENT", encoding="utf-8")
+            (root / "query_manager.md").write_text("QUERY", encoding="utf-8")
+            agent_config = root / "agents.json"
+            agent_config.write_text(json.dumps({"agents": [
+                {"id": "agent_1", "prompt": "agent.md", "tools": []}
+            ]}), encoding="utf-8")
+            binary = root / "cat_water"
+            binary.write_text("#!/bin/sh\necho 70%\n", encoding="utf-8")
+            binary.chmod(0o755)
+            definitions = root / "command_tools.json"
+            definitions.write_text(json.dumps({"tools": [{
+                "name": "get_cat_water_level",
+                "description": "Уровень воды у кота",
+                "command": "cat_water",
+                "parameters": {"room": {"type": "string", "enum": ["kitchen"],
+                                         "description": "Комната"}}
+            }]}), encoding="utf-8")
+            fake = ModuleType("litert_lm")
+            fake.Engine = FakeEngine
+            fake.Backend = SimpleNamespace(CPU=lambda **kwargs: "cpu")
+            fake.SamplerConfig = lambda **kwargs: "sampler"
+            fake.ThinkingConfig = lambda **kwargs: "thinking"
+            FakeEngine.instances.clear()
+            with patch.dict(sys.modules, {"litert_lm": fake}):
+                manager = build_native_manager(
+                    model, root / "manager.md", agent_config=agent_config,
+                    enable_mqtt=False, enable_shell=False,
+                    command_dir=root, command_tools_file=definitions,
+                )
+            try:
+                conversations = FakeEngine.instances[0].created
+                self.assertEqual(manager.shared_tool_names, ("get_cat_water_level",))
+                for conversation in conversations:
+                    names = [tool.__name__ for tool in conversation["tools"]]
+                    self.assertIn("get_cat_water_level", names)
+                    self.assertNotIn("get_cat_water_level",
+                                     conversation["messages"][0]["content"])
+                tool = next(t for t in conversations[1]["tools"]
+                            if t.__name__ == "get_cat_water_level")
+                self.assertEqual(tool("kitchen"), {"ok": True, "result": "70%"})
+            finally:
+                manager.close()
+
     def test_config_cannot_grant_disabled_or_unknown_shell(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

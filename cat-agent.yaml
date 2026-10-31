@@ -1,4 +1,5 @@
 litert:
+  command_dir: /opt/model/bin
   active_profile: e2b-wsl3050
 
   profiles:

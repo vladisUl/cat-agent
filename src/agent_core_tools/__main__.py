@@ -34,6 +34,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--shell-timeout', type=float, default=15.0)
     parser.add_argument('--shell-max-output', type=int, default=16384)
     parser.add_argument('--disable-mqtt', action='store_true')
+    parser.add_argument('--command-dir', type=Path,
+                        help='Executable directory for JSON command tools')
+    parser.add_argument('--command-tools-file', type=Path,
+                        help='JSON command tool definitions (default: config/command_tools.json)')
     parser.add_argument('--enable-background-probe', action='store_true',
                         help='Allow ephemeral, explicitly sliced background agent jobs')
     parser.add_argument('--enable-hardware-probe', action='store_true',
@@ -109,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
                 top_p=args.top_p, trace_native_json=args.trace_native_json,
                 agent_config=args.agent_config,
                 task_socket=args.task_socket if args.enable_task_worker else None,
+                command_dir=args.command_dir,
+                command_tools_file=args.command_tools_file,
             )
         except (OSError, ValueError, RuntimeError) as exc:
             LOGGER.exception("TOOLS CORE manager initialization failed")

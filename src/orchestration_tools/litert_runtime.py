@@ -8,6 +8,7 @@ from pathlib import Path
 import logging
 
 from litert_agent_tools.conversation import NativeConversationChat
+from litert_agent_tools.command_tools import create_command_tools
 from litert_agent_tools.mqtt_tools import create_mqtt_tools
 from litert_agent_tools.shell_tools import ShellConfig, ShellGate, create_shell_tool
 
@@ -32,6 +33,8 @@ def build_native_manager(
     top_p: float = 1.0, trace_native_json: bool = False,
     agent_config: Path | None = None,
     task_socket: Path | None = None,
+    command_dir: Path | None = None,
+    command_tools_file: Path | None = None,
 ) -> NativeManager:
     model = Path(model)
     system_file = Path(system_file)
@@ -64,12 +67,16 @@ def build_native_manager(
             + ", ".join(spec.agent_id for spec in specs)
             + ". Для передачи задания используй инструмент delegate_task."
         )
-    # Read-only MQTT functions are built-in capabilities of both MANAGER
-    # and every native AGENT. Shell is privileged and remains opt-in for
-    # each AGENT through its explicit JSON tool grant.
+    # MQTT and configured executable tools are shared with native AGENTs.
+    # Shell remains an opt-in tool for each AGENT.
     tools = create_mqtt_tools() if enable_mqtt else []
-    mqtt_names = tuple(fn.__name__ for fn in tools)
-    shell_gate = ShellGate() if enable_shell else None
+    shell_gate = ShellGate() if enable_shell or command_dir is not None else None
+    if command_dir is not None:
+        tools.extend(create_command_tools(
+            command_dir, command_tools_file, gate=shell_gate,
+            timeout_seconds=shell_timeout, max_output_bytes=shell_max_output,
+        ))
+    shared_names = tuple(fn.__name__ for fn in tools)
     if enable_shell:
         tools.append(create_shell_tool(ShellConfig(
             shell_cwd, timeout_seconds=shell_timeout,
@@ -97,7 +104,7 @@ def build_native_manager(
             raise ValueError("Native periodic tasks require configured AGENTs")
         from task_system.client import TaskRPC
         permissions = {
-            spec.agent_id: effective_agent_tool_names(spec, mqtt_names)
+            spec.agent_id: effective_agent_tool_names(spec, shared_names)
             for spec in specs
         }
         task_controller = NativeTaskController(TaskRPC(task_socket), permissions)
@@ -161,10 +168,10 @@ def build_native_manager(
             picture_root=shell_cwd,
         )
         for spec in specs:
-            # Default MQTT tools require no per-agent JSON repetition.
+            # Shared tools require no per-agent JSON repetition.
             # Explicit grants (for example shell) extend that safe baseline,
             # without registering the same tool twice.
-            agent_tool_names = effective_agent_tool_names(spec, mqtt_names)
+            agent_tool_names = effective_agent_tool_names(spec, shared_names)
             agent_tools = [available_tools[name] for name in agent_tool_names]
             LOGGER.info("native-tools %s registered=%s", spec.agent_id, agent_tool_names)
             agent_chat = NativeConversationChat(
@@ -188,7 +195,7 @@ def build_native_manager(
             chat, engine, model_name=model.name, backend_name=backend_name,
             agents=AgentPool(agents), delegations=delegations,
             task_controller=task_controller,
-            shared_tool_names=mqtt_names,
+            shared_tool_names=shared_names,
         )
     except BaseException:
         for agent in reversed(agents):
