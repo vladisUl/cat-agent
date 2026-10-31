@@ -1,5 +1,0 @@
-{
-  "name": "get_current_time",
-  "description": "Получить текущую дату и время компьютера, включая часовой пояс.",
-  "command": ["/usr/bin/date", "+%Y-%m-%d %H:%M:%S %z"]
-}

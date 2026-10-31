@@ -120,20 +120,7 @@ class ToolExecutionLedger:
 
     def wrap(self, function):
         if not callable(function):
-            if not (hasattr(function, "get_tool_description") and
-                    hasattr(function, "execute")):
-                return function
-            from litert_lm import Tool
-            ledger = self
-
-            class MeasuredTool(Tool):
-                def get_tool_description(self):
-                    return function.get_tool_description()
-
-                def execute(self, param):
-                    return ledger._measure(function.execute, param)
-
-            return MeasuredTool()
+            return function
 
         @wraps(function)
         def measured(*args, **kwargs):

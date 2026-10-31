@@ -8,7 +8,6 @@ from pathlib import Path
 import logging
 
 from litert_agent_tools.conversation import NativeConversationChat
-from litert_agent_tools.external_tools import load_external_command_tools, native_tool_name
 from litert_agent_tools.mqtt_tools import create_mqtt_tools
 from litert_agent_tools.shell_tools import ShellConfig, ShellGate, create_shell_tool
 
@@ -33,7 +32,6 @@ def build_native_manager(
     top_p: float = 1.0, trace_native_json: bool = False,
     agent_config: Path | None = None,
     task_socket: Path | None = None,
-    external_tools_dir: Path | None = None,
 ) -> NativeManager:
     model = Path(model)
     system_file = Path(system_file)
@@ -71,24 +69,16 @@ def build_native_manager(
     # each AGENT through its explicit JSON tool grant.
     tools = create_mqtt_tools() if enable_mqtt else []
     mqtt_names = tuple(fn.__name__ for fn in tools)
-    shell_gate = ShellGate() if enable_shell or external_tools_dir is not None else None
+    shell_gate = ShellGate() if enable_shell else None
     if enable_shell:
         tools.append(create_shell_tool(ShellConfig(
             shell_cwd, timeout_seconds=shell_timeout,
             max_output_bytes=shell_max_output,
         ), gate=shell_gate))
-    if external_tools_dir is not None:
-        tools.extend(load_external_command_tools(
-            external_tools_dir,
-            ShellConfig(shell_cwd, timeout_seconds=shell_timeout,
-                        max_output_bytes=shell_max_output),
-            gate=shell_gate,
-        ))
-
-    tool_names = [native_tool_name(tool) for tool in tools]
+    tool_names = [tool.__name__ for tool in tools]
     if len(tool_names) != len(set(tool_names)):
         raise ValueError(f"Duplicate native tool names: {tool_names}")
-    available_tools = {native_tool_name(tool): tool for tool in tools}
+    available_tools = {tool.__name__: tool for tool in tools}
     for spec in specs:
         missing = set(spec.tool_names) - set(available_tools)
         if missing:
@@ -115,7 +105,7 @@ def build_native_manager(
     if delegations is not None:
         delegations.periodic_controller = task_controller
         tools.append(create_delegate_tool(delegations))
-    manager_tool_names = [native_tool_name(tool) for tool in tools]
+    manager_tool_names = [tool.__name__ for tool in tools]
     if len(manager_tool_names) != len(set(manager_tool_names)):
         raise ValueError(f"Duplicate MANAGER tool names: {manager_tool_names}")
     LOGGER.info("native-tools MANAGER registered=%s", tuple(manager_tool_names))

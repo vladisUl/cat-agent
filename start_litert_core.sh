@@ -86,7 +86,6 @@ args=(
     --system-file "$PROMPT"
     --agent-config "$AGENTS"
     --shell-cwd "$WORKSPACE"
-    --external-tools-dir "${CAT_AGENT_NATIVE_TOOLS_DIR:-${ROOT}/config/native_tools}"
     --enable-task-worker
     --enable-shell
 )

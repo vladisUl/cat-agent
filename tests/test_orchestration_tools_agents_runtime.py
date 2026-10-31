@@ -276,6 +276,7 @@ class RuntimeAgentTests(unittest.TestCase):
                 self.assertIn("delete_periodic_query", names[0])
                 self.assertIn("list_periodic_queries", names[0])
                 self.assertNotIn("delegate_task", names[1])
+                self.assertNotIn("get_current_time", names[0])
                 system_prompt = conversations[0]["messages"][0]["content"]
                 self.assertEqual(
                     (root / "full_manager.md").read_text(encoding="utf-8"),
