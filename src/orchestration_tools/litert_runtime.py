@@ -112,22 +112,6 @@ def build_native_manager(
         }
         task_controller = NativeTaskController(TaskRPC(task_socket), permissions)
         tools.extend(create_task_tools(task_controller))
-        # prompt += (
-        #     "\n\nПоручения AGENT ставь через delegate_task(agent_id, task, period_seconds). "
-        #     "Если нужно выполнить один раз, period_seconds=0. "
-        #     "Если повторять каждую минуту, period_seconds=60. "
-        #     "Передавай в task только содержание работы, БЕЗ временных условий: "
-        #     "не включай 'каждую минуту', 'через час' и другие интервалы. "
-        #     "Время передавай ТОЛЬКО отдельным полем period_seconds. "
-        #     "Тактику выполнения и необходимость ответа определяет AGENT. "
-        #     "Если сообщение не требуется, AGENT может закончить молча. "
-        #     "Повторения организует TASK SYSTEM, не shell или AGENT. "
-        #     "Для возобновления остановленного задания используй start_periodic_query(task_id), "
-        #     "для остановки (с сохранением TASK) — stop_periodic_query(task_id), "
-        #     "для полного удаления сохранённого задания — delete_periodic_query(task_id), "
-        #     "для списка — list_periodic_queries(). "
-        #     "Не объявляй периодическое задание созданным без ok=true и task_id."
-        # )
     if delegations is not None:
         delegations.periodic_controller = task_controller
         tools.append(create_delegate_tool(delegations))
