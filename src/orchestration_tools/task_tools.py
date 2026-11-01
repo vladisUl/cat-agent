@@ -1,4 +1,4 @@
-"""Native MANAGER tools for durable periodic QUERY tasks in shared TASK SYSTEM.
+"""Native MANAGER tools for durable periodic and MQTT QUERY tasks in TASK SYSTEM.
 
 A native tool may run synchronously inside send_message(); it must never
 perform nested inference or create a local timer. Only authoritative RPC
@@ -70,9 +70,14 @@ def _task_id(value: object) -> int | None:
 class NativeTaskController:
     """Restrict persistent mutations to an active human MANAGER turn."""
 
-    def __init__(self, rpc, agent_permissions: Mapping[str, tuple[str, ...]]):
+    def __init__(self, rpc, agent_permissions: Mapping[str, tuple[str, ...]],
+                 event_tools: Mapping[str, dict] | None = None):
         self.rpc = rpc
+        self.agent_permissions = {
+            name: frozenset(names) for name, names in agent_permissions.items()
+        }
         self.agent_ids = frozenset(agent_permissions)
+        self.event_tools = dict(event_tools or {})
         self.enabled = False
         self.in_turn = False
         self._create_attempted = False
@@ -97,7 +102,6 @@ class NativeTaskController:
             and record["description"].startswith(TASK_PREFIX)
             and record.get("method") == "query"
             and record.get("executor") == "litert"
-            and record.get("timer_period_seconds") is not None
         )
 
     @staticmethod
@@ -161,6 +165,55 @@ class NativeTaskController:
             "delivery": "TASK QUERY notifications inbox",
         }
 
+    def create_external(self, agent_id: str, instruction: str, mqtt_tool: str) -> dict:
+        """Create a durable MQTT-triggered QUERY, with -1 as the public sentinel."""
+        if not self._allowed():
+            return {"ok": False, "error": "task_management_not_in_active_turn"}
+        if not isinstance(agent_id, str) or agent_id not in self.agent_ids:
+            return {"ok": False, "error": "unknown_agent"}
+        if (not isinstance(instruction, str) or not instruction.strip()
+                or len(instruction) > MAX_INSTRUCTION_CHARS):
+            return {"ok": False, "error": "invalid_task"}
+        if not isinstance(mqtt_tool, str) or mqtt_tool not in self.event_tools:
+            return {"ok": False, "error": "unknown_mqtt_event_tool"}
+        if mqtt_tool not in self.agent_permissions[agent_id]:
+            return {"ok": False, "error": "mqtt_tool_not_granted_to_agent"}
+        spec = self.event_tools[mqtt_tool]
+        # TASK SYSTEM currently has one broker subscription; reject signals
+        # attached to another broker rather than saving an untriggerable TASK.
+        from orchestration.mqtt_events import MQTT_HOST, MQTT_PORT
+        if (spec["host"], spec["port"]) != (MQTT_HOST, MQTT_PORT):
+            return {"ok": False, "error": "mqtt_event_broker_not_monitored"}
+        if self._create_attempted:
+            return {"ok": False, "error": "Already attempted creating a task in this turn; list tasks before retrying"}
+        self._create_attempted = True
+        instruction = instruction.strip()
+        topic, field = spec["topic"], spec["field"]
+        task_kwargs = dict(
+            description=TASK_PREFIX + instruction[:100],
+            text=instruction, method="query", skills=[mqtt_tool],
+            timer_period_seconds=None, enabled=True, executor="litert",
+            agent_id=agent_id,
+        )
+        binding_kwargs = dict(
+            source="mqtt", topic=topic, field=field, value_type="boolean",
+            values=["true", "false"], command=f"mqtt_sub.sh {topic} {field}",
+        )
+        try:
+            record = self.rpc.call(
+                "system", "create_external_task", task_kwargs, binding_kwargs,
+            )
+        except (TaskStoreError, OSError, ValueError) as exc:
+            return self._rpc_error("CREATE MQTT", exc)
+        LOGGER.info("native-task-tool MQTT CREATED id=%s agent=%s topic=%s field=%s",
+                    record["task_id"], agent_id, topic, field)
+        return {
+            "ok": True, "task_id": record["task_id"],
+            "agent_id": agent_id, "period_seconds": -1,
+            "mqtt_tool": mqtt_tool, "topic": topic, "field": field,
+            "status": "scheduled", "delivery": "TASK QUERY notifications inbox",
+        }
+
     def list_queries(self) -> dict:
         if not self._allowed():
             return {"ok": False, "error": "task_management_not_in_active_turn"}
@@ -169,17 +222,35 @@ class NativeTaskController:
             records = self.rpc.call("system", "task_snapshot")
         except (TaskStoreError, OSError, ValueError) as exc:
             return self._rpc_error("LIST", exc)
-        entries = [
-            {
-                "task_id": r["task_id"],
-                "description": r["description"][len(TASK_PREFIX):],
-                "period_seconds": r["timer_period_seconds"],
-                "enabled": r["enabled"],
-                "skills": r["skills"],
-                "agent_id": r.get("agent_id"),
+        try:
+            bindings = self.rpc.call("events", "snapshot")
+        except (TaskStoreError, OSError, ValueError) as exc:
+            return self._rpc_error("LIST MQTT", exc)
+        by_task = {
+            binding["task_id"]: binding for binding in bindings
+            if binding.get("source") == "mqtt"
+        }
+        entries = []
+        for record in records:
+            if not self._ours(record):
+                continue
+            external = record["timer_period_seconds"] is None
+            binding = by_task.get(record["task_id"]) if external else None
+            if external and binding is None:
+                # A malformed legacy record must not appear as a live sensor.
+                continue
+            entry = {
+                "task_id": record["task_id"],
+                "description": record["description"][len(TASK_PREFIX):],
+                "period_seconds": -1 if external else record["timer_period_seconds"],
+                "enabled": record["enabled"],
+                "skills": record["skills"],
+                "agent_id": record.get("agent_id"),
             }
-            for r in records if self._ours(r)
-        ]
+            if external:
+                entry.update(topic=binding["topic"], field=binding["field"],
+                             event_name=binding["name"])
+            entries.append(entry)
         LOGGER.info("native-task-tool LIST found=%d", len(entries))
         return {"ok": True, "tasks": entries}
 
@@ -261,16 +332,16 @@ class NativeTaskController:
 
 
 def create_task_tools(controller: NativeTaskController) -> list:
-    """Management tools only; delegate_task owns both task schedules."""
+    """Management tools only; delegate_task owns one-shot and saved tasks."""
     def list_periodic_queries() -> dict:
-        """Получить список периодических QUERY, созданных LiteRT MANAGER."""
+        """Список сохранённых LiteRT QUERY: period_seconds=-1 означает MQTT-событие."""
         return controller.list_queries()
 
     def start_periodic_query(task_id: int) -> dict:
-        """Возобновить остановленное периодическое задание LiteRT с прежним периодом.
+        """Возобновить сохранённый LiteRT QUERY (таймер или внешнее MQTT-событие).
 
-        Текст задания не изменяется. Первый запуск после одного полного
-        периода; уже работающее задание не перезапускается.
+        Для таймера первый запуск после одного полного периода.
+        MQTT-подписка остаётся в TASK SYSTEM; текст задания не меняется.
 
         Args:
             task_id (int): Номер TASK из delegate_task или list_periodic_queries.
@@ -278,7 +349,7 @@ def create_task_tools(controller: NativeTaskController) -> list:
         return controller.start(task_id)
 
     def stop_periodic_query(task_id: int) -> dict:
-        """Остановить ранее созданный периодический QUERY по номеру задачи.
+        """Остановить ранее созданный периодический или MQTT QUERY по номеру.
 
         Args:
             task_id (int): Номер TASK из delegate_task или list_periodic_queries.
@@ -286,7 +357,7 @@ def create_task_tools(controller: NativeTaskController) -> list:
         return controller.stop(task_id)
 
     def delete_periodic_query(task_id: int) -> dict:
-        """Удалить сохранённое периодическое задание LiteRT без возможности возобновления.
+        """Удалить сохранённое периодическое или MQTT задание LiteRT.
 
         Остановка (stop_periodic_query) сохраняет TASK в списке.
         Удаление освобождает запись и таймер; повторный запуск потребует нового задания.
