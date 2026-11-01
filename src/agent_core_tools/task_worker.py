@@ -400,9 +400,9 @@ class NativeTaskWorker:
                     "field": binding["field"], "value": value,
                 }
                 instruction += (
-                    "\\n\\nВнешнее MQTT-событие уже произошло. Используй именно"
+                    "\n\nВнешнее MQTT-событие уже произошло. Используй именно"
                     " зафиксированное ниже значение, не заменяй его новым чтением"
-                    " датчика.\\nMQTT_EVENT: "
+                    " датчика.\nMQTT_EVENT: "
                     + json.dumps(event_data, ensure_ascii=False)
                 )
             # The prompt is taken from the saved TASK record, not the IPC offer.
