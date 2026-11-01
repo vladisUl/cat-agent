@@ -151,6 +151,27 @@ class UnifiedDelegationTests(unittest.TestCase):
         finally:
             self._end()
 
+    def test_kitchen_leak_first_inactive_value_does_not_trigger(self):
+        self._begin()
+        try:
+            created = self.tool("agent_1", "Сообщи о протечке", -1,
+                                "get_kitchen_leak")
+        finally:
+            self._end()
+        self.assertTrue(created["ok"], created)
+        monitor = MqttEventMonitor(
+            self.engine.events, self.engine.consume_mqtt,
+            active_state_path=Path(__file__).resolve().parents[1] /
+                              "config" / "mqtt_event_active.json",
+        )
+        monitor._consume_line('zigbee2mqtt/kuhnya_leak {"water_leak":false}')
+        self.assertEqual(len(self.engine.runs), 0)
+        monitor._consume_line('zigbee2mqtt/kuhnya_leak {"water_leak":true}')
+        self.assertEqual(len(self.engine.runs), 1)
+        queued = next(iter(self.engine.runs.values()))
+        self.assertEqual(queued["event"]["task"], "true")
+        self.assertEqual(queued["event"]["source"], "mqtt")
+
     def test_mqtt_event_uses_trigger_time_value_not_later_sensor_read(self):
         self._begin()
         try:
