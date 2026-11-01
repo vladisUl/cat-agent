@@ -50,7 +50,8 @@ class DelegationBroker:
         self._pending.clear()
         return pending
 
-    def enqueue(self, agent_id: str, task: str, period_seconds: int = 0) -> dict:
+    def enqueue(self, agent_id: str, task: str, period_seconds: int = 0,
+                mqtt_tool: str = "") -> dict:
         if not self.enabled:
             return {"ok": False, "error": "delegation_disabled_during_warm"}
         if not self._turn_active:
@@ -63,6 +64,19 @@ class DelegationBroker:
             task.encode("utf-8", "strict")
         except UnicodeEncodeError:
             return {"ok": False, "error": "invalid_unicode"}
+        # -1 is the legacy external-event sentinel, not a timer interval.
+        # The named MQTT tool selects a validated topic/field from mqtt_tools.json.
+        external = (
+            (type(period_seconds) in (int, float) and period_seconds == -1)
+            or (isinstance(period_seconds, str)
+                and re.fullmatch(r"-1(?:\\.0+)?", period_seconds.strip()) is not None)
+        )
+        if external:
+            if self.periodic_controller is None:
+                return {"ok": False, "error": "external_TASK_SYSTEM_not_configured"}
+            return self.periodic_controller.create_external(agent_id, task, mqtt_tool)
+        if mqtt_tool:
+            return {"ok": False, "error": "mqtt_tool_requires_period_minus_one"}
         # Zero keeps the original synchronous one-shot delegation unchanged.
         # LiteRT native argument decoding may supply "0" or "60" as a string.
         zero = (
@@ -73,7 +87,7 @@ class DelegationBroker:
         if not zero:
             interval = _period_seconds(period_seconds)
             if interval is None:
-                return {"ok": False, "error": "period_seconds must be 0 or an integer in 10..604800"}
+                return {"ok": False, "error": "period_seconds must be -1, 0 or an integer in 10..604800"}
             if self.periodic_controller is None:
                 return {"ok": False, "error": "periodic_TASK_SYSTEM_not_configured"}
             return self.periodic_controller.create(interval, agent_id, task)
@@ -93,19 +107,25 @@ class DelegationBroker:
 
 
 def create_delegate_tool(broker: DelegationBroker):
-    def delegate_task(agent_id: str, task: str, period_seconds: int = 0) -> dict:
+    def delegate_task(agent_id: str, task: str, period_seconds: int = 0,
+                      mqtt_tool: str = "") -> dict:
         """Передать AGENT полное задание без изменения текста.
 
         period_seconds=0: выполнить один раз через привычную очередь и
         сообщить результат MANAGER. Период >0: TASK SYSTEM запускает того
         же AGENT с тем же текстом каждые N секунд, результат — QUERY inbox.
+        period_seconds=-1: сохранить внешний MQTT QUERY в TASK SYSTEM.
+        Требуется mqtt_tool — имя датчика из config/mqtt_tools.json
+        (get_corridor_motion или get_kitchen_leak). Срабатывает на изменениях
+        указанного логического поля; AGENT получает исходное значение события.
         AGENT самостоятельно использует все разрешённые ему инструменты.
 
         Args:
             agent_id (str): Имя агента, например agent_1.
             task (str): Полный текст поручения без расписания и без ограничений на инструменты.
-            period_seconds (int): 0 для одного запуска, 60 — каждую минуту.
+            period_seconds (int): -1 для события MQTT, 0 — однократно, 60 — раз в минуту.
+            mqtt_tool (str): Имя MQTT-инструмента только при period_seconds=-1.
         """
-        return broker.enqueue(agent_id, task, period_seconds)
+        return broker.enqueue(agent_id, task, period_seconds, mqtt_tool)
 
     return delegate_task
