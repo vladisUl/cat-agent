@@ -384,13 +384,14 @@ class NativeTaskWorker:
                 return
             instruction = task["text"]
             # The prompt is taken from the saved TASK record, not the IPC offer.
-            LOGGER.info("TASK %s -> %s %r", event["task_id"], agent_id.upper(), instruction)
+            LOGGER.info("%s START task_id=%s instruction=%r",
+                        agent_id.upper(), event["task_id"], instruction)
             result = self.manager.run_agent(agent_id, instruction)
             from orchestration_tools.agents import AgentState
             status_code = (result.status_code
                            if result.state is AgentState.FREE
                            else result.status_code or 1)
-            LOGGER.info("%s -> TASK %s state=%s status_code=%d text=%r",
+            LOGGER.info("%s RESULT task_id=%s state=%s status_code=%d text=%r",
                         agent_id.upper(), event["task_id"],
                         result.state.value, status_code, result.text)
             outcome = "error" if status_code != 0 else "done"

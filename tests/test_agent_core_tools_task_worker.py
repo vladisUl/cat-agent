@@ -135,6 +135,23 @@ class TaskWorkerTests(unittest.TestCase):
         self.assertIn("valid", operations)
         self.assertIn("finish", operations)
 
+    def test_agent_logs_start_and_result_without_fictitious_recipient(self):
+        task = self.make_task(method="query")
+        with self.assertLogs("agent_core_tools.task_worker", level="INFO") as logged:
+            self.assertTrue(self.worker.poll_once())
+            self.wait_model_done()
+        messages = "\n".join(logged.output)
+        self.assertIn(
+            f"AGENT_1 START task_id={task.task_id} instruction='TASK_TEST_ACTION'",
+            messages,
+        )
+        self.assertIn(
+            f"AGENT_1 RESULT task_id={task.task_id} state=FREE status_code=0 text='TASK_TEST_ACTION'",
+            messages,
+        )
+        self.assertNotIn(f"AGENT_1 -> TASK {task.task_id}", messages)
+        self.assertNotIn(f"TASK {task.task_id} -> AGENT_1", messages)
+
     def test_finish_rpc_outage_retries_ack_only(self):
         self.rpc.fail_finish_once = True
         self.make_task()
