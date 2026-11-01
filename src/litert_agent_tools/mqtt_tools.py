@@ -178,6 +178,27 @@ def _make_tool(name: str, description: str, broker: tuple, topic: str,
     return tool
 
 
+def mqtt_event_definitions(config_dir: Path | None = None) -> dict[str, dict]:
+    """Select explicitly typed boolean signals from the native MQTT tool catalog.
+
+    No separate MQTT event topic registry: each event points at one named
+    no-argument sensor tool and reuses its already-validated topic and field.
+    """
+    directory = Path(config_dir) if config_dir is not None else CONFIG_DIR
+    events = {}
+    for name, description, broker, topic, fields, validation in _definitions(directory):
+        if len(fields) != 1:
+            continue
+        field = next(iter(fields))
+        if validation.get(field, {}).get("type") != "boolean":
+            continue
+        events[name] = dict(
+            description=description, host=broker[0], port=broker[1],
+            topic=topic, field=field,
+        )
+    return events
+
+
 def create_mqtt_tools(config_dir: Path | None = None) -> list[Callable[[], dict]]:
     """Read JSON and return regular Python functions for Conversation(tools=...)."""
     directory = Path(config_dir) if config_dir is not None else CONFIG_DIR
