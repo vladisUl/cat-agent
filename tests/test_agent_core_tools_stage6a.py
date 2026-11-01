@@ -56,9 +56,12 @@ class NativeTerminalTests(unittest.TestCase):
                          ("CORE", "Native inference unavailable"))
 
     def test_query_from_live_and_inbox_is_displayed_once_and_acked_after_insertion(self):
-        self.receive(dict(NOTICE))
-        self.receive({"type": "task_query_results", "items": [dict(NOTICE)]})
+        with self.assertLogs("agent_core_tools.native_terminal", level="INFO") as logs:
+            self.receive(dict(NOTICE))
+            self.receive({"type": "task_query_results", "items": [dict(NOTICE)]})
         self.assertEqual(len(self.ui._dialog), 1)
+        self.assertEqual(sum("DIALOG_APPENDED run_id=test-run-one" in x
+                             for x in logs.output), 1)
         self.assertEqual(self.ui._dialog[-1][:2], ("AGENT_1", NOTICE["text"]))
         self.assertEqual(self.client.sent, [])  # No ACK before the display update.
         self.ui._request_snapshot()
@@ -66,10 +69,13 @@ class NativeTerminalTests(unittest.TestCase):
         self.assertIn(
             {"type": "task_query_ack", "run_id": NOTICE["run_id"]}, self.client.sent,
         )
-        self.receive({
-            "type": "task_query_acked", "run_id": NOTICE["run_id"],
-            "acknowledged": True,
-        })
+        with self.assertLogs("agent_core_tools.native_terminal", level="INFO") as logs:
+            self.receive({
+                "type": "task_query_acked", "run_id": NOTICE["run_id"],
+                "acknowledged": True,
+            })
+        self.assertIn("native-tui ACK_CONFIRMED run_id=test-run-one",
+                      "\n".join(logs.output))
         self.assertEqual(self.ui._pending_query_ack, {})
         self.receive({"type": "task_query_results", "items": [dict(NOTICE)]})
         self.assertEqual(len(self.ui._dialog), 1)
@@ -141,34 +147,43 @@ class NativeTerminalUnixTests(unittest.TestCase):
                 ui = NativeTerminalTUI(client, first["core"], first["status"])
 
                 client.send({"type": "user", "text": "Привет"})
-                ui._request_snapshot()
-                deadline = time.monotonic() + 3
-                while not any(x[0] == "MANAGER" for x in ui._dialog):
-                    self.assertLess(time.monotonic(), deadline)
-                    ui._poll_core()
-                    time.sleep(.01)
-                self.assertTrue(any(
-                    x[0] == "MANAGER" and "human says Привет" in x[1]
-                    for x in ui._dialog
-                ))
+                with self.assertLogs("agent_core_tools.server", level="INFO") as core_logs:
+                    ui._request_snapshot()
+                    deadline = time.monotonic() + 3
+                    while not any(x[0] == "MANAGER" for x in ui._dialog):
+                        self.assertLess(time.monotonic(), deadline)
+                        ui._poll_core()
+                        time.sleep(.01)
+                    self.assertTrue(any(
+                        x[0] == "MANAGER" and "human says Привет" in x[1]
+                        for x in ui._dialog
+                    ))
 
-                # On startup an unread QUERY can be recovered from
-                # TASK SYSTEM even if no live hint was received.
-                deadline = time.monotonic() + 3
-                while not any(x[0] == "AGENT_1" for x in ui._dialog):
-                    self.assertLess(time.monotonic(), deadline)
+                    # On startup an unread QUERY can be recovered from
+                    # TASK SYSTEM even if no live hint was received.
+                    deadline = time.monotonic() + 3
+                    while not any(x[0] == "AGENT_1" for x in ui._dialog):
+                        self.assertLess(time.monotonic(), deadline)
+                        ui._poll_core()
+                        time.sleep(.01)
+                    self.assertEqual(sum(x[0] == "AGENT_1" for x in ui._dialog), 1)
+                    ui._request_snapshot()
+                    deadline = time.monotonic() + 3
+                    while inbox.items:
+                        self.assertLess(time.monotonic(), deadline)
+                        ui._poll_core()
+                        time.sleep(.01)
+                    self.assertEqual(inbox.acks, [NOTICE["run_id"]])
                     ui._poll_core()
-                    time.sleep(.01)
-                self.assertEqual(sum(x[0] == "AGENT_1" for x in ui._dialog), 1)
-                ui._request_snapshot()
-                deadline = time.monotonic() + 3
-                while inbox.items:
-                    self.assertLess(time.monotonic(), deadline)
-                    ui._poll_core()
-                    time.sleep(.01)
-                self.assertEqual(inbox.acks, [NOTICE["run_id"]])
-                ui._poll_core()
-                self.assertFalse(ui._pending_query_ack)
+                    self.assertFalse(ui._pending_query_ack)
+                self.assertTrue(any(
+                    "native-task IPC_SENT run_id=test-run-one task_id=1 agent=agent_1 "
+                    "channel=inbox" in message for message in core_logs.output
+                ))
+                self.assertTrue(any(
+                    "native-task ACK_CONFIRMED run_id=test-run-one" in message
+                    for message in core_logs.output
+                ))
             finally:
                 client.close()
                 server.close()

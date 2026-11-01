@@ -269,11 +269,22 @@ class CoreServer:
             self._query_results.move_to_end(run_id)
             while len(self._query_results) > 32:
                 self._query_results.popitem(last=False)
-            if self._human is not None:
+            client = self._human
+            if client is None:
+                LOGGER.info("native-task IPC_DEFERRED run_id=%s task_id=%s agent=%s reason=no_client",
+                            run_id, item["task_id"], item["agent_id"])
+            else:
                 try:
-                    self._human.send(dict(item))
-                except OSError:
-                    LOGGER.info("native-task QUERY client disconnected run=%s", run_id)
+                    client.send(dict(item))
+                except OSError as exc:
+                    LOGGER.warning("native-task IPC_FAILED run_id=%s task_id=%s agent=%s "
+                                   "channel=live client=%s error=%s",
+                                   run_id, item["task_id"], item["agent_id"],
+                                   client.name, exc)
+                else:
+                    LOGGER.info("native-task IPC_SENT run_id=%s task_id=%s agent=%s "
+                                "channel=live client=%s",
+                                run_id, item["task_id"], item["agent_id"], client.name)
 
     def _task_agent_blocked(self, agent_id: str) -> bool:
         # Worker calls this on its RPC thread; model callback holds the same
@@ -766,6 +777,10 @@ class CoreServer:
                         client.send({"type": "error", "error": "Task SYSTEM inbox unavailable"})
                         return
                 client.send({"type": "task_query_results", "items": items})
+                for item in items:
+                    LOGGER.info("native-task IPC_SENT run_id=%s task_id=%s agent=%s "
+                                "channel=inbox client=%s",
+                                item["run_id"], item["task_id"], item["agent_id"], client.name)
                 return
             run_id = message.get("run_id")
             if not isinstance(run_id, str) or not 0 < len(run_id) <= 128:
@@ -782,6 +797,9 @@ class CoreServer:
             if acknowledged:
                 with self._lock:
                     self._query_results.pop(run_id, None)
+            LOGGER.info("native-task ACK_%s run_id=%s client=%s",
+                        "CONFIRMED" if acknowledged else "NOT_FOUND",
+                        run_id, client.name)
             client.send({
                 "type": "task_query_acked", "run_id": run_id,
                 "acknowledged": bool(acknowledged),

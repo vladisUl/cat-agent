@@ -64,6 +64,8 @@ class NativeTerminalTUI(TerminalTUI):
                        if isinstance(agent_id, str) and agent_id.startswith("agent_")
                        else "AGENT")
             self._append_dialog(speaker, text)
+            LOGGER.info("native-tui DIALOG_APPENDED run_id=%s task_id=%s speaker=%s",
+                        run_id, item.get("task_id"), speaker)
             self._query_seen.add(run_id)
             self._query_order.append(run_id)
             # Keep session memory bounded. Unacknowledged RUNs are not evicted
@@ -231,6 +233,7 @@ class NativeTerminalTUI(TerminalTUI):
                 if isinstance(run_id, str):
                     if item.get("acknowledged"):
                         self._query_acked.add(run_id)
+                        LOGGER.info("native-tui ACK_CONFIRMED run_id=%s", run_id)
                     else:
                         LOGGER.warning("Native QUERY ACK no longer found run=%s", run_id)
                     self._pending_query_ack.pop(run_id, None)
