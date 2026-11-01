@@ -67,6 +67,34 @@
           "type": "number"
         }
       }
+    },
+    {
+      "name": "get_corridor_motion",
+      "description": "Получить состояние датчика движения в коридоре: occupancy=true — движение обнаружено, false — движение отсутствует. Используется также для внешнего MQTT-события.",
+      "server": "old_server",
+      "topic": "zigbee2mqtt/dvigen_verh",
+      "fields": {
+        "occupancy": "occupancy"
+      },
+      "validation": {
+        "occupancy": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "name": "get_kitchen_leak",
+      "description": "Получить состояние датчика протечки на кухне: water_leak=true — обнаружена протечка, false — сухо. Используется также для внешнего MQTT-события.",
+      "server": "old_server",
+      "topic": "zigbee2mqtt/kuhnya_leak",
+      "fields": {
+        "water_leak": "water_leak"
+      },
+      "validation": {
+        "water_leak": {
+          "type": "boolean"
+        }
+      }
     }
   ]
 }
