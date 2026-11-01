@@ -1,6 +1,22 @@
 {
   "tools": [
     {
+      "name": "get_corridor_motion",
+      "description": "Движение в коридоре: occupancy=true — движение обнаружено, false — движения нет. MQTT-событие: поле occupancy.",
+      "server": "old_server",
+      "topic": "zigbee2mqtt/dvigen_verh",
+      "fields": {"occupancy": "occupancy"},
+      "validation": {"occupancy": {"type": "boolean"}}
+    },
+    {
+      "name": "get_kitchen_leak",
+      "description": "Протечка на кухне: water_leak=true — обнаружена протечка, false — сухо. MQTT-событие: поле water_leak.",
+      "server": "old_server",
+      "topic": "zigbee2mqtt/kuhnya_leak",
+      "fields": {"water_leak": "water_leak"},
+      "validation": {"water_leak": {"type": "boolean"}}
+    },
+    {
       "name": "get_outdoor_weather",
       "description": "Получить текущие температуру на улице (°C) и влажность воздуха (%).",
       "server": "old_server",

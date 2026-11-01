@@ -199,3 +199,18 @@ def create_mqtt_tools(config_dir: Path | None = None) -> list[Callable[[], dict]
     LOGGER.info("native-tools MQTT loaded=%s from=%s",
                 tuple(fn.__name__ for fn in tools), directory)
     return tools
+
+
+def mqtt_event_catalog(config_dir: Path | None = None) -> dict:
+    """Boolean event sources from the same validated native tool definitions."""
+    directory = Path(config_dir) if config_dir is not None else CONFIG_DIR
+    catalog = {}
+    for name, description, broker, topic, fields, validation in _definitions(directory):
+        for field, rule in validation.items():
+            if rule.get('type') == 'boolean':
+                catalog[(name, field)] = dict(
+                    tool=name, description=description, topic=topic, field=field,
+                    value_type='boolean', values=['true', 'false'],
+                    host=broker[0], port=broker[1],
+                )
+    return catalog

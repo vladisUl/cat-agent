@@ -9,7 +9,7 @@ import logging
 
 from litert_agent_tools.conversation import NativeConversationChat
 from litert_agent_tools.command_tools import create_command_tools
-from litert_agent_tools.mqtt_tools import create_mqtt_tools
+from litert_agent_tools.mqtt_tools import create_mqtt_tools, mqtt_event_catalog
 from litert_agent_tools.shell_tools import ShellConfig, ShellGate, create_shell_tool
 
 from .agent_config import effective_agent_tool_names, load_agent_specs
@@ -124,7 +124,19 @@ def build_native_manager(
             spec.agent_id: effective_agent_tool_names(spec, shared_names)
             for spec in specs
         }
-        task_controller = NativeTaskController(TaskRPC(task_socket), permissions)
+        events = mqtt_event_catalog() if enable_mqtt else {}
+        events = {key: value for key, value in events.items() if key[0] in shared_names}
+        task_controller = NativeTaskController(TaskRPC(task_socket), permissions, events)
+        if events:
+            prompt += (
+                '\n\nВнешние MQTT-задания: delegate_task с period_seconds=-1 и event_tool. '
+                'Задание сохраняется в TASK SYSTEM; запуск при изменении поля датчика. '
+                'AGENT получает значение события, повторное чтение для определения события не нужно. '
+                'Для остановки/возобновления/удаления используй те же инструменты управления заданиями. '
+                'Доступные источники:\n'
+            )
+            for (name, field), source in events.items():
+                prompt += f"- event_tool={name}, event_field={field}: {source['description']}\n"
         tools.extend(create_task_tools(task_controller))
     if delegations is not None:
         delegations.periodic_controller = task_controller

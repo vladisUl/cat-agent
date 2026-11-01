@@ -50,7 +50,8 @@ class DelegationBroker:
         self._pending.clear()
         return pending
 
-    def enqueue(self, agent_id: str, task: str, period_seconds: int = 0) -> dict:
+    def enqueue(self, agent_id: str, task: str, period_seconds: int = 0,
+                event_tool: str = '', event_field: str = '') -> dict:
         if not self.enabled:
             return {"ok": False, "error": "delegation_disabled_during_warm"}
         if not self._turn_active:
@@ -63,6 +64,15 @@ class DelegationBroker:
             task.encode("utf-8", "strict")
         except UnicodeEncodeError:
             return {"ok": False, "error": "invalid_unicode"}
+        external = (type(period_seconds) in (int, float) and period_seconds == -1) or (
+            isinstance(period_seconds, str) and
+            re.fullmatch(r'-1(?:\.0+)?', period_seconds.strip()) is not None)
+        if external:
+            if self.periodic_controller is None:
+                return {'ok': False, 'error': 'TASK_SYSTEM_not_configured'}
+            return self.periodic_controller.create_external(agent_id, task, event_tool, event_field)
+        if event_tool or event_field:
+            return {'ok': False, 'error': 'event_tool/event_field require period_seconds=-1'}
         # Zero keeps the original synchronous one-shot delegation unchanged.
         # LiteRT native argument decoding may supply "0" or "60" as a string.
         zero = (
@@ -73,7 +83,7 @@ class DelegationBroker:
         if not zero:
             interval = _period_seconds(period_seconds)
             if interval is None:
-                return {"ok": False, "error": "period_seconds must be 0 or an integer in 10..604800"}
+                return {"ok": False, "error": "period_seconds must be -1, 0 or an integer in 10..604800"}
             if self.periodic_controller is None:
                 return {"ok": False, "error": "periodic_TASK_SYSTEM_not_configured"}
             return self.periodic_controller.create(interval, agent_id, task)
@@ -93,7 +103,8 @@ class DelegationBroker:
 
 
 def create_delegate_tool(broker: DelegationBroker):
-    def delegate_task(agent_id: str, task: str, period_seconds: int = 0) -> dict:
+    def delegate_task(agent_id: str, task: str, period_seconds: int = 0,
+                      event_tool: str = '', event_field: str = '') -> dict:
         """Передать AGENT полное задание без изменения текста.
 
         period_seconds=0: выполнить один раз через привычную очередь и
@@ -104,8 +115,10 @@ def create_delegate_tool(broker: DelegationBroker):
         Args:
             agent_id (str): Имя агента, например agent_1.
             task (str): Полный текст поручения без расписания и без ограничений на инструменты.
-            period_seconds (int): 0 для одного запуска, 60 — каждую минуту.
+            period_seconds (int): -1 для внешнего MQTT-события, 0 однократно, 60 каждую минуту.
+            event_tool (str): При -1 имя MQTT-инструмента датчика из каталога; иначе пустая строка.
+            event_field (str): При -1 исходное поле датчика (occupancy, water_leak); можно опустить, если поле одно.
         """
-        return broker.enqueue(agent_id, task, period_seconds)
+        return broker.enqueue(agent_id, task, period_seconds, event_tool, event_field)
 
     return delegate_task
