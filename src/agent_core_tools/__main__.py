@@ -22,12 +22,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--system-file', type=Path)
     parser.add_argument('--max-context-tokens', type=int, default=4096)
     parser.add_argument('--max-output-tokens', type=int, default=512)
+    parser.add_argument('--max-tool-calls', type=int, default=12)
+    parser.add_argument('--tool-timeout', type=float, default=180.0)
+    parser.add_argument('--max-tool-result-bytes', type=int, default=2048)
     parser.add_argument('--cpu-threads', type=int)
     parser.add_argument('--backend', choices=('cpu', 'gpu'), default='cpu')
     parser.add_argument('--vision-backend', choices=('cpu', 'gpu', 'none'), default='cpu')
     parser.add_argument('--activation-dtype', choices=('fp32', 'fp16', 'int16', 'int8'))
     parser.add_argument('--speculative', action='store_true')
-    parser.add_argument('--temperature', type=float, default=0.2)
+    parser.add_argument('--temperature', type=float, default=0.0)
     parser.add_argument('--top-p', type=float, default=1.0)
     parser.add_argument('--enable-shell', action='store_true')
     parser.add_argument('--shell-cwd', type=Path, default=Path('/opt/model'))
@@ -106,6 +109,8 @@ def main(argv: list[str] | None = None) -> int:
                 enable_mqtt=not args.disable_mqtt,
                 max_context_tokens=args.max_context_tokens,
                 max_output_tokens=args.max_output_tokens,
+                max_tool_calls=args.max_tool_calls, tool_timeout=args.tool_timeout,
+                max_tool_result_bytes=args.max_tool_result_bytes,
                 cpu_threads=args.cpu_threads, backend_name=args.backend,
                 vision_backend_name=args.vision_backend,
                 activation_dtype=args.activation_dtype,

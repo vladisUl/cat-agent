@@ -18,6 +18,27 @@ FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "cat-agent.yaml"
 
 
 class YamlConfigTest(unittest.TestCase):
+    def test_native_settings_exported_separately_from_legacy_agent(self):
+        source = yaml.safe_load(self.config_path.read_text())
+        source['litert']['native'] = {'temperature': 0.1, 'max_output_tokens': 768,
+                                      'max_context_tokens': 8192, 'max_tool_calls': 7}
+        self.config_path.write_text(yaml.safe_dump(source))
+        output = self._capture('litert')
+        for setting in ('TEMPERATURE=0.1', 'MAX_OUTPUT_TOKENS=768',
+                        'MAX_CONTEXT_TOKENS=8192', 'MAX_TOOL_CALLS=7'):
+            self.assertIn('export CAT_AGENT_NATIVE_' + setting, output)
+
+    def test_invalid_native_budget_rejected(self):
+        source = yaml.safe_load(self.config_path.read_text())
+        for settings in ({'max_context_tokens': 512}, {'max_tool_calls': 0},
+                         {'temperature': float('nan')}, {'tool_timeout': float('inf')},
+                         {'max_tool_result_bytes': 12}):
+            with self.subTest(settings=settings):
+                source['litert']['native'] = settings
+                self.config_path.write_text(yaml.safe_dump(source))
+                with self.assertRaises(ValueError):
+                    load_app_config(self.config_path)
+
     def setUp(self) -> None:
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

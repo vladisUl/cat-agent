@@ -15,6 +15,7 @@ class AgentSpec:
     agent_id: str
     prompt_file: Path
     tool_names: tuple[str, ...]
+    inherit_shared_tools: bool = True
 
 
 def load_agent_specs(
@@ -30,8 +31,14 @@ def load_agent_specs(
     specs: list[AgentSpec] = []
     used: set[str] = set()
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != {"id", "prompt", "tools"}:
-            raise ValueError("Agent entry requires exactly id, prompt, tools")
+        if not isinstance(entry, dict) or not (
+            {'id', 'prompt', 'tools'} <= set(entry)
+            <= {'id', 'prompt', 'tools', 'inherit_shared_tools'}
+        ):
+            raise ValueError('Agent entry requires id, prompt, tools and optional inherit_shared_tools')
+        inherit = entry.get('inherit_shared_tools', True)
+        if type(inherit) is not bool:
+            raise ValueError('inherit_shared_tools must be boolean')
         ident, prompt, tools = entry["id"], entry["prompt"], entry["tools"]
         if not isinstance(ident, str) or not AGENT_ID.fullmatch(ident) or ident in used:
             raise ValueError(f"Invalid/duplicate agent id: {ident!r}")
@@ -46,7 +53,7 @@ def load_agent_specs(
             prompt_path = (Path(prompt_dir) if prompt_dir is not None else path.parent) / prompt_path
         if not prompt_path.is_file():
             raise ValueError(f"{ident}: prompt not found: {prompt_path}")
-        specs.append(AgentSpec(ident, prompt_path.resolve(), tuple(tools)))
+        specs.append(AgentSpec(ident, prompt_path.resolve(), tuple(tools), inherit))
         used.add(ident)
     return tuple(specs)
 
@@ -58,4 +65,4 @@ def effective_agent_tool_names(
 
     Native Conversation and TASK worker must use this same calculation.
     """
-    return tuple(dict.fromkeys((*builtins, *spec.tool_names)))
+    return tuple(dict.fromkeys((*(builtins if spec.inherit_shared_tools else ()), *spec.tool_names)))

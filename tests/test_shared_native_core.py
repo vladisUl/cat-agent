@@ -213,6 +213,13 @@ class NativeSharedLauncherTests(unittest.TestCase):
         self.stub_config = self.root / "config-interpreter"
         self.stub_config.write_text(
             '#!/bin/sh\n'
+            'echo "export CAT_AGENT_NATIVE_MAX_CONTEXT_TOKENS=8192"\n'
+            'echo "export CAT_AGENT_NATIVE_MAX_OUTPUT_TOKENS=768"\n'
+            'echo "export CAT_AGENT_NATIVE_MAX_TOOL_CALLS=7"\n'
+            'echo "export CAT_AGENT_NATIVE_TOOL_TIMEOUT=90"\n'
+            'echo "export CAT_AGENT_NATIVE_MAX_TOOL_RESULT_BYTES=1024"\n'
+            'echo "export CAT_AGENT_NATIVE_TEMPERATURE=0.1"\n'
+            'echo "export CAT_AGENT_NATIVE_TOP_P=0.9"\n'
             'printf "export LITERT_AGENT_MODEL_PATH=%s\\n" "$NATIVE_FAKE_PROFILE_MODEL"\n'
             'printf "export LITERT_AGENT_BACKEND=%s\\n" "$NATIVE_FAKE_BACKEND"\n'
             'printf "export LITERT_AGENT_CPU_THREADS=8\\n"\n'
@@ -283,6 +290,11 @@ class NativeSharedLauncherTests(unittest.TestCase):
         args = json.loads(self.capture.read_text(encoding="utf-8"))
         self.assertEqual(args[:2], ["-m", "agent_core_tools"])
         opts = args[2:]
+        for flag, value in {'--max-context-tokens': '8192', '--max-output-tokens': '768',
+                            '--max-tool-calls': '7', '--tool-timeout': '90',
+                            '--max-tool-result-bytes': '1024', '--temperature': '0.1',
+                            '--top-p': '0.9'}.items():
+            self.assertEqual(opts[opts.index(flag) + 1], value)
         self.assertEqual(opts[opts.index("--task-socket") + 1], "/run/cat-agent/tasks.sock")
         self.assertEqual(opts[opts.index("--socket") + 1], "/run/cat-agent/litert-tools.sock")
         self.assertEqual(opts[opts.index("--model") + 1], str(self.model))

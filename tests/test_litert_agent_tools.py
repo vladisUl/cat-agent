@@ -504,7 +504,7 @@ class NativeExecutionStatusTests(unittest.TestCase):
 
         wrapped = ledger.wrap(test_tool)
         self.assertEqual(wrapped.__name__, "test_tool")
-        self.assertEqual(inspect.signature(wrapped), inspect.signature(test_tool))
+        self.assertEqual(inspect.signature(wrapped), inspect.signature(test_tool, eval_str=True))
         self.assertEqual(ledger.wrap("test-sentinel"), "test-sentinel")
         wrapped("fail")  # Warmup, not a task execution.
         self.assertEqual(ledger.calls, 0)

@@ -12,6 +12,7 @@ from collections.abc import Callable
 from .contracts import ManagerTurn
 from .agents import AgentOutcome, AgentPool, AgentState
 from .delegation import DelegationBroker
+from litert_agent_tools.tool_guard import TURN_ACTIVE, TURN_BUDGET
 
 LOGGER = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class NativeManager:
     def __init__(
         self, chat, engine, *, model_name: str, backend_name: str = "cpu",
         agents: AgentPool | None = None, delegations: DelegationBroker | None = None,
-        task_controller=None, shared_tool_names: tuple[str, ...] = (),
+        task_controller=None, shared_tool_names: tuple[str, ...] = (), tool_resources=(),
     ):
         self.chat = chat
         self.engine = engine
@@ -31,6 +32,7 @@ class NativeManager:
         self.delegations = delegations
         self.task_controller = task_controller
         self.shared_tool_names = shared_tool_names
+        self.tool_resources = tuple(tool_resources)
         # Read LiteRT's native token count only on the serialized model
         # worker; socket snapshot requests use this cached scalar.
         self._working_kv_tokens = getattr(chat, "working_kv_tokens", chat.base_kv_tokens)
@@ -49,9 +51,13 @@ class NativeManager:
     def respond_guarded(
         self, session_id: str, text: str, is_session_active: Callable[[], bool],
     ) -> ManagerTurn:
+        token = TURN_ACTIVE.set(is_session_active)
+        budget_token = TURN_BUDGET.set({})
         try:
             return self._respond_turn(session_id, text, is_session_active)
         finally:
+            TURN_ACTIVE.reset(token)
+            TURN_BUDGET.reset(budget_token)
             # A full turn may contain several model calls / AGENT handoffs.
             self._working_kv_tokens = getattr(
                 self.chat, "working_kv_tokens", self.base_kv_tokens,
@@ -173,4 +179,8 @@ class NativeManager:
             try:
                 self.chat.close()
             finally:
-                self.engine.close()
+                try:
+                    self.engine.close()
+                finally:
+                    for resource in self.tool_resources:
+                        resource.close()

@@ -329,7 +329,14 @@ class CoreServer:
                 else:
                     from orchestration_tools.agents import AgentState
                     from orchestration_tools.contracts import ManagerTurn
-                    outcome = self._manager.run_agent(agent_id, text)
+                    from litert_agent_tools.tool_guard import TURN_ACTIVE
+                    active_token = TURN_ACTIVE.set(
+                        lambda: self._client_still_active(client, epoch),
+                    )
+                    try:
+                        outcome = self._manager.run_agent(agent_id, text)
+                    finally:
+                        TURN_ACTIVE.reset(active_token)
                     turn = ManagerTurn(
                         "reply" if outcome.state is AgentState.FREE else "error",
                         outcome.text,

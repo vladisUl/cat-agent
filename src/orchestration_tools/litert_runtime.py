@@ -26,10 +26,12 @@ def build_native_manager(
     shell_cwd: Path = Path('/opt/model'), shell_timeout: float = 15.0,
     shell_max_output: int = 16384, enable_mqtt: bool = True,
     max_context_tokens: int = 4096, max_output_tokens: int = 512,
+    max_tool_calls: int = 12, tool_timeout: float = 180.0,
+    max_tool_result_bytes: int = 2048,
     cpu_threads: int | None = None, backend_name: str = "cpu",
     vision_backend_name: str = "cpu",
     activation_dtype: str | None = None, speculative: bool = False,
-    temperature: float = 0.2,
+    temperature: float = 0.0,
     top_p: float = 1.0, trace_native_json: bool = False,
     agent_config: Path | None = None,
     task_socket: Path | None = None,
@@ -45,6 +47,18 @@ def build_native_manager(
         raise ValueError('Manager prompt is empty')
     if min(max_context_tokens, max_output_tokens) < 1:
         raise ValueError('Token limits must be positive')
+    from litert_agent_tools.tool_guard import ToolGuard
+    from litert_agent_tools.conversation import ToolExecutionLedger
+    guard_options = dict(max_context_tokens=max_context_tokens,
+                         max_tool_calls=max_tool_calls, tool_timeout=tool_timeout,
+                         max_tool_result_bytes=max_tool_result_bytes,
+                         result_dir=shell_cwd / 'DATA' / 'tool-results')
+    ToolGuard(ToolExecutionLedger(), max_context_tokens=max_context_tokens,
+              max_output_tokens=max_output_tokens, max_calls=max_tool_calls,
+              timeout=tool_timeout, max_result_bytes=max_tool_result_bytes)
+    LOGGER.info('Native limits context=%d output=%d tools=%d timeout=%s result_bytes=%d temperature=%s top_p=%s',
+                max_context_tokens, max_output_tokens, max_tool_calls, tool_timeout,
+                max_tool_result_bytes, temperature, top_p)
     if cpu_threads is not None and cpu_threads < 1:
         raise ValueError('CPU threads must be positive')
     if backend_name not in ('cpu', 'gpu'):
@@ -69,7 +83,8 @@ def build_native_manager(
         )
     # MQTT and configured executable tools are shared with native AGENTs.
     # Shell remains an opt-in tool for each AGENT.
-    tools = create_mqtt_tools() if enable_mqtt else []
+    mqtt_tools = create_mqtt_tools() if enable_mqtt else []
+    tools = list(mqtt_tools)
     shell_gate = ShellGate() if enable_shell or command_dir is not None else None
     if command_dir is not None:
         tools.extend(create_command_tools(
@@ -83,6 +98,8 @@ def build_native_manager(
             max_output_bytes=shell_max_output,
         ), gate=shell_gate))
     tool_names = [tool.__name__ for tool in tools]
+    if 'read_tool_result' in tool_names:
+        raise ValueError('read_tool_result is reserved for saved tool results')
     if len(tool_names) != len(set(tool_names)):
         raise ValueError(f"Duplicate native tool names: {tool_names}")
     available_tools = {tool.__name__: tool for tool in tools}
@@ -166,6 +183,7 @@ def build_native_manager(
             thinking_config=thinking,
             trace_native_json=trace_native_json,
             picture_root=shell_cwd,
+            **guard_options,
         )
         for spec in specs:
             # Shared tools require no per-agent JSON repetition.
@@ -183,6 +201,7 @@ def build_native_manager(
                 thinking_config=thinking,
                 trace_native_json=trace_native_json,
                 picture_root=shell_cwd,
+                **guard_options,
             )
             agents.append(NativeAgent(spec.agent_id, agent_chat))
         if shell_gate is not None:
@@ -196,6 +215,7 @@ def build_native_manager(
             agents=AgentPool(agents), delegations=delegations,
             task_controller=task_controller,
             shared_tool_names=shared_names,
+            tool_resources=[mqtt_tools] if hasattr(mqtt_tools, 'close') else (),
         )
     except BaseException:
         for agent in reversed(agents):
@@ -203,4 +223,6 @@ def build_native_manager(
         if chat is not None:
             chat.close()
         engine.close()
+        if hasattr(mqtt_tools, 'close'):
+            mqtt_tools.close()
         raise

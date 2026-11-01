@@ -1,4 +1,12 @@
 litert:
+  native:
+    max_context_tokens: 4096
+    max_output_tokens: 512
+    max_tool_calls: 12
+    tool_timeout: 180
+    max_tool_result_bytes: 2048
+    temperature: 0.0
+    top_p: 1.0
   command_dir: /opt/model/bin
   active_profile: e2b-wsl3050
 

@@ -495,6 +495,7 @@ Subsystem notes are kept separate from this overview:
 - [Image input](docs/read-pic.md)
 - [MCP](docs/mcp.md)
 - [Native LiteRT CORE and WSL launch](docs/shared-native-core.md)
+- [Native tool limits, saved results and optional MQTT cache](docs/native-tool-limits.md)
 - [Native Conversation/KV isolation probe](docs/core-tools-context-probe.md)
 
 ## Project status

@@ -12,6 +12,7 @@ from typing import Any
 from .clone import clone_conversation
 from .native_json_trace import attach_native_json_trace
 from .vision_input import native_picture_message
+from .tool_guard import ResultStore, ToolGuard, typed_signature
 
 
 LOGGER = logging.getLogger(__name__)
@@ -125,6 +126,7 @@ class ToolExecutionLedger:
         @wraps(function)
         def measured(*args, **kwargs):
             return self._measure(function, *args, **kwargs)
+        measured.__signature__ = typed_signature(function)
         return measured
 
 
@@ -148,6 +150,11 @@ class NativeConversationChat:
         warm_message: str = "warm",
         trace_native_json: bool = False,
         picture_root: Path | None = None,
+        max_context_tokens: int = 4096,
+        max_tool_calls: int = 12,
+        tool_timeout: float = 180.0,
+        max_tool_result_bytes: int = 2048,
+        result_dir: Path | None = None,
     ):
         if not system_prompt.strip():
             raise ValueError("The temporary system prompt must not be empty")
@@ -162,6 +169,17 @@ class NativeConversationChat:
         self._trace_native_json = trace_native_json
         self._picture_root = Path(picture_root) if picture_root is not None else None
         self._tool_ledger = ToolExecutionLedger()
+        self._result_store = ResultStore(result_dir) if result_dir is not None else None
+        if self._result_store is not None:
+            tools = [*tools, self._result_store.tool()]
+        self._guard_options = dict(
+            max_calls=max_tool_calls, timeout=tool_timeout,
+            max_context_tokens=max_context_tokens,
+            max_output_tokens=max_output_tokens or 512,
+            max_result_bytes=max_tool_result_bytes, store=self._result_store,
+        )
+        # Validate configuration before creating native resources.
+        ToolGuard(self._tool_ledger, **self._guard_options)
         self._base_warm_reply: str | None = None
         kwargs: dict[str, Any] = {
             "messages": [{"role": "system", "content": system_prompt}],
@@ -178,6 +196,7 @@ class NativeConversationChat:
         try:
             started = time.monotonic()
             self._base = engine.create_conversation(**kwargs)
+            self._attach_guard(self._base)
             initial_kv = _kv_tokens(self._base)
 
             # First real inference populates the system + tools preface KV.
@@ -244,6 +263,7 @@ class NativeConversationChat:
     def _clone_base(self):
         assert self._base is not None
         fresh = clone_conversation(self._base)
+        self._attach_guard(fresh)
         if self._trace_native_json:
             fresh = attach_native_json_trace(fresh)
         kv = _kv_tokens(fresh)
@@ -254,6 +274,11 @@ class NativeConversationChat:
                 f"Cloned KV length {kv} does not match warmed BASE {self._base_kv_tokens}"
             )
         return fresh
+
+    def _attach_guard(self, conversation):
+        guard = ToolGuard(self._tool_ledger, **self._guard_options)
+        guard.conversation = conversation
+        conversation.tool_event_handler = guard
 
     def ask(self, question: str) -> str:
         if self._closed or self._working is None:
@@ -267,6 +292,7 @@ class NativeConversationChat:
         ledger.calls = 0
         ledger.status_code = 0
         ledger.active = True
+        self._working.tool_event_handler.reset()
         try:
             message = (
                 native_picture_message(question, self._picture_root)

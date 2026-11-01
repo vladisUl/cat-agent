@@ -82,6 +82,8 @@ def main(argv: list[str] | None = None) -> int:
             engine, prompt, native_tools,
             sampler_config=sampler,
             max_output_tokens=args.max_output_tokens,
+            max_context_tokens=args.max_context_tokens,
+            result_dir=args.shell_cwd / 'DATA' / 'tool-results',
             thinking_config=litert_lm.ThinkingConfig(enable_thinking=False),
             warm_message=args.warm_message,
             trace_native_json=args.trace_native_json,
@@ -122,7 +124,10 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"RESET ERROR: {reset_exc}", file=sys.stderr)
                         return 1
     finally:
-        engine.close()
+        try:
+            engine.close()
+        finally:
+            native_tools.close()
     return 0
 
 

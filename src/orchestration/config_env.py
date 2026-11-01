@@ -48,6 +48,8 @@ def _export_common(config: AppConfig, *, reasoning_effort: str) -> None:
 def _export_litert(config: AppConfig) -> None:
     _export_common(config, reasoning_effort="none")
     _export("CAT_AGENT_NATIVE_COMMAND_DIR", config.litert.command_dir)
+    for key, value in config.litert.native.items():
+        _export('CAT_AGENT_NATIVE_' + key.upper(), value)
     profile = config.litert.active
     _export("LITERT_AGENT_MODEL_PATH", profile.model)
     _export("LITERT_AGENT_BACKEND", profile.backend)

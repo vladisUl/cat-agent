@@ -87,6 +87,13 @@ args=(
     --agent-config "$AGENTS"
     --command-dir "${CAT_AGENT_NATIVE_COMMAND_DIR:-/opt/model/bin}"
     --shell-cwd "$WORKSPACE"
+    --max-context-tokens "$CAT_AGENT_NATIVE_MAX_CONTEXT_TOKENS"
+    --max-output-tokens "$CAT_AGENT_NATIVE_MAX_OUTPUT_TOKENS"
+    --max-tool-calls "$CAT_AGENT_NATIVE_MAX_TOOL_CALLS"
+    --tool-timeout "$CAT_AGENT_NATIVE_TOOL_TIMEOUT"
+    --max-tool-result-bytes "$CAT_AGENT_NATIVE_MAX_TOOL_RESULT_BYTES"
+    --temperature "$CAT_AGENT_NATIVE_TEMPERATURE"
+    --top-p "$CAT_AGENT_NATIVE_TOP_P"
     --enable-task-worker
     --enable-shell
 )

@@ -95,8 +95,8 @@ class RuntimeAgentTests(unittest.TestCase):
                 engine.created[0]["messages"][0]["content"],
             )
             self.assertEqual(engine.created[1]["messages"][0]["content"], "Я агент")
-            self.assertEqual(engine.created[1]["tools"], [])
-            self.assertEqual(len(engine.created[0]["tools"]), 1)
+            self.assertEqual([t.__name__ for t in engine.created[1]["tools"]], ['read_tool_result'])
+            self.assertEqual(len(engine.created[0]["tools"]), 2)
             self.assertEqual(engine.created[0]["tools"][0].__name__, "delegate_task")
             self.assertEqual(
                 engine.created[0]["tools"][0]("agent_1", "проверить"),
@@ -170,9 +170,9 @@ class RuntimeAgentTests(unittest.TestCase):
                     for item in conversations
                 ]
                 self.assertEqual(manager.shared_tool_names, mqtt)
-                self.assertEqual(tuple(names[0]), mqtt + ("shell", "delegate_task"))
-                self.assertEqual(tuple(names[1]), mqtt + ("shell",))
-                self.assertEqual(tuple(names[2]), mqtt)
+                self.assertEqual(tuple(names[0]), mqtt + ("shell", "delegate_task", 'read_tool_result'))
+                self.assertEqual(tuple(names[1]), mqtt + ("shell", 'read_tool_result'))
+                self.assertEqual(tuple(names[2]), mqtt + ('read_tool_result',))
                 added = next(tool for tool in conversations[2]["tools"]
                              if tool.__name__ == "test_added_mqtt_sensor")
                 with patch(
@@ -229,7 +229,7 @@ class RuntimeAgentTests(unittest.TestCase):
                 conversations = FakeEngine.instances[0].created
                 self.assertEqual(
                     [tool.__name__ for tool in conversations[1]["tools"]],
-                    ["shell"],
+                    ["shell", 'read_tool_result'],
                 )
             finally:
                 manager.close()

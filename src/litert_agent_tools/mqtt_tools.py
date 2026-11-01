@@ -32,7 +32,7 @@ def _int_range(value, low: int, high: int, label: str) -> int:
 
 def _definitions(directory: Path) -> list[tuple]:
     settings = _load(directory / "mqtt.json")
-    if set(settings) != {"port", "timeout", "servers"}:
+    if not {'port', 'timeout', 'servers'} <= set(settings) <= {'port', 'timeout', 'servers', 'cache_max_age_seconds'}:
         raise ValueError("mqtt.json requires port, timeout, servers")
     port = _int_range(settings["port"], 1, 65535, "MQTT port")
     timeout = _int_range(settings["timeout"], 1, 60, "MQTT timeout")
@@ -119,8 +119,12 @@ def _read_measurement(broker: tuple, topic: str, fields: dict, validation: dict)
         return {"ok": False, "error": f"MQTT process error: {exc}"}
     if result.returncode != 0:
         return {"ok": False, "error": f"MQTT read failed (exit {result.returncode}): {result.stderr.strip()[:300]}"}
+    return _parse_measurement(result.stdout, fields, validation)
+
+
+def _parse_measurement(raw, fields, validation):
     try:
-        payload = json.loads(result.stdout)
+        payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise ValueError("MQTT payload must be a JSON object")
         output = {"ok": True}
@@ -145,15 +149,25 @@ def _read_measurement(broker: tuple, topic: str, fields: dict, validation: dict)
                     raise ValueError(f"{source} above maximum")
             output[destination] = value
         return output
-    except (ValueError, KeyError, TypeError, OverflowError) as exc:
+    except (ValueError, KeyError, TypeError, OverflowError, UnicodeError) as exc:
         return {"ok": False, "error": f"Invalid MQTT payload: {exc}"}
 
 
 def _make_tool(name: str, description: str, broker: tuple, topic: str,
-               fields: dict, validation: dict) -> Callable[[], dict]:
+               fields: dict, validation: dict, cache=None) -> Callable[[], dict]:
     def tool() -> dict:
         LOGGER.info("native-tool CALL name=%s args={}", name)
-        result = _read_measurement(broker, topic, fields, validation)
+        if cache is None:
+            result = _read_measurement(broker, topic, fields, validation)
+        else:
+            try:
+                payload, age, retained = cache.read(topic, broker[2])
+                result = _parse_measurement(payload, fields, validation)
+                if result['ok']:
+                    result['received_age_seconds'] = round(age, 3)
+                    result['retained'] = retained
+            except (RuntimeError, OSError, ValueError) as exc:
+                result = {'ok': False, 'error': str(exc)}
         LOGGER.info("native-tool RESULT name=%s result=%s",
                     name, json.dumps(result, ensure_ascii=False))
         return result
@@ -167,7 +181,21 @@ def _make_tool(name: str, description: str, broker: tuple, topic: str,
 def create_mqtt_tools(config_dir: Path | None = None) -> list[Callable[[], dict]]:
     """Read JSON and return regular Python functions for Conversation(tools=...)."""
     directory = Path(config_dir) if config_dir is not None else CONFIG_DIR
-    tools = [_make_tool(*values) for values in _definitions(directory)]
+    from .mqtt_cache import MqttCache, MqttTools
+    definitions = _definitions(directory)
+    settings = _load(directory / 'mqtt.json')
+    max_age = settings.get('cache_max_age_seconds', 0)
+    if type(max_age) not in (int, float) or not math.isfinite(max_age) or not 0 <= max_age <= 86400:
+        raise ValueError('MQTT cache_max_age_seconds must be finite and in 0..86400')
+    caches = {}
+    if max_age:
+        for _, _, broker, topic, _, _ in definitions:
+            key = broker[:2]
+            if key not in caches:
+                topics = [d[3] for d in definitions if d[2][:2] == key]
+                caches[key] = MqttCache(*key, topics, max_age)
+    tools = MqttTools([_make_tool(*values, cache=caches.get(values[2][:2]))
+                       for values in definitions], caches.values())
     LOGGER.info("native-tools MQTT loaded=%s from=%s",
                 tuple(fn.__name__ for fn in tools), directory)
     return tools

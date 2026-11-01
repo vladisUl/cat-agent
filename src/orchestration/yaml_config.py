@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -94,6 +95,7 @@ class LiteRTConfig:
     active_profile: str
     profiles: dict[str, LiteRTProfile]
     command_dir: str
+    native: dict[str, int | float]
 
     @property
     def active(self) -> LiteRTProfile:
@@ -191,7 +193,24 @@ class AppConfig:
 
 def _parse_litert(data: Any) -> LiteRTConfig:
     section = _mapping(data, "litert")
-    _check_keys(section, "litert", {"active_profile", "profiles", "command_dir"})
+    _check_keys(section, "litert", {"active_profile", "profiles", "command_dir", "native"})
+    native = dict(max_context_tokens=4096, max_output_tokens=512,
+                  max_tool_calls=12, tool_timeout=180.0,
+                  max_tool_result_bytes=2048, temperature=0.0, top_p=1.0)
+    supplied = _mapping(section.get('native', {}), 'litert.native')
+    _check_keys(supplied, 'litert.native', set(native))
+    native.update(supplied)
+    for key in ('max_context_tokens', 'max_output_tokens', 'max_tool_calls'):
+        _int(native, key, 'litert.native', minimum=1)
+    _int(native, 'max_tool_result_bytes', 'litert.native', minimum=256, maximum=65536)
+    for key in ('tool_timeout', 'temperature', 'top_p'):
+        value = _number(native, key, 'litert.native', minimum=0)
+        if not math.isfinite(value):
+            raise ValueError(f'litert.native.{key} must be finite')
+    if native['tool_timeout'] <= 0 or not 0 < native['top_p'] <= 1:
+        raise ValueError('litert.native requires positive timeout and top_p in (0, 1]')
+    if native['max_context_tokens'] <= native['max_output_tokens'] + 256:
+        raise ValueError('litert.native context must exceed output reserve + 256')
     active_profile = _string(section, "active_profile", "litert")
     command_dir = section.get("command_dir", "/opt/model/bin")
     if (not isinstance(command_dir, str) or not command_dir.strip()
@@ -268,7 +287,7 @@ def _parse_litert(data: Any) -> LiteRTConfig:
     if active_profile not in profiles:
         raise ValueError(f"litert.active_profile references unknown profile {active_profile!r}")
     return LiteRTConfig(active_profile=active_profile, profiles=profiles,
-                        command_dir=command_dir)
+                        command_dir=command_dir, native=native)
 
 
 def _parse_openai(data: Any) -> OpenAIConfig:
