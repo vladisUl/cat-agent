@@ -167,8 +167,6 @@ class NativeTaskWorker:
                     outcome = "cancelled"
                     status_code = 1
                 else:
-                    LOGGER.info("native-task RESULT_STORED run_id=%s task_id=%s agent=%s",
-                                event["run_id"], result["task_id"], result["agent_id"])
                     if self.on_query_result is not None:
                         try:
                             self.on_query_result(dict(result))
@@ -396,8 +394,6 @@ class NativeTaskWorker:
                         agent_id.upper(), event["task_id"],
                         result.state.value, status_code, result.text)
             outcome = "error" if status_code != 0 else "done"
-            LOGGER.info("native-task EXECUTED run=%s agent=%s outcome=%s",
-                        event["run_id"], agent_id, outcome)
             with self._lock:
                 self._last_agent_runs[agent_id] = {
                     "task_id": event["task_id"], "outcome": outcome,

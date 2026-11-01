@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 import socket
 import tempfile
-import time
 import threading
 import unittest
 
@@ -23,12 +22,7 @@ class QueryResultIpcTests(unittest.TestCase):
                 "agent_ok": True, "text": "8.92°C",
             }
             try:
-                with self.assertLogs("agent_core_tools.server", level="INFO") as logs:
-                    server._publish_task_query_result(record)
-                self.assertIn(
-                    "native-task IPC_DEFERRED run_id=R2 task_id=1 agent=agent_1 reason=no_client",
-                    "\n".join(logs.output),
-                )
+                server._publish_task_query_result(record)
                 self.assertEqual(server._query_results["R2"], record)
             finally:
                 server.close()
@@ -57,30 +51,13 @@ class QueryResultIpcTests(unittest.TestCase):
                             "text": "Каталог /opt/model", "agent_id": "agent_1",
                             "agent_ok": True,
                         }
-                        with self.assertLogs("agent_core_tools.server", level="INFO") as logs:
-                            server._publish_task_query_result(record)
-                        self.assertTrue(any(
-                            "native-task IPC_SENT run_id=R1 task_id=5 agent=agent_1 "
-                            "channel=live client=owner" in message
-                            for message in logs.output
-                        ))
+                        server._publish_task_query_result(record)
                         unsolicited = receive()
                         self.assertEqual(unsolicited, record)
-                        with self.assertLogs("agent_core_tools.server", level="INFO") as logs:
-                            send({"type": "task_query_results"})
-                            reply = receive()
-                            deadline = time.monotonic() + 1
-                            while (not any("channel=inbox client=owner" in entry
-                                           for entry in logs.output)
-                                   and time.monotonic() < deadline):
-                                time.sleep(.005)
+                        send({"type": "task_query_results"})
+                        reply = receive()
                         self.assertEqual(reply["type"], "task_query_results")
                         self.assertEqual(reply["items"], [record])
-                        self.assertTrue(any(
-                            "native-task IPC_SENT run_id=R1 task_id=5 agent=agent_1 "
-                            "channel=inbox client=owner" in message
-                            for message in logs.output
-                        ))
                         send({"type": "release"})
                         self.assertEqual(receive()["type"], "released")
                 self.assertFalse(any(e.startswith("human:") or e.startswith("query:") for e in manager.events))

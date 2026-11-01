@@ -42,6 +42,7 @@ class _Client:
     name: str = "unknown"
     epoch: int = 0
     send_lock: threading.Lock = field(default_factory=threading.Lock)
+    pending_notifications: dict[str, dict] = field(default_factory=dict)
 
     def send(self, payload: dict[str, object]) -> None:
         data = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
@@ -216,6 +217,7 @@ class CoreServer:
                     client.epoch += 1
                     self._cancel_backgrounds(client)
                     self._schedule_release(client.session_id)
+                client.pending_notifications.clear()
                 self._clients.pop(client, None)
             client.close()
 
@@ -270,21 +272,15 @@ class CoreServer:
             while len(self._query_results) > 32:
                 self._query_results.popitem(last=False)
             client = self._human
-            if client is None:
-                LOGGER.info("native-task IPC_DEFERRED run_id=%s task_id=%s agent=%s reason=no_client",
-                            run_id, item["task_id"], item["agent_id"])
-            else:
+            if client is not None:
                 try:
                     client.send(dict(item))
                 except OSError as exc:
-                    LOGGER.warning("native-task IPC_FAILED run_id=%s task_id=%s agent=%s "
-                                   "channel=live client=%s error=%s",
-                                   run_id, item["task_id"], item["agent_id"],
-                                   client.name, exc)
+                    LOGGER.warning("native-task IPC_FAILED run_id=%s client=%s error=%s",
+                                   run_id, client.name, exc)
                 else:
-                    LOGGER.info("native-task IPC_SENT run_id=%s task_id=%s agent=%s "
-                                "channel=live client=%s",
-                                run_id, item["task_id"], item["agent_id"], client.name)
+                    # ACK is sent by the terminal only after display insertion.
+                    client.pending_notifications[run_id] = dict(item)
 
     def _task_agent_blocked(self, agent_id: str) -> bool:
         # Worker calls this on its RPC thread; model callback holds the same
@@ -776,11 +772,10 @@ class CoreServer:
                         LOGGER.warning("QUERY inbox unavailable: %s", exc)
                         client.send({"type": "error", "error": "Task SYSTEM inbox unavailable"})
                         return
-                client.send({"type": "task_query_results", "items": items})
-                for item in items:
-                    LOGGER.info("native-task IPC_SENT run_id=%s task_id=%s agent=%s "
-                                "channel=inbox client=%s",
-                                item["run_id"], item["task_id"], item["agent_id"], client.name)
+                with self._lock:
+                    client.send({"type": "task_query_results", "items": items})
+                    for item in items:
+                        client.pending_notifications[item["run_id"]] = dict(item)
                 return
             run_id = message.get("run_id")
             if not isinstance(run_id, str) or not 0 < len(run_id) <= 128:
@@ -794,12 +789,13 @@ class CoreServer:
                 LOGGER.warning("QUERY inbox ACK unavailable: %s", exc)
                 client.send({"type": "error", "error": "Task SYSTEM inbox unavailable"})
                 return
-            if acknowledged:
-                with self._lock:
+            with self._lock:
+                notice = client.pending_notifications.pop(run_id, None)
+                if acknowledged:
                     self._query_results.pop(run_id, None)
-            LOGGER.info("native-task ACK_%s run_id=%s client=%s",
-                        "CONFIRMED" if acknowledged else "NOT_FOUND",
-                        run_id, client.name)
+            if acknowledged and notice is not None:
+                LOGGER.info("%s -> USER task_id=%s text=%r",
+                            notice["agent_id"].upper(), notice["task_id"], notice["text"])
             client.send({
                 "type": "task_query_acked", "run_id": run_id,
                 "acknowledged": bool(acknowledged),

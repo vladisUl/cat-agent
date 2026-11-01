@@ -56,12 +56,9 @@ class NativeTerminalTests(unittest.TestCase):
                          ("CORE", "Native inference unavailable"))
 
     def test_query_from_live_and_inbox_is_displayed_once_and_acked_after_insertion(self):
-        with self.assertLogs("agent_core_tools.native_terminal", level="INFO") as logs:
-            self.receive(dict(NOTICE))
-            self.receive({"type": "task_query_results", "items": [dict(NOTICE)]})
+        self.receive(dict(NOTICE))
+        self.receive({"type": "task_query_results", "items": [dict(NOTICE)]})
         self.assertEqual(len(self.ui._dialog), 1)
-        self.assertEqual(sum("DIALOG_APPENDED run_id=test-run-one" in x
-                             for x in logs.output), 1)
         self.assertEqual(self.ui._dialog[-1][:2], ("AGENT_1", NOTICE["text"]))
         self.assertEqual(self.client.sent, [])  # No ACK before the display update.
         self.ui._request_snapshot()
@@ -69,13 +66,10 @@ class NativeTerminalTests(unittest.TestCase):
         self.assertIn(
             {"type": "task_query_ack", "run_id": NOTICE["run_id"]}, self.client.sent,
         )
-        with self.assertLogs("agent_core_tools.native_terminal", level="INFO") as logs:
-            self.receive({
-                "type": "task_query_acked", "run_id": NOTICE["run_id"],
-                "acknowledged": True,
-            })
-        self.assertIn("native-tui ACK_CONFIRMED run_id=test-run-one",
-                      "\n".join(logs.output))
+        self.receive({
+            "type": "task_query_acked", "run_id": NOTICE["run_id"],
+            "acknowledged": True,
+        })
         self.assertEqual(self.ui._pending_query_ack, {})
         self.receive({"type": "task_query_results", "items": [dict(NOTICE)]})
         self.assertEqual(len(self.ui._dialog), 1)
@@ -176,14 +170,24 @@ class NativeTerminalUnixTests(unittest.TestCase):
                     self.assertEqual(inbox.acks, [NOTICE["run_id"]])
                     ui._poll_core()
                     self.assertFalse(ui._pending_query_ack)
-                self.assertTrue(any(
-                    "native-task IPC_SENT run_id=test-run-one task_id=1 agent=agent_1 "
-                    "channel=inbox" in message for message in core_logs.output
-                ))
-                self.assertTrue(any(
-                    "native-task ACK_CONFIRMED run_id=test-run-one" in message
-                    for message in core_logs.output
-                ))
+
+                    # A live result follows the same terminal-ACK contract.
+                    live = {**NOTICE, "run_id": "live-run", "text": "9.11°C"}
+                    inbox.items[live["run_id"]] = dict(live)
+                    server._publish_task_query_result(live)
+                    deadline = time.monotonic() + 3
+                    while live["run_id"] not in ui._query_acked:
+                        self.assertLess(time.monotonic(), deadline)
+                        ui._poll_core()
+                        ui._request_snapshot()
+                        time.sleep(.01)
+                    self.assertEqual(sum(x[1] == live["text"] for x in ui._dialog), 1)
+                    self.assertFalse(ui._pending_query_ack)
+                delivered = [line for line in core_logs.output
+                             if "AGENT_1 -> USER task_id=1 text=" in line]
+                self.assertEqual(len(delivered), 2)
+                self.assertTrue(any(NOTICE["text"] in line for line in delivered))
+                self.assertTrue(any("9.11°C" in line for line in delivered))
             finally:
                 client.close()
                 server.close()
