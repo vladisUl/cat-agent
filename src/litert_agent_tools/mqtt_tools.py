@@ -9,6 +9,8 @@ import re
 import subprocess
 from typing import Callable
 
+from .mqtt_event_context import MQTT_EVENT_SNAPSHOT
+
 LOGGER = logging.getLogger(__name__)
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -157,7 +159,17 @@ def _make_tool(name: str, description: str, broker: tuple, topic: str,
                fields: dict, validation: dict, cache=None) -> Callable[[], dict]:
     def tool() -> dict:
         LOGGER.info("native-tool CALL name=%s args={}", name)
-        if cache is None:
+        snapshot = MQTT_EVENT_SNAPSHOT.get()
+        if (snapshot is not None and (snapshot.host, snapshot.port) == broker[:2]
+                and snapshot.topic == topic and set(fields) == {snapshot.field}):
+            # The event was already received by TASK SYSTEM. Subscribing now
+            # waits for another publication (or returns a newer retained value).
+            result = _parse_measurement(
+                json.dumps({snapshot.field: snapshot.value}), fields, validation,
+            )
+            result['source'] = 'mqtt_event'
+            result['event_name'] = snapshot.event_name
+        elif cache is None:
             result = _read_measurement(broker, topic, fields, validation)
         else:
             try:

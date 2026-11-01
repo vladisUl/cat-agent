@@ -53,6 +53,14 @@ topic, field, and value **at event time**. An agent must not substitute a later
 sensor reading for this value. Nonempty successful agent replies use the existing
 QUERY notifications inbox; a silent completion does not send a notification.
 
+During that AGENT execution, a native MQTT read tool targeting the same broker,
+topic, and single event field returns the event-time value directly, with
+`source: "mqtt_event"`. It does not subscribe again or read the optional cache.
+This also handles a model that calls the sensor tool despite the event block.
+The scoped value is cleared after success or failure. Other sensors and ordinary
+human/timer turns keep their normal read behavior. A multi-field tool is not
+filled with invented values for fields absent from the event.
+
 Use the existing `list_periodic_queries`, `stop_periodic_query`,
 `start_periodic_query`, and `delete_periodic_query` tools for both timer and event
 tasks. Event tasks show `period_seconds=-1`; they have no timer in storage.

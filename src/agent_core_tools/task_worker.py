@@ -15,6 +15,8 @@ import uuid
 
 from task_system.client import TaskRPC
 from orchestration.tasks import TaskStoreError
+from orchestration.mqtt_events import MQTT_HOST, MQTT_PORT
+from litert_agent_tools.mqtt_event_context import MQTT_EVENT_SNAPSHOT, MqttEventSnapshot
 from .priority_scheduler import QueueFullError
 
 LOGGER = logging.getLogger(__name__)
@@ -383,6 +385,7 @@ class NativeTaskWorker:
                             event["run_id"])
                 return
             instruction = task["text"]
+            snapshot = None
             if event.get('source') == 'mqtt':
                 binding = self.rpc.call('events', 'resolve', 'mqtt', event['name'])
                 if not isinstance(binding, dict) or binding.get('task_id') != task['task_id']:
@@ -392,6 +395,9 @@ class NativeTaskWorker:
                     if value not in ('true', 'false'):
                         raise ValueError('Invalid boolean MQTT event value')
                     value = value == 'true'
+                snapshot = MqttEventSnapshot(
+                    MQTT_HOST, MQTT_PORT, binding['topic'], binding['field'], value, event['name'],
+                )
                 instruction += '\n\n[SYSTEM_MQTT_EVENT]\n' + json.dumps({
                     'topic': binding['topic'], 'field': binding['field'],
                     'value': value, 'event_name': event['name'],
@@ -400,7 +406,13 @@ class NativeTaskWorker:
             # The prompt is taken from the saved TASK record, not the IPC offer.
             LOGGER.info("%s START task_id=%s instruction=%r",
                         agent_id.upper(), event["task_id"], instruction)
-            result = self.manager.run_agent(agent_id, instruction)
+            snapshot_token = MQTT_EVENT_SNAPSHOT.set(snapshot)
+            try:
+                result = self.manager.run_agent(agent_id, instruction)
+            finally:
+                # No event value may leak into a later human/timer/agent turn,
+                # including when inference or a tool fails.
+                MQTT_EVENT_SNAPSHOT.reset(snapshot_token)
             from orchestration_tools.agents import AgentState
             status_code = (result.status_code
                            if result.state is AgentState.FREE

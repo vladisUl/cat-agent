@@ -3,10 +3,12 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from agent_core_tools.task_worker import NativeTaskWorker
-from litert_agent_tools.mqtt_tools import mqtt_event_catalog
+from litert_agent_tools.mqtt_tools import mqtt_event_catalog, create_mqtt_tools, _make_tool
+from litert_agent_tools.mqtt_event_context import MQTT_EVENT_SNAPSHOT, MqttEventSnapshot
+from orchestration.mqtt_events import MQTT_HOST, MQTT_PORT
 from orchestration.mqtt_events import MqttEventMonitor
 from orchestration.tasks import TaskStoreError
 from orchestration_tools.delegation import DelegationBroker, create_delegate_tool
@@ -71,6 +73,15 @@ class NativeMqttEventsTests(unittest.TestCase):
         # remain true, and false is queued as its own independent transition.
         monitor._consume_line('zigbee2mqtt/dvigen_verh {"occupancy":false}')
         manager, queue = FakeManager(), Queue()
+        sensor = next(t for t in create_mqtt_tools() if t.__name__ == 'get_corridor_motion')
+        observed = []
+        original_run = manager.run_agent
+        def run_with_sensor(agent_id, instruction):
+            with patch('litert_agent_tools.mqtt_tools._read_measurement',
+                       side_effect=AssertionError('must not wait for a new MQTT message')):
+                observed.append(sensor())
+            return original_run(agent_id, instruction)
+        manager.run_agent = run_with_sensor
         worker = NativeTaskWorker(queue, manager, rpc=self.rpc, agent_permissions=self.permissions)
         self.assertTrue(worker.poll_once())
         kind, callback = queue.pending.pop(0)
@@ -87,6 +98,53 @@ class NativeMqttEventsTests(unittest.TestCase):
         self.assertIn('"value": false', manager.calls[1][1])
         self.assertEqual(len(worker.list_results()), 2)
         self.assertTrue(all(r['state'] == 'done' for r in self.engine.runs.values()))
+        self.assertEqual([r['occupancy'] for r in observed], [True, False])
+        self.assertTrue(all(r['ok'] and r['source'] == 'mqtt_event' for r in observed))
+        self.assertIsNone(MQTT_EVENT_SNAPSHOT.get())
+        with patch('litert_agent_tools.mqtt_tools._read_measurement',
+                   return_value={'ok': True, 'occupancy': False}) as live:
+            self.assertEqual(sensor(), {'ok': True, 'occupancy': False})
+            live.assert_called_once()
+
+    def test_event_snapshot_cleared_after_agent_failure(self):
+        self.assertTrue(self.create()['ok'])
+        self.engine.consume_mqtt(self.engine.events.snapshot()[0], 'true')
+        manager, queue = FakeManager(), Queue()
+        def fail(*args):
+            self.assertIs(MQTT_EVENT_SNAPSHOT.get().value, True)
+            raise RuntimeError('simulated model failure')
+        manager.run_agent = fail
+        worker = NativeTaskWorker(queue, manager, rpc=self.rpc, agent_permissions=self.permissions)
+        self.assertTrue(worker.poll_once())
+        with self.assertLogs('agent_core_tools.task_worker', level='ERROR'):
+            queue.pending.pop(0)[1]()
+        self.assertIsNone(MQTT_EVENT_SNAPSHOT.get())
+        worker.poll_once()
+        self.assertEqual(next(iter(self.engine.runs.values()))['state'], 'error')
+
+    def test_snapshot_bypasses_cache_but_does_not_replace_other_sensor_fields(self):
+        cache = Mock()
+        snapshot = MqttEventSnapshot(MQTT_HOST, MQTT_PORT, 'motion', 'occupancy', False, 'task_mqtt1')
+        token = MQTT_EVENT_SNAPSHOT.set(snapshot)
+        try:
+            sensor = _make_tool('motion', 'motion', (MQTT_HOST, MQTT_PORT, 5), 'motion',
+                                {'occupancy': 'detected'}, {'occupancy': {'type': 'boolean'}}, cache)
+            result = sensor()
+            self.assertIs(result['detected'], False)
+            self.assertEqual(result['source'], 'mqtt_event')
+            cache.read.assert_not_called()
+            for broker, topic, fields in (
+                ((MQTT_HOST, MQTT_PORT, 5), 'leak', {'water_leak': 'leak'}),
+                (('another-broker', MQTT_PORT, 5), 'motion', {'occupancy': 'occupancy'}),
+                ((MQTT_HOST, MQTT_PORT, 5), 'motion', {'occupancy': 'occupancy', 'battery': 'battery'}),
+            ):
+                tool = _make_tool('other', 'other', broker, topic, fields, {})
+                with patch('litert_agent_tools.mqtt_tools._read_measurement',
+                           return_value={'ok': True, 'live': True}) as read:
+                    self.assertEqual(tool(), {'ok': True, 'live': True})
+                    read.assert_called_once()
+        finally:
+            MQTT_EVENT_SNAPSHOT.reset(token)
 
     def test_initial_active_state_and_persistent_binding(self):
         result = self.create('get_kitchen_leak', '-1.0')
