@@ -295,7 +295,8 @@ class NativeTaskController:
                 LOGGER.info("native-task-tool ALREADY RUNNING id=%s", normalized_id)
                 return {"ok": True, "task_id": normalized_id,
                         "enabled": True, "already_running": True,
-                        "period_seconds": record["timer_period_seconds"]}
+                        "period_seconds": (-1 if record["timer_period_seconds"] is None
+                                           else record["timer_period_seconds"])}
             started = self.rpc.call("system", "resume_task", normalized_id)
         except (TaskStoreError, OSError, ValueError) as exc:
             return self._rpc_error("START", exc)
@@ -303,7 +304,8 @@ class NativeTaskController:
                     normalized_id, started["timer_period_seconds"])
         return {"ok": True, "task_id": normalized_id,
                 "enabled": started["enabled"], "already_running": False,
-                "period_seconds": started["timer_period_seconds"]}
+                "period_seconds": (-1 if started["timer_period_seconds"] is None
+                                       else started["timer_period_seconds"])}
 
     def delete(self, task_id: int) -> dict:
         """Permanently remove one native periodic TASK from the shared service."""
