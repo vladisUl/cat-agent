@@ -95,16 +95,52 @@ class NativeMqttEventsTests(unittest.TestCase):
                          ('zigbee2mqtt/dvigen_verh', 'occupancy', True))
         queue.pending.pop(0)[1]()
         worker.poll_once()
-        self.assertIn('"value": false', manager.calls[1][1])
+        self.assertEqual(len(manager.calls), 1)  # false only rearms; no model
+        self.assertEqual(len(worker.list_results()), 1)
+        monitor._consume_line('zigbee2mqtt/dvigen_verh {"occupancy":true}')
+        self.assertTrue(worker.poll_once())
+        queue.pending.pop(0)[1]()
+        worker.poll_once()
         self.assertEqual(len(worker.list_results()), 2)
         self.assertTrue(all(r['state'] == 'done' for r in self.engine.runs.values()))
-        self.assertEqual([r['occupancy'] for r in observed], [True, False])
+        self.assertEqual([r['occupancy'] for r in observed], [True, True])
         self.assertTrue(all(r['ok'] and r['source'] == 'mqtt_event' for r in observed))
         self.assertIsNone(MQTT_EVENT_SNAPSHOT.get())
         with patch('litert_agent_tools.mqtt_tools._read_measurement',
                    return_value={'ok': True, 'occupancy': False}) as live:
             self.assertEqual(sensor(), {'ok': True, 'occupancy': False})
             live.assert_called_once()
+
+    def test_leak_clear_finishes_without_model_or_notification(self):
+        self.assertTrue(self.create('get_kitchen_leak')['ok'])
+        self.engine.consume_mqtt(self.engine.events.snapshot()[0], 'false')
+        manager, queue = FakeManager(), Queue()
+        worker = NativeTaskWorker(queue, manager, rpc=self.rpc, agent_permissions=self.permissions)
+        self.assertTrue(worker.poll_once())
+        with self.assertLogs('agent_core_tools.task_worker', level='INFO') as logs:
+            queue.pending.pop(0)[1]()
+        worker.poll_once()
+        self.assertFalse(manager.calls)
+        self.assertFalse(worker.list_results())
+        self.assertEqual(next(iter(self.engine.runs.values()))['state'], 'done')
+        self.assertTrue(any('MQTT REARM' in line for line in logs.output))
+
+    def test_active_polarity_comes_from_config(self):
+        self.assertTrue(self.create()['ok'])
+        path = self.root / 'active.json'
+        path.write_text(json.dumps({'zigbee2mqtt/dvigen_verh': {'occupancy': False}}))
+        binding = self.engine.events.snapshot()[0]
+        manager, queue = FakeManager(), Queue()
+        worker = NativeTaskWorker(queue, manager, rpc=self.rpc, agent_permissions=self.permissions,
+                                  active_state_path=path)
+        for value in ('true', 'false'):
+            self.engine.consume_mqtt(binding, value)
+            self.assertTrue(worker.poll_once())
+            queue.pending.pop(0)[1]()
+            worker.poll_once()
+        self.assertEqual(len(manager.calls), 1)
+        self.assertIn('"value": false', manager.calls[0][1])
+        self.assertEqual(len(worker.list_results()), 1)
 
     def test_event_snapshot_cleared_after_agent_failure(self):
         self.assertTrue(self.create()['ok'])

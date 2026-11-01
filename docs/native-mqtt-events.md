@@ -45,8 +45,13 @@ The existing monitor behavior is preserved: changes to both `true` and `false`
 produce events; repeated identical values do not. On the first observed payload,
 an event is emitted only when its value matches `config/mqtt_event_active.json`
 (currently `true` for both sources). A retained active value can therefore
-trigger on TASK SYSTEM startup. The task text tells the agent which state merits
-a notification.
+trigger on TASK SYSTEM startup. The native worker reads the same active-state
+configuration at startup: the inactive transition is **rearm only**. It finishes
+that RUN successfully without calling the model or publishing a notification.
+For the supplied motion and leak sensors, `true` invokes the agent and `false`
+is silent, regardless of task wording or model behavior. The shared monitor and
+OpenAI event processing are unchanged. Signals absent from the active-state
+configuration retain their previous processing behavior.
 
 The saved instruction is followed by a `[SYSTEM_MQTT_EVENT]` block containing
 topic, field, and value **at event time**. An agent must not substitute a later

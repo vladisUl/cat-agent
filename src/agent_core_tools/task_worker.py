@@ -9,13 +9,14 @@ from __future__ import annotations
 from collections import OrderedDict
 import json
 import logging
+from pathlib import Path
 import threading
 import time
 import uuid
 
 from task_system.client import TaskRPC
 from orchestration.tasks import TaskStoreError
-from orchestration.mqtt_events import MQTT_HOST, MQTT_PORT
+from orchestration.mqtt_events import MQTT_HOST, MQTT_PORT, MqttEventMonitor
 from litert_agent_tools.mqtt_event_context import MQTT_EVENT_SNAPSHOT, MqttEventSnapshot
 from .priority_scheduler import QueueFullError
 
@@ -34,6 +35,7 @@ class NativeTaskWorker:
         agent_blocked=None, on_query_result=None,
         stop_event=None, poll_seconds=POLL_SECONDS,
         clock=time.monotonic,
+        active_state_path=Path(__file__).resolve().parents[2] / 'config/mqtt_event_active.json',
     ):
         if poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
@@ -50,6 +52,7 @@ class NativeTaskWorker:
         self.on_query_result = on_query_result
         self.external_stop = stop_event
         self.clock = clock
+        self._mqtt_active_states = MqttEventMonitor._load_active_states(active_state_path)
         self.poll_seconds = poll_seconds
         self._stop = threading.Event()
         self._thread = None
@@ -395,6 +398,20 @@ class NativeTaskWorker:
                     if value not in ('true', 'false'):
                         raise ValueError('Invalid boolean MQTT event value')
                     value = value == 'true'
+                active = self._mqtt_active_states.get((binding['topic'], binding['field']))
+                if active is not None and event.get('task', '') != active:
+                    # Falling/inactive edge only rearms the shared monitor.
+                    # Finish the durable RUN without asking the model or
+                    # publishing a QUERY, irrespective of the task wording.
+                    outcome, status_code = 'done', 0
+                    with self._lock:
+                        self._last_agent_runs[agent_id] = {
+                            'task_id': event['task_id'], 'outcome': outcome,
+                            'status_code': 0, 'at_wall': time.time(),
+                        }
+                    LOGGER.info('native-task MQTT REARM task_id=%s topic=%s field=%s value=%s; no model, no notification',
+                                event['task_id'], binding['topic'], binding['field'], event.get('task', ''))
+                    return
                 snapshot = MqttEventSnapshot(
                     MQTT_HOST, MQTT_PORT, binding['topic'], binding['field'], value, event['name'],
                 )
