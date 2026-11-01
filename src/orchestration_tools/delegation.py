@@ -69,7 +69,7 @@ class DelegationBroker:
         external = (
             (type(period_seconds) in (int, float) and period_seconds == -1)
             or (isinstance(period_seconds, str)
-                and re.fullmatch(r"-1(?:\\.0+)?", period_seconds.strip()) is not None)
+                and re.fullmatch(r"-1(?:\.0+)?", period_seconds.strip()) is not None)
         )
         if external:
             if self.periodic_controller is None:
