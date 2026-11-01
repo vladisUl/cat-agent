@@ -56,7 +56,9 @@ includes the exact queued `topic`, `field` and `value` in its instruction.
 It does not query the sensor again: the current state could have changed before
 the agent was scheduled. QUERY replies follow existing TASK notifications.
 
-Update both services after deploying:
-`./start_system_core.sh` (TASK SYSTEM, if not already running) and
-`./start_litert_core.sh` (new native catalog/agent tool signatures).
+After deploying, restart `./start_litert_core.sh` so the native model
+receives the two new tool declarations and the extended `delegate_task`
+signature. TASK SYSTEM itself is unchanged: a running instance already listens
+to MQTT and picks up new bindings from its in-memory registry immediately.
+Start `./start_system_core.sh` only if TASK SYSTEM is not already running.
 Existing periodic tasks remain valid.
