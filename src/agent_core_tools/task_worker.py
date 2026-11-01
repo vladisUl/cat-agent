@@ -7,6 +7,7 @@ native agents on the ONE serialized model scheduler. Never retries an action.
 from __future__ import annotations
 
 from collections import OrderedDict
+import json
 import logging
 import threading
 import time
@@ -382,6 +383,28 @@ class NativeTaskWorker:
                             event["run_id"])
                 return
             instruction = task["text"]
+            # Preserve the event value that was queued at trigger time.
+            # Fetch metadata only: never re-read the sensor, because its
+            # current state may differ from the event being processed.
+            if event.get("source") == "mqtt":
+                binding = self.rpc.call("events", "resolve", "mqtt", event["name"])
+                if (not isinstance(binding, dict)
+                        or binding.get("task_id") != event["task_id"]
+                        or binding.get("source") != "mqtt"):
+                    raise RuntimeError("MQTT binding missing or changed before execution")
+                value = event.get("task")
+                if not isinstance(value, str) or value not in binding.get("values", []):
+                    raise RuntimeError("MQTT event value is invalid")
+                event_data = {
+                    "source": "mqtt", "topic": binding["topic"],
+                    "field": binding["field"], "value": value,
+                }
+                instruction += (
+                    "\\n\\nВнешнее MQTT-событие уже произошло. Используй именно"
+                    " зафиксированное ниже значение, не заменяй его новым чтением"
+                    " датчика.\\nMQTT_EVENT: "
+                    + json.dumps(event_data, ensure_ascii=False)
+                )
             # The prompt is taken from the saved TASK record, not the IPC offer.
             LOGGER.info("%s START task_id=%s instruction=%r",
                         agent_id.upper(), event["task_id"], instruction)
