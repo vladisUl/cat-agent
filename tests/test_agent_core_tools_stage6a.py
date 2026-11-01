@@ -59,7 +59,7 @@ class NativeTerminalTests(unittest.TestCase):
         self.receive(dict(NOTICE))
         self.receive({"type": "task_query_results", "items": [dict(NOTICE)]})
         self.assertEqual(len(self.ui._dialog), 1)
-        self.assertEqual(self.ui._dialog[-1][:2], ("TASK QUERY", NOTICE["text"]))
+        self.assertEqual(self.ui._dialog[-1][:2], ("AGENT_1", NOTICE["text"]))
         self.assertEqual(self.client.sent, [])  # No ACK before the display update.
         self.ui._request_snapshot()
         self.assertIn({"type": "task_query_results"}, self.client.sent)
@@ -77,6 +77,12 @@ class NativeTerminalTests(unittest.TestCase):
         self.ui._next_inbox_poll = time.monotonic() + 9999
         self.ui._request_snapshot()
         self.assertEqual(len(self.client.sent), before)
+
+    def test_query_identifies_real_agent_and_uses_generic_fallback(self):
+        self.receive({**NOTICE, "run_id": "agent-2-run", "agent_id": "agent_2"})
+        self.assertEqual(self.ui._dialog[-1][0], "AGENT_2")
+        self.receive({**NOTICE, "run_id": "old-run", "agent_id": ""})
+        self.assertEqual(self.ui._dialog[-1][0], "AGENT")
 
     def test_lost_ack_answer_retries_only_ack_and_not_dialogue(self):
         self.receive(dict(NOTICE))
@@ -149,11 +155,11 @@ class NativeTerminalUnixTests(unittest.TestCase):
                 # On startup an unread QUERY can be recovered from
                 # TASK SYSTEM even if no live hint was received.
                 deadline = time.monotonic() + 3
-                while not any(x[0] == "TASK QUERY" for x in ui._dialog):
+                while not any(x[0] == "AGENT_1" for x in ui._dialog):
                     self.assertLess(time.monotonic(), deadline)
                     ui._poll_core()
                     time.sleep(.01)
-                self.assertEqual(sum(x[0] == "TASK QUERY" for x in ui._dialog), 1)
+                self.assertEqual(sum(x[0] == "AGENT_1" for x in ui._dialog), 1)
                 ui._request_snapshot()
                 deadline = time.monotonic() + 3
                 while inbox.items:

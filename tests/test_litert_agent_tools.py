@@ -105,7 +105,8 @@ class MqttToolTests(unittest.TestCase):
         ), self.assertLogs("litert_agent_tools.mqtt_tools", level="INFO") as captured:
             result = self.tools_by_name["get_home_climate"]()
         self.assertTrue(result["ok"])
-        self.assertIn("native-tool CALL name=get_home_climate topic=zigbee2mqtt/temp_tua", captured.output[0])
+        self.assertIn("native-tool CALL name=get_home_climate args={}", captured.output[0])
+        self.assertNotIn("topic=", captured.output[0])
         self.assertIn("native-tool RESULT name=get_home_climate", captured.output[1])
         self.assertIn("24.66", captured.output[1])
         self.assertIn("26.24", captured.output[1])

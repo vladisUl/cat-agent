@@ -59,7 +59,11 @@ class NativeTerminalTUI(TerminalTUI):
             LOGGER.warning("Malformed native QUERY notice ignored")
             return
         if run_id not in self._query_seen:
-            self._append_dialog("TASK QUERY", text)
+            agent_id = item.get("agent_id")
+            speaker = (agent_id.upper()
+                       if isinstance(agent_id, str) and agent_id.startswith("agent_")
+                       else "AGENT")
+            self._append_dialog(speaker, text)
             self._query_seen.add(run_id)
             self._query_order.append(run_id)
             # Keep session memory bounded. Unacknowledged RUNs are not evicted

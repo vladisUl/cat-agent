@@ -152,7 +152,7 @@ def _read_measurement(broker: tuple, topic: str, fields: dict, validation: dict)
 def _make_tool(name: str, description: str, broker: tuple, topic: str,
                fields: dict, validation: dict) -> Callable[[], dict]:
     def tool() -> dict:
-        LOGGER.info("native-tool CALL name=%s topic=%s", name, topic)
+        LOGGER.info("native-tool CALL name=%s args={}", name)
         result = _read_measurement(broker, topic, fields, validation)
         LOGGER.info("native-tool RESULT name=%s result=%s",
                     name, json.dumps(result, ensure_ascii=False))
