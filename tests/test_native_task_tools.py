@@ -10,6 +10,8 @@ import unittest
 
 from agent_core_tools.priority_scheduler import PriorityScheduler
 from agent_core_tools.task_worker import NativeTaskWorker
+from litert_agent_tools.mqtt_tools import mqtt_event_definitions
+from orchestration.mqtt_events import MqttEventMonitor
 from orchestration.tasks import TaskStoreError
 from orchestration_tools.agents import AgentOutcome, AgentState
 from orchestration_tools.delegation import DelegationBroker, create_delegate_tool
@@ -60,8 +62,10 @@ class UnifiedDelegationTests(unittest.TestCase):
         self.addCleanup(self.engine.close)
         self.rpc = LocalRPC(self.engine)
         self.controller = NativeTaskController(
-            self.rpc, {"agent_1": ("get_outdoor_weather", "shell"),
+            self.rpc, {"agent_1": ("get_outdoor_weather", "shell",
+                                   "get_corridor_motion", "get_kitchen_leak"),
                        "agent_2": ("get_outdoor_weather",)},
+            event_tools=mqtt_event_definitions(),
         )
         self.broker = DelegationBroker(("agent_1", "agent_2"), self.controller)
         self.tool = create_delegate_tool(self.broker)
@@ -92,6 +96,101 @@ class UnifiedDelegationTests(unittest.TestCase):
                 self.assertFalse(self.rpc.calls)
             finally:
                 self._end()
+
+    def test_minus_one_creates_persistent_mqtt_binding_and_controls(self):
+        self._begin()
+        try:
+            result = self.tool("agent_1", "Сообщи о движении", "-1.0",
+                               "get_corridor_motion")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["period_seconds"], -1)
+            task_id = result["task_id"]
+            record = self.rpc.call("tasks", "require", task_id)
+            self.assertEqual(record["timer_period_seconds"], None)
+            self.assertEqual(record["skills"], ["get_corridor_motion"])
+            self.assertEqual(record["agent_id"], "agent_1")
+            self.assertEqual(record["executor"], "litert")
+            self.assertEqual(record["text"], "Сообщи о движении")
+            bindings = self.rpc.call("events", "snapshot")
+            self.assertEqual(len(bindings), 1)
+            self.assertEqual(bindings[0]["topic"], "zigbee2mqtt/dvigen_verh")
+            self.assertEqual(bindings[0]["field"], "occupancy")
+            self.assertEqual(bindings[0]["values"], ["true", "false"])
+            listed = self.management["list_periodic_queries"]()
+            self.assertEqual(listed["tasks"][0]["period_seconds"], -1)
+            self.assertEqual(listed["tasks"][0]["event_name"], f"task_mqtt{task_id}")
+            self.assertFalse(self.management["stop_periodic_query"](task_id)["enabled"])
+            self.assertTrue(self.management["start_periodic_query"](task_id)["enabled"])
+            self.assertEqual(self.rpc.call("events", "snapshot"), bindings)
+            self.assertTrue(self.management["delete_periodic_query"](task_id)["deleted"])
+            self.assertEqual(self.rpc.call("events", "snapshot"), [])
+        finally:
+            self._end()
+
+    def test_minus_one_rejects_missing_or_unauthorized_mqtt_tool(self):
+        self._begin()
+        try:
+            for args in (
+                ("agent_1", "Событие", -1, ""),
+                ("agent_1", "Событие", -1, "unknown"),
+                ("agent_2", "Событие", -1, "get_corridor_motion"),
+                ("agent_1", "Событие", -1.5, "get_corridor_motion"),
+                ("agent_1", "Событие", 0, "get_corridor_motion"),
+            ):
+                self.assertFalse(self.tool(*args)["ok"], args)
+            self.assertFalse(any(op == "create_external_task"
+                                 for _, op, _, _ in self.rpc.calls))
+            # The monitor is single-broker; a mismatched broker is rejected.
+            original = self.controller.event_tools["get_corridor_motion"]
+            self.controller.event_tools["get_corridor_motion"] = {
+                **original, "host": "192.0.2.1",
+            }
+            self.assertEqual(self.tool("agent_1", "Событие", -1,
+                                       "get_corridor_motion")["error"],
+                             "mqtt_event_broker_not_monitored")
+        finally:
+            self._end()
+
+    def test_mqtt_event_uses_trigger_time_value_not_later_sensor_read(self):
+        self._begin()
+        try:
+            created = self.tool("agent_1", "Сообщи, есть ли движение", -1,
+                                "get_corridor_motion")
+        finally:
+            self._end()
+        self.assertTrue(created["ok"], created)
+        manager = FakeManager()
+        scheduler = PriorityScheduler()
+        worker = NativeTaskWorker(
+            scheduler, manager, rpc=self.rpc,
+            agent_permissions={"agent_1": ("get_corridor_motion",),
+                               "agent_2": ()},
+            poll_seconds=3600,
+        )
+        monitor = MqttEventMonitor(
+            self.engine.events, self.engine.consume_mqtt,
+            active_state_path=Path(__file__).resolve().parents[1] /
+                              "config" / "mqtt_event_active.json",
+        )
+        worker.start()
+        try:
+            monitor._consume_line('zigbee2mqtt/dvigen_verh {"occupancy":true}')
+            monitor._consume_line('zigbee2mqtt/dvigen_verh {"occupancy":true}')
+            self.assertEqual(len(self.engine.runs), 1)
+            self.assertTrue(worker.poll_once())
+            self._await_reports(worker, manager, 1)
+            self.assertIn('"value": "true"', manager.calls[0][1])
+            self.assertIn('"topic": "zigbee2mqtt/dvigen_verh"', manager.calls[0][1])
+            self.assertIn("Сообщи, есть ли движение", manager.calls[0][1])
+            monitor._consume_line('zigbee2mqtt/dvigen_verh {"occupancy":false}')
+            self.assertTrue(worker.poll_once())
+            self._await_reports(worker, manager, 2)
+            self.assertIn('"value": "false"', manager.calls[1][1])
+            self.assertEqual(len(self.engine.runs), 2)
+            self.assertEqual({r["state"] for r in self.engine.runs.values()}, {"done"})
+        finally:
+            worker.close()
+            scheduler.close()
 
     def test_periodic_persists_unmodified_multistep_instruction_and_target(self):
         original = ("Получить температуру через MQTT, если файла нет создать "
