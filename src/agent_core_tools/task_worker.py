@@ -32,7 +32,7 @@ class NativeTaskWorker:
 
     def __init__(
         self, scheduler, manager, *, rpc=None, agent_permissions=None,
-        agent_blocked=None, on_query_result=None, on_inbox_poll=None,
+        agent_blocked=None, on_query_result=None,
         stop_event=None, poll_seconds=POLL_SECONDS,
         clock=time.monotonic,
         active_state_path=Path(__file__).resolve().parents[2] / 'config/mqtt_event_active.json',
@@ -50,8 +50,6 @@ class NativeTaskWorker:
             raise ValueError("Task worker requires at least one configured agent")
         self.agent_blocked = agent_blocked or (lambda ident: False)
         self.on_query_result = on_query_result
-        self.on_inbox_poll = on_inbox_poll
-        self._next_inbox_poll = 0.0
         self.external_stop = stop_event
         self.clock = clock
         self._mqtt_active_states = MqttEventMonitor._load_active_states(active_state_path)
@@ -272,12 +270,6 @@ class NativeTaskWorker:
             return False
         if not self._can_run():
             return False
-        if self.on_inbox_poll is not None and self.clock() >= self._next_inbox_poll:
-            self._next_inbox_poll = self.clock() + TASK_DISPLAY_REFRESH_SECONDS
-            try:
-                self.on_inbox_poll()
-            except Exception:
-                LOGGER.exception('Native offline notification handoff pending')
         if not self._finish_pending() or not self._flush_defers():
             return False  # No new execution behind unacknowledged RPC replies.
         with self._lock:

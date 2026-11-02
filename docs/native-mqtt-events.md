@@ -89,25 +89,3 @@ Ask the manager to watch motion or leaks, then confirm that its saved-task list
 shows `period_seconds=-1`. Trigger the actual sensor and inspect the QUERY inbox.
 Tests exercise the real SQLite TASK engine and native worker with injected MQTT
 messages; live broker and model testing remains a target-machine check.
-
-## Offline notifications
-
-Native TASK QUERY results go to the connected native interface. If no native
-interface is connected (or its socket write fails), CORE first saves the text
-in the shared notification outbox, then acknowledges the TASK SYSTEM inbox.
-The shared dispatcher uses an active interface on another CORE when available;
-otherwise it sends through the same Firebase transport as OpenAI CORE.
-
-The existing `CAT_AGENT_OUTBOX` path (default
-`/var/lib/cat-agent/outbox.sqlite3`) and `CAT_AGENT_FIREBASE_*` settings are reused.
-All CORE processes must use the same outbox file for shared routing. Default
-Firebase files remain `/opt/firebase/zigbee.json` and `/opt/firebase/tokens.txt`;
-`firebase-admin` must be installed in the Python environment running native CORE.
-
-A failed send stays queued with retry backoff. The worker periodically recovers
-unacknowledged TASK inbox results while no native interface is connected,
-including after restart or a disconnect before display acknowledgement.
-A stable notification ID derived from the RUN prevents repeated handoffs from
-creating duplicate queue entries. Delivery remains at-least-once: a lost provider
-response can cause a repeated push. Firebase acceptance confirms provider receipt,
-not display on the phone. Inactive MQTT edges still produce no notification.
