@@ -20,6 +20,8 @@ from typing import Any
 from .socket_owner import SocketOwner
 from .priority_scheduler import PriorityScheduler, QueueFullError
 from orchestration_tools.contracts import ManagerRuntime
+from agent_core.outbox import NotificationOutbox
+from agent_core.firebase_push import FirebasePushSender
 
 
 LOGGER = logging.getLogger(__name__)
@@ -95,6 +97,7 @@ class CoreServer:
         hardware_probe_enabled: bool = False,
         task_worker_socket: Path | None = None,
         task_agent_permissions: dict[str, tuple[str, ...]] | None = None,
+        outbox_path: Path | None = None,
     ) -> None:
         self.path = Path(path)
         self._socket_owner = SocketOwner(self.path)
@@ -104,6 +107,11 @@ class CoreServer:
         self._close_lock = threading.RLock()
         self._clients: dict[_Client, threading.Thread] = {}
         self._human: _Client | None = None
+        self._firebase_sender = FirebasePushSender()
+        self.outbox = NotificationOutbox(
+            outbox_path or Path(os.getenv('CAT_AGENT_OUTBOX', '/var/lib/cat-agent/outbox.sqlite3')),
+            self._send_notification,
+        )
         self._manager = manager
         self._scheduler = PriorityScheduler(max_pending=MAX_PENDING) if manager else None
         self._background_enabled = background_enabled
@@ -123,6 +131,7 @@ class CoreServer:
                 agent_permissions=task_agent_permissions,
                 agent_blocked=self._task_agent_blocked,
                 on_query_result=self._publish_task_query_result,
+                on_inbox_poll=self._recover_offline_queries,
                 stop_event=self._stop,
             )
 
@@ -148,6 +157,7 @@ class CoreServer:
             self._socket = listener
         if self._task_worker is not None:
             try:
+                self.outbox.start()
                 self._task_worker.start()
             except Exception:
                 self.close()
@@ -281,6 +291,34 @@ class CoreServer:
                 else:
                     # ACK is sent by the terminal only after display insertion.
                     client.pending_notifications[run_id] = dict(item)
+                    return
+        # Durable handoff before acknowledging the TASK inbox. A lost ACK or
+        # restart retries the same RUN id instead of enqueuing another push.
+        self.outbox.enqueue(item['text'], identifier='native-query:' + run_id)
+        if self._task_worker is not None:
+            self._task_worker.ack_result(run_id)
+
+    def _recover_offline_queries(self) -> None:
+        with self._lock:
+            if self._human is not None or self._stop.is_set():
+                return
+        if self._task_worker is not None:
+            for item in self._task_worker.list_results():
+                self._publish_task_query_result(item)
+
+    def _send_notification(self, identifier, text):
+        with self._lock:
+            client = self._human
+            if client is not None:
+                try:
+                    client.send({'type': 'notification', 'notification_id': identifier,
+                                 'kind': 'reply', 'text': text})
+                    return False  # Explicit interface ACK, not socket acceptance.
+                except OSError:
+                    LOGGER.warning('native-notification IPC failed; using Firebase')
+        self._firebase_sender.send(text)
+        LOGGER.info('native-notification FIREBASE_ACCEPTED id=%s', identifier)
+        return True
 
     def _task_agent_blocked(self, agent_id: str) -> bool:
         # Worker calls this on its RPC thread; model callback holds the same
@@ -763,6 +801,13 @@ class CoreServer:
                     self._schedule_release(client.session_id)
             client.send({"type": "released"})
             return
+        if message_type == 'notification_ack':
+            with self._lock:
+                if self._human is not client:
+                    client.send({'type': 'busy', 'owner': self._human.name if self._human else None})
+                    return
+            self.outbox.acknowledge(str(message.get('notification_id', '')))
+            return
         if message_type in ("task_query_results", "task_query_ack"):
             with self._lock:
                 if self._human is not client:
@@ -915,6 +960,7 @@ class CoreServer:
             if self._task_worker is not None:
                 self._task_worker.close()
                 self._task_worker = None
+            self.outbox.close()
             if self._manager is not None:
                 self._manager.close()
             self._socket_owner.release()

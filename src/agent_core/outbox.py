@@ -82,8 +82,8 @@ class NotificationOutbox:
             (self.scope, 1 if self._human_active() else 0, now),
         )
 
-    def enqueue(self, text):
-        identifier = uuid.uuid4().hex
+    def enqueue(self, text, *, identifier=None):
+        identifier = identifier or uuid.uuid4().hex
         now = time.time()
         with self._lock, self._connect() as db:
             self._heartbeat(db, now)
@@ -91,7 +91,7 @@ class NotificationOutbox:
             # immediately. Multi-CORE duplicate prevention is handled by the
             # dispatcher election, not by delaying the notification itself.
             db.execute(
-                "INSERT INTO notifications(id,text,scope) VALUES(?,?,?)",
+                "INSERT INTO notifications(id,text,scope) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING",
                 (identifier, text, self.scope),
             )
         return identifier
