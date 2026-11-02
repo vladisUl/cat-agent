@@ -28,6 +28,29 @@ class FakeWindow:
         return " ".join(text for _, text in self.writes)
 
 
+class NativeTuiInterruptTests(unittest.TestCase):
+    def test_ctrl_c_exits_without_traceback_and_disables_bracketed_paste(self):
+        tui = NativeTerminalTUI(client=None, core_info={}, status={})
+        with patch.object(tui, "_set_bracketed_paste") as paste, \
+             patch("litert_agent.terminal.curses.wrapper",
+                   side_effect=KeyboardInterrupt) as wrapper:
+            tui.run()
+        wrapper.assert_called_once_with(tui._main)
+        self.assertTrue(tui._quit)
+        self.assertEqual([c.args for c in paste.call_args_list],
+                         [(True,), (False,)])
+
+    def test_unrelated_errors_still_propagate_with_terminal_cleanup(self):
+        tui = NativeTerminalTUI(client=None, core_info={}, status={})
+        with patch.object(tui, "_set_bracketed_paste") as paste, \
+             patch("litert_agent.terminal.curses.wrapper",
+                   side_effect=RuntimeError("display failed")):
+            with self.assertRaisesRegex(RuntimeError, "display failed"):
+                tui.run()
+        self.assertEqual([c.args for c in paste.call_args_list],
+                         [(True,), (False,)])
+
+
 class NativeTuiStatusTests(unittest.TestCase):
     def make_tui(self, *, armed=True):
         tui = NativeTerminalTUI.__new__(NativeTerminalTUI)

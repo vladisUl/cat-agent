@@ -147,6 +147,10 @@ class TerminalTUI:
         self._set_bracketed_paste(True)
         try:
             curses.wrapper(self._main)
+        except KeyboardInterrupt:
+            # SIGINT raises here instead of returning "\\x03" from get_wch().
+            # curses.wrapper has already restored the terminal at this point.
+            self._quit = True
         finally:
             self._set_bracketed_paste(False)
 
