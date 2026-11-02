@@ -18,7 +18,7 @@ client, MCP, /work#, and TASK SYSTEM. None of their code or prompts is modified.
 ## Native shell tool (explicit opt-in)
 
 The native function is `shell(command: str) -> dict` and is registered in
-`Conversation(tools=...)` alongside MQTT. LiteRT-LM 0.18.0 constructs
+`Conversation(tools=...)` alongside MQTT. LiteRT-LM constructs
 a tool schema from the Python signature and invokes it automatically.
 
 By default, each shell command starts in `/opt/model`, independent of the
@@ -62,11 +62,12 @@ The `shell` callback is registered during BASE construction, but remains
 **disabled during the one-time warm message**. It becomes available only
 after a successful BASE warm and initial clone. On /new it remains available.
 
-## One-time warm-up BASE (stock LiteRT-LM 0.18.x)
+## One-time warm-up BASE (LiteRT-LM 0.19.0+)
 
 BASE is populated by one real service user turn on the base Conversation,
-**before** any cloning. This works with the stock 0.18.0/0.18.1 wheel,
-without a native rebuild:
+**before** any cloning. Cloning uses the stock Python
+`Conversation.clone()` method from LiteRT-LM 0.19.0+; no application-level
+`ctypes` adapter or native rebuild is needed:
 
 1. Create BASE with the operator's system prompt and MQTT tools.
 2. Send "warm" once to BASE, await the assistant reply.
@@ -87,7 +88,7 @@ or used. --warm-message overrides the default value "warm".
 ## WSL smoke test
 
 Install MQTT client (Ubuntu): apt install mosquitto-clients
-Use the Python interpreter with LiteRT-LM 0.18.0/0.18.1 installed and your
+Use the Python interpreter with LiteRT-LM 0.19.0+ installed and your
 CPU-supported .litertlm model. The WSL host must reach the MQTT broker.
 
   cd /opt/cat-agent
@@ -119,7 +120,7 @@ of the subprocess execution:
     INFO:litert_agent_tools.mqtt_tools:native-tool RESULT name=get_home_climate result={"ok": true, "temperature_c": 24.66, "humidity_percent": 26.24}
 
 This is an example only; real numbers must be obtained from the broker.
-Clone events are also logged as native-conversation CLONE. If Gemma supplies
+Clone events are logged as `native-conversation CLONE mode=python success`. If Gemma supplies
 a number but no CALL log appears, it did NOT invoke this Python MQTT tool.
 
 ## Native KV counters

@@ -200,7 +200,7 @@ class NativeConversationChat:
             initial_kv = _kv_tokens(self._base)
 
             # First real inference populates the system + tools preface KV.
-            # Unlike a manually rendered prefill, the stock 0.18.x API
+            # Unlike a manually rendered prefill, the stock Python API
             # necessarily retains this user/assistant exchange in BASE.
             response = self._base.send_message(warm_message)
             self._base_warm_reply = response_text(response)

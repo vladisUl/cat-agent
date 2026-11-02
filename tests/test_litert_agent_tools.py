@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import ctypes
 import inspect
-from importlib import metadata
 import json
 import subprocess
-import sys
 from pathlib import Path
 import tempfile
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from litert_agent_tools.clone import ConversationCloneError, clone_conversation
 from litert_agent_tools.conversation import (
@@ -428,50 +425,35 @@ class ConversationTests(unittest.TestCase):
 
 
 class CloneAdapterTests(unittest.TestCase):
-    def test_uses_new_python_method_when_present(self):
-        source = SimpleNamespace(clone=lambda: "native-clone")
-        self.assertEqual(clone_conversation(source), "native-clone")
+    def test_uses_python_clone_method(self):
+        source = SimpleNamespace(clone=Mock(return_value="python-clone"))
+        self.assertEqual(clone_conversation(source), "python-clone")
+        source.clone.assert_called_once_with()
 
-    def test_unknown_legacy_abi_is_rejected(self):
-        with patch("litert_agent_tools.clone.metadata.version", return_value="1.0.0"):
-            with self.assertRaises(ConversationCloneError):
-                clone_conversation(SimpleNamespace())
-
-    def test_legacy_c_pointer_and_python_metadata(self):
-        calls = []
-        def native_clone(ptr):
-            calls.append(ptr)
-            return 8675
-
-        native_clone.argtypes = None
-        native_clone.restype = None
-        fake_lib = SimpleNamespace(litert_lm_conversation_clone=native_clone)
+    def test_does_not_use_legacy_native_pointer(self):
+        native_clone = Mock(return_value=8675)
         source = SimpleNamespace(
-            _ptr=123, _lib=fake_lib, _engine="engine",
-            messages=[{"role": "system", "content": "test"}], tools=["tool"],
-            _tools_map={"tool": "object"}, tool_event_handler=None,
-            automatic_tool_calling=True, extra_context={},
-            thinking_config=None, sampler_config="sampler",
-            lora_config=None, max_output_tokens=123,
-            chat_template=None, constrained_decoding_config=None,
+            _ptr=123, _lib=SimpleNamespace(litert_lm_conversation_clone=native_clone)
         )
-        class FakeWrapper:
-            def __init__(self, lib, ptr, **kwargs):
-                self.lib, self.ptr, self.kwargs = lib, ptr, kwargs
+        with self.assertRaisesRegex(ConversationCloneError, "0.19.0"):
+            clone_conversation(source)
+        native_clone.assert_not_called()
 
-        package = ModuleType("litert_lm")
-        module = ModuleType("litert_lm.conversation")
-        module.Conversation = FakeWrapper
-        with patch("litert_agent_tools.clone.metadata.version", return_value="0.18.0"), \
-             patch.dict(sys.modules, {"litert_lm": package, "litert_lm.conversation": module}):
-            result = clone_conversation(source)
+    def test_missing_or_noncallable_python_method_is_rejected(self):
+        for source in (SimpleNamespace(), SimpleNamespace(clone=None)):
+            with self.subTest(source=source):
+                with self.assertRaisesRegex(ConversationCloneError, "Conversation.clone"):
+                    clone_conversation(source)
 
-        self.assertEqual(result.ptr, 8675)
-        self.assertEqual(calls, [123])
-        self.assertEqual(native_clone.argtypes, [ctypes.c_void_p])
-        self.assertEqual(native_clone.restype, ctypes.c_void_p)
-        self.assertEqual(result.kwargs["tools_map"], {"tool": "object"})
-        self.assertTrue(result.kwargs["automatic_tool_calling"])
+    def test_python_clone_failure_is_propagated(self):
+        source = SimpleNamespace(clone=Mock(side_effect=RuntimeError("clone failed")))
+        with self.assertRaisesRegex(RuntimeError, "clone failed"):
+            clone_conversation(source)
+        source.clone.assert_called_once_with()
+
+    def test_python_clone_must_return_a_conversation(self):
+        with self.assertRaisesRegex(ConversationCloneError, "returned None"):
+            clone_conversation(SimpleNamespace(clone=lambda: None))
 
 
 class NativeSourcePatchTests(unittest.TestCase):

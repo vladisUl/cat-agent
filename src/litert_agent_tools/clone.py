@@ -1,15 +1,11 @@
-"""Conversation cloning for LiteRT-LM 0.18.x and newer Python bindings.
+"""Clone LiteRT-LM Conversations through the public Python API (0.19.0+).
 
-In 0.18.0/0.18.1 the C API exports
-    LiteRtLmConversation* litert_lm_conversation_clone(LiteRtLmConversation*)
-but Python lacks clone(). Current upstream Python provides clone() itself and
-the C API uses a DIFFERENT ABI. Never apply the legacy ctypes signature to it.
+The LiteRT-LM package owns its native handles and C ABI. Never call
+litert_lm_conversation_clone through an application-level ctypes adapter.
 """
 
 from __future__ import annotations
 
-import ctypes
-from importlib import metadata
 import logging
 
 
@@ -17,64 +13,19 @@ LOGGER = logging.getLogger(__name__)
 
 
 class ConversationCloneError(RuntimeError):
-    """Cloning is unavailable or failed."""
+    """The required public Conversation.clone() method is unavailable."""
 
 
 def clone_conversation(source):
-    """Clone the native KV state, history, tool configuration and Python callbacks."""
-    native = getattr(source, "clone", None)
-    if callable(native):
-        result = native()
-        LOGGER.info("native-conversation CLONE mode=python success")
-        return result
-
-    try:
-        version = metadata.version("litert-lm")
-    except metadata.PackageNotFoundError as exc:
-        raise ConversationCloneError("Cannot determine installed litert-lm version") from exc
-    if version not in ("0.18.0", "0.18.1"):
+    """Clone the Conversation KV state, history, tools and configuration."""
+    clone = getattr(source, "clone", None)
+    if not callable(clone):
         raise ConversationCloneError(
-            f"Legacy Conversation.clone ctypes adapter requires LiteRT-LM 0.18.0/0.18.1, got {version}; "
-            "do not guess an incompatible native ABI"
+            "LiteRT-LM Conversation.clone() is unavailable; install "
+            "litert-lm 0.19.0+ with a matching litert-lm-api package."
         )
-    ptr = getattr(source, "_ptr", None)
-    lib = getattr(source, "_lib", None)
-    if not ptr or lib is None:
-        raise ConversationCloneError("Source conversation has no live native handle")
-    try:
-        fn = lib.litert_lm_conversation_clone
-    except AttributeError as exc:
-        raise ConversationCloneError("Installed native library does not export Conversation.clone") from exc
-
-    fn.argtypes = [ctypes.c_void_p]
-    fn.restype = ctypes.c_void_p
-    cloned_ptr = fn(ptr)
-    if not cloned_ptr:
-        raise ConversationCloneError("Native Conversation.clone failed (check LiteRT native logs)")
-
-    # Import only after validating the installed ABI: tests and tooling can
-    # import this module without installing LiteRT-LM.
-    try:
-        from litert_lm.conversation import Conversation
-
-        result = Conversation(
-            lib, cloned_ptr,
-            engine=source._engine,
-            messages=list(source.messages),
-            tools=list(source.tools),
-            tools_map=dict(source._tools_map),
-            tool_event_handler=source.tool_event_handler,
-            automatic_tool_calling=source.automatic_tool_calling,
-            extra_context=dict(source.extra_context),
-            thinking_config=source.thinking_config,
-            sampler_config=source.sampler_config,
-            lora_config=source.lora_config,
-            max_output_tokens=source.max_output_tokens,
-            chat_template=source.chat_template,
-            constrained_decoding_config=source.constrained_decoding_config,
-        )
-        LOGGER.info("native-conversation CLONE mode=ctypes version=%s success", version)
-        return result
-    except BaseException:
-        lib.litert_lm_conversation_delete(cloned_ptr)
-        raise
+    result = clone()
+    if result is None:
+        raise ConversationCloneError("LiteRT-LM Conversation.clone() returned None")
+    LOGGER.info("native-conversation CLONE mode=python success")
+    return result
