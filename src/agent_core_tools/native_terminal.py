@@ -253,9 +253,18 @@ class NativeTerminalTUI(TerminalTUI):
                 if type(item.get("manager_working_tokens")) is int:
                     self.status["manager_working_tokens"] = item["manager_working_tokens"]
             elif kind == "notification":
-                # A legacy notification is not a TASK QUERY result and must
-                # not be ACKed via task_query_ack.
-                self._append_dialog("CORE", str(item.get("text", "")))
+                identifier = str(item.get("notification_id") or "")
+                if not identifier or identifier not in self._notifications_seen:
+                    self._append_dialog("CORE", str(item.get("text", "")))
+                    if identifier:
+                        self._notifications_seen.append(identifier)
+                if identifier:
+                    try:
+                        self.client.send({"type": "notification_ack",
+                                          "notification_id": identifier})
+                    except OSError as exc:
+                        # Outbox retries delivery; acknowledge duplicates too.
+                        LOGGER.warning("Native notification ACK pending: %s", exc)
             elif kind == "busy":
                 self._append_dialog("CORE", str(item.get("text", "Гена занят")))
             elif kind == "error":
