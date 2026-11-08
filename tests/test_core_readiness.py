@@ -149,6 +149,35 @@ class OllamaReadinessTest(unittest.TestCase):
         self.assertEqual(probe.check(), CheckResult(True))
         fetch.assert_called_once_with('http://192.168.0.129:8082/v1/models', timeout=3.0)
 
+    def test_openai_api_accepts_valid_catalog_without_target_model(self):
+        fetch = Mock(return_value={
+            'data': [{'id': 'glm-5.3-flash'}, {'id': 'another-model'}],
+        })
+        probe = OpenAIReadiness(
+            'https://api.z.ai/api/paas/v4',
+            mode='openai_api',
+            model='glm-4.5-flash',
+            api_key='test-key',
+            fetch=fetch,
+        )
+        self.assertEqual(probe.check(), CheckResult(True))
+        fetch.assert_called_once_with(
+            'https://api.z.ai/api/paas/v4/models',
+            headers={'Authorization': 'Bearer test-key'},
+            timeout=3.0,
+        )
+
+    def test_openai_api_still_rejects_invalid_and_unavailable_endpoints(self):
+        probe = OpenAIReadiness(
+            'https://api.z.ai/api/paas/v4',
+            mode='openai_api',
+            model='glm-4.5-flash',
+            fetch=Mock(return_value={'unexpected': 'no catalog'}),
+        )
+        self.assertEqual(probe.check(), CheckResult(False, 'openai_invalid_response'))
+        probe.fetch = Mock(side_effect=TimeoutError())
+        self.assertEqual(probe.check(), CheckResult(False, 'openai_unavailable'))
+
     def test_generic_openai_endpoint_rejects_missing_model(self):
         fetch = Mock(return_value={'object': 'list', 'data': [{'id': 'other-model'}]})
         probe = OpenAIReadiness(

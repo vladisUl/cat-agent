@@ -103,8 +103,13 @@ openai:
   # Protected body fields: model, messages, stream; protected headers:
   # Authorization, Content-Type and Host. Existing profiles work unchanged.
   # Secrets live only in .env.openai, never in the tracked YAML.
-  # For a private key with readiness: openai, the /models probe sends the
-  # same Bearer key used by model requests; /models must list the model ID.
+  # For readiness: openai, the /models probe sends the same Bearer key
+  # used by model requests and requires that the catalog list the model ID.
+  # readiness: openai_api also probes authenticated /models and requires a
+  # valid model-list response, but does not require this model's ID to appear.
+  # This handles providers that serve models not included in their catalog.
+  # It verifies API availability, NOT actual generation or model availability.
+  # The existing ollama and openai readiness modes are unchanged.
 
   # Allowed reasoning_effort values: none, minimal, low, medium, high, xhigh.
   # API keys do NOT belong here. Keep CAT_AGENT_API_KEY / OPENAI_API_KEY and

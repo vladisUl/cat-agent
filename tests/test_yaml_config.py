@@ -225,6 +225,13 @@ class YamlConfigTest(unittest.TestCase):
         self.assertIn("export CAT_AGENT_MODEL=gemma4:31b-cloud", exported)
         self.assertIn("export CAT_AGENT_OPENAI_READINESS=ollama", exported)
 
+    def test_openai_api_readiness_profile_is_exported(self) -> None:
+        source = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        source["openai"]["profiles"]["laptop-12b"]["readiness"] = "openai_api"
+        self.config_path.write_text(yaml.safe_dump(source), encoding="utf-8")
+        exported = self._capture("openai")
+        self.assertIn("export CAT_AGENT_OPENAI_READINESS=openai_api", exported)
+
     def test_openai_and_common_settings_are_exported(self) -> None:
         exported = self._capture("openai")
         expected = (

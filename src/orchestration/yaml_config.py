@@ -354,7 +354,7 @@ def _parse_openai(data: Any) -> OpenAIConfig:
     profiles: dict[str, OpenAIProfile] = {}
     allowed_keys = {"base_url", "model", "reasoning_effort", "readiness", "api_key_env", "request"}
     allowed_reasoning = {"none", "minimal", "low", "medium", "high", "xhigh"}
-    allowed_readiness = {"ollama", "openai"}
+    allowed_readiness = {"ollama", "openai", "openai_api"}
 
     for profile_name, raw in raw_profiles.items():
         if not isinstance(profile_name, str) or not profile_name.strip():

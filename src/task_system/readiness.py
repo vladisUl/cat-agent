@@ -23,7 +23,7 @@ class OpenAIReadiness:
         self.usage = usage or OllamaUsageProbe()
         if mode == 'ollama':
             self.url = (base[:-3] if base.endswith('/v1') else base) + '/api/tags'
-        elif mode == 'openai':
+        elif mode in ('openai', 'openai_api'):
             self.url = base + '/models'
         else:
             raise ValueError(f'unsupported OpenAI readiness mode: {mode!r}')
@@ -62,7 +62,9 @@ class OpenAIReadiness:
             for item in models
             if isinstance(item, dict) and isinstance(item.get('id'), str)
         }
-        if self.model and self.model not in ids:
+        # Some providers can serve a model without exposing it in /models.
+        # Keep the legacy mode strict; openai_api verifies only the API/catalog.
+        if self.mode == 'openai' and self.model and self.model not in ids:
             return CheckResult(False, 'openai_model_unavailable')
         return CheckResult(True)
 
