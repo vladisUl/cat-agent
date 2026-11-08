@@ -73,13 +73,15 @@ openai:
             type: disabled
           max_tokens: 4096
 
-    zai-53:
+    zai-46v:
       base_url: https://api.z.ai/api/paas/v4
-      model: glm-5.3-flash
-      readiness: openai
+      model: glm-4.6v-flash
+      readiness: openai_api
       api_key_env: ZAI_API_KEY
       request:
         extra_body:
+          thinking:
+            type: disabled
           max_tokens: 4096
 
 agent:

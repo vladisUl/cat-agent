@@ -124,15 +124,15 @@ openai:
   # reasoning_effort is optional; omitted defaults to none (not sent in JSON).
   # Allowed explicit values: none, minimal, low, medium, high, xhigh.
   # Legacy/provider-neutral fields are unchanged for existing profiles.
-  # Optional zai-53 profile uses model glm-5.3-flash.
-  #   model: glm-5.3-flash
-  #   readiness: openai  # This model is listed in Z.ai's /models catalog.
-  #   api_key_env: ZAI_API_KEY
-  #   request: {extra_body: {max_tokens: 4096}}
-  # No thinking override: GLM-5.3-Flash supports always-on reasoning.
-  # Z.ai publishes paid pricing of USD $0.15/M input and $0.50/M output.
-  # This model is not free on Z.ai's direct API; the /models listing does
-  # not imply account entitlement. Keep this profile inactive unless wanted.
+  # Free Z.ai profiles in cat-agent.yaml:
+  #   zai: glm-4.5-flash (existing, verified with CORE and MQTT)
+  #   zai-46v: glm-4.6v-flash (multimodal, API access not yet tested locally)
+  # Both use ZAI_API_KEY from .env.openai and an explicit
+  # request.extra_body.thinking.type: disabled to request direct answers.
+  # zai-46v uses readiness: openai_api because providers may omit otherwise
+  # available models from their /models catalog; successful chat/completions
+  # remains the decisive model-availability test.
+  # The formerly added paid zai-53 profile was removed.
   # API keys do NOT belong here. Keep CAT_AGENT_API_KEY / OPENAI_API_KEY and
   # OLLAMA_API_KEY in /opt/cat-agent/.env.openai. OLLAMA_API_KEY is consulted
   # only by profiles whose readiness mode is ollama.

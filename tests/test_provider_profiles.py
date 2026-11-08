@@ -48,19 +48,23 @@ class ProviderProfilesTest(unittest.TestCase):
 
     def test_optional_reasoning_effort_and_legacy_profiles(self):
         self.source["openai"]["profiles"]["laptop-12b"]["reasoning_effort"] = "high"
-        self.source["openai"]["profiles"]["zai-53"] = {
+        self.source["openai"]["profiles"]["zai-46v"] = {
             "base_url": "https://api.z.ai/api/paas/v4",
-            "model": "glm-5.3-flash",
-            "readiness": "openai",
+            "model": "glm-4.6v-flash",
+            "readiness": "openai_api",
             "api_key_env": "ZAI_API_KEY",
-            "request": {"extra_body": {"max_tokens": 4096}},
+            "request": {"extra_body": {
+                "thinking": {"type": "disabled"}, "max_tokens": 4096,
+            }},
         }
         cfg = load_app_config(self._write())
         self.assertEqual(cfg.openai.profiles["laptop-12b"].reasoning_effort, "high")
-        profile_53 = cfg.openai.profiles["zai-53"]
-        self.assertEqual(profile_53.reasoning_effort, "none")
-        self.assertEqual(profile_53.request.extra_body, {"max_tokens": 4096})
-        self.assertNotIn("thinking", profile_53.request.extra_body)
+        profile_46v = cfg.openai.profiles["zai-46v"]
+        self.assertEqual(profile_46v.reasoning_effort, "none")
+        self.assertEqual(profile_46v.request.extra_body, {
+            "thinking": {"type": "disabled"}, "max_tokens": 4096,
+        })
+        self.assertEqual(profile_46v.readiness, "openai_api")
 
     def test_existing_profile_keeps_old_defaults(self):
         config = load_app_config(self._write())
