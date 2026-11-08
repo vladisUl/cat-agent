@@ -38,6 +38,9 @@ class OpenAICompatibleChatClient:
         *,
         label: str,
         api_key: str = "",
+        extra_body: dict[str, Any] | None = None,
+        omit_fields: tuple[str, ...] = (),
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         self.api_base_url = api_base_url.rstrip("/")
         self.model = model
@@ -50,6 +53,14 @@ class OpenAICompatibleChatClient:
         self.reasoning_effort = reasoning_effort
         self.label = label
         self.api_key = api_key.strip()
+        self.extra_body = dict(extra_body or {})
+        self.omit_fields = tuple(omit_fields)
+        self.extra_headers = dict(extra_headers or {})
+        protected = {"model", "messages", "stream"}
+        if protected.intersection(self.extra_body) or protected.intersection(self.omit_fields):
+            raise ValueError("request options must not override model, messages or stream")
+        if any(key.lower() in {"authorization", "content-type", "host"} for key in self.extra_headers):
+            raise ValueError("extra headers must not override Authorization, Content-Type or Host")
         self.stream_enabled = os.getenv(
             "CAT_AGENT_OPENAI_STREAM", "1"
         ).strip().lower() in {"1", "true", "yes", "on"}
@@ -72,6 +83,8 @@ class OpenAICompatibleChatClient:
             max_output_tokens=self.max_output_tokens, temperature=self.temperature,
             top_p=self.top_p, reasoning_effort=self.reasoning_effort,
             label=label, api_key=self.api_key,
+            extra_body=self.extra_body, omit_fields=self.omit_fields,
+            extra_headers=self.extra_headers,
         )
 
     @property
@@ -206,6 +219,9 @@ class OpenAICompatibleChatClient:
         }
         if self.reasoning_effort != "none":
             payload["reasoning_effort"] = self.reasoning_effort
+        payload.update(self.extra_body)
+        for field in self.omit_fields:
+            payload.pop(field, None)
         return payload
 
     def _stream_request(
@@ -265,7 +281,7 @@ class OpenAICompatibleChatClient:
         return self._send_json(self._request(payload))
 
     def _request(self, payload: dict[str, Any]) -> request.Request:
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", **self.extra_headers}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return request.Request(

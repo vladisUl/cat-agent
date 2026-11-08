@@ -62,6 +62,18 @@ openai:
       reasoning_effort: none
       readiness: openai
 
+    zai:
+      base_url: https://api.z.ai/api/paas/v4
+      model: glm-4.5-flash
+      reasoning_effort: none
+      readiness: openai
+      api_key_env: ZAI_API_KEY
+      request:
+        extra_body:
+          thinking:
+            type: disabled
+          max_tokens: 4096
+
 agent:
   count: 3
   manager_max_steps: 12

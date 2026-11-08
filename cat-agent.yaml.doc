@@ -88,6 +88,24 @@ openai:
       # and require this profile's model id to be present.
       readiness: openai
 
+  # Optional generic provider settings for any OpenAI-compatible endpoint:
+  #   api_key_env: ZAI_API_KEY  # Select secret from .env.openai by variable name.
+  # If omitted, the legacy CAT_AGENT_API_KEY / OPENAI_API_KEY fallback is used.
+  # If explicitly named but unset, startup fails instead of using another key.
+  #   request:
+  #     extra_body:  # Top-level JSON fields merged into chat/completions payload.
+  #       thinking:
+  #         type: disabled
+  #       max_tokens: 4096  # Can override default manager/worker token cap.
+  #     omit_fields: [temperature]  # Optional removal of standard fields.
+  #     headers:  # Optional extra non-secret HTTP headers.
+  #       X-App-Name: cat-agent
+  # Protected body fields: model, messages, stream; protected headers:
+  # Authorization, Content-Type and Host. Existing profiles work unchanged.
+  # Secrets live only in .env.openai, never in the tracked YAML.
+  # For a private key with readiness: openai, the /models probe sends the
+  # same Bearer key used by model requests; /models must list the model ID.
+
   # Allowed reasoning_effort values: none, minimal, low, medium, high, xhigh.
   # API keys do NOT belong here. Keep CAT_AGENT_API_KEY / OPENAI_API_KEY and
   # OLLAMA_API_KEY in /opt/cat-agent/.env.openai. OLLAMA_API_KEY is consulted

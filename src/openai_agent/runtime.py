@@ -45,13 +45,23 @@ class OpenAIRuntimeBundle:
             client.close()
 
 
+def _resolve_api_key(settings: Settings) -> str:
+    """A missing explicitly named secret must never fall back to another provider."""
+    if settings.api_key_env:
+        key = os.getenv(settings.api_key_env, "").strip()
+        if not key:
+            raise ValueError(f"Missing API key environment variable {settings.api_key_env}")
+        return key
+    return os.getenv("CAT_AGENT_API_KEY", os.getenv("OPENAI_API_KEY", "")).strip()
+
+
 def _client(
     settings: Settings,
     *,
     max_output_tokens: int,
     label: str,
 ) -> OpenAICompatibleChatClient:
-    api_key = os.getenv("CAT_AGENT_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+    api_key = _resolve_api_key(settings)
     return OpenAICompatibleChatClient(
         api_base_url=settings.api_base_url,
         model=settings.model,
@@ -64,6 +74,9 @@ def _client(
         reasoning_effort=settings.reasoning_effort,
         label=label,
         api_key=api_key,
+        extra_body=settings.request_extra_body,
+        omit_fields=settings.request_omit_fields,
+        extra_headers=settings.request_headers,
     )
 
 
@@ -83,6 +96,7 @@ def build_bundle(settings: Settings) -> OpenAIRuntimeBundle:
                 settings.api_base_url,
                 mode=os.getenv("CAT_AGENT_OPENAI_READINESS", "ollama").strip().lower(),
                 model=settings.model,
+                api_key=_resolve_api_key(settings),
             ),
         )
 

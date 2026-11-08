@@ -14,11 +14,12 @@ REASONS = {'', 'initializing', 'stopping', 'runtime_unavailable', 'readiness_unk
 
 
 class OpenAIReadiness:
-    def __init__(self, api_base_url, *, mode='ollama', model='', fetch=fetch_json, usage=None):
+    def __init__(self, api_base_url, *, mode='ollama', model='', fetch=fetch_json, usage=None, api_key=''):
         base = api_base_url.rstrip('/')
         self.mode = mode
         self.model = model
         self.fetch = fetch
+        self.api_key = api_key
         self.usage = usage or OllamaUsageProbe()
         if mode == 'ollama':
             self.url = (base[:-3] if base.endswith('/v1') else base) + '/api/tags'
@@ -47,7 +48,10 @@ class OpenAIReadiness:
             return self.usage.check()
 
         try:
-            data = self.fetch(self.url, timeout=HTTP_TIMEOUT)
+            if self.api_key:
+                data = self.fetch(self.url, headers={'Authorization': 'Bearer ' + self.api_key}, timeout=HTTP_TIMEOUT)
+            else:
+                data = self.fetch(self.url, timeout=HTTP_TIMEOUT)
         except Exception:
             return CheckResult(False, 'openai_unavailable')
         models = data.get('data') if isinstance(data, dict) else None

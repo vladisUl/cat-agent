@@ -81,6 +81,17 @@ def _export_openai(config: AppConfig) -> None:
     _export("CAT_AGENT_API_BASE_URL", profile.base_url)
     _export("CAT_AGENT_MODEL", profile.model)
     _export("CAT_AGENT_OPENAI_READINESS", profile.readiness)
+    _export("CAT_AGENT_OPENAI_API_KEY_ENV", profile.api_key_env or "")
+    request = profile.request
+    _export("CAT_AGENT_OPENAI_EXTRA_BODY_JSON", json.dumps(
+        request.extra_body if request else {}, ensure_ascii=False, allow_nan=False,
+    ))
+    _export("CAT_AGENT_OPENAI_OMIT_FIELDS_JSON", json.dumps(
+        request.omit_fields if request else (),
+    ))
+    _export("CAT_AGENT_OPENAI_HEADERS_JSON", json.dumps(
+        request.headers if request else {}, ensure_ascii=False,
+    ))
 
 
 def _export_web(config: AppConfig) -> None:

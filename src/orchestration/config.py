@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import json
 import os
+from typing import Any
 from pathlib import Path
 
 from .mcp_config import McpServerConfig, load_mcp_config
@@ -52,6 +54,10 @@ class Settings:
     mcp_servers: tuple[McpServerConfig, ...] = ()
     # Independent of prompt_dir. Override only for isolated test deployments.
     project_root: Path = Path(__file__).resolve().parents[2]
+    api_key_env: str = ""
+    request_extra_body: dict[str, Any] = field(default_factory=dict)
+    request_omit_fields: tuple[str, ...] = ()
+    request_headers: dict[str, str] = field(default_factory=dict)
 
     @property
     def tool_dir(self) -> Path:
@@ -107,5 +113,9 @@ class Settings:
             top_p=_env_float("CAT_AGENT_TOP_P", 1.0, minimum=0.0, maximum=1.0),
             reasoning_effort=reasoning_effort,
             log_level=os.getenv("CAT_AGENT_LOG_LEVEL", "INFO").upper(),
+            api_key_env=os.getenv("CAT_AGENT_OPENAI_API_KEY_ENV", "").strip(),
+            request_extra_body=json.loads(os.getenv("CAT_AGENT_OPENAI_EXTRA_BODY_JSON", "{}")),
+            request_omit_fields=tuple(json.loads(os.getenv("CAT_AGENT_OPENAI_OMIT_FIELDS_JSON", "[]"))),
+            request_headers=json.loads(os.getenv("CAT_AGENT_OPENAI_HEADERS_JSON", "{}")),
             mcp_servers=load_mcp_config(),
         )

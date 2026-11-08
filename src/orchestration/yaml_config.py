@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import re
 import os
 from pathlib import Path
 from typing import Any
@@ -103,11 +104,20 @@ class LiteRTConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class OpenAIRequestConfig:
+    extra_body: dict[str, Any]
+    omit_fields: tuple[str, ...]
+    headers: dict[str, str]
+
+
+@dataclass(frozen=True, slots=True)
 class OpenAIProfile:
     base_url: str
     model: str
     reasoning_effort: str
     readiness: str
+    api_key_env: str | None = None
+    request: OpenAIRequestConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +300,49 @@ def _parse_litert(data: Any) -> LiteRTConfig:
                         command_dir=command_dir, native=native)
 
 
+def _valid_json_value(value: Any) -> bool:
+    if value is None or isinstance(value, (str, bool, int)):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_valid_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _valid_json_value(item)
+                   for key, item in value.items())
+    return False
+
+
+def _parse_openai_request(raw: Any, name: str) -> OpenAIRequestConfig:
+    item = _mapping(raw, name)
+    _check_keys(item, name, {"extra_body", "omit_fields", "headers"})
+    extra = _mapping(item.get("extra_body", {}), f"{name}.extra_body")
+    protected = {"model", "messages", "stream"}
+    if protected.intersection(extra):
+        raise ValueError(f"{name}.extra_body cannot replace model, messages or stream")
+    if not _valid_json_value(extra):
+        raise ValueError(f"{name}.extra_body must contain valid JSON values")
+
+    omitted = item.get("omit_fields", [])
+    if not isinstance(omitted, list) or any(
+        not isinstance(field, str) or not field.strip() for field in omitted
+    ):
+        raise ValueError(f"{name}.omit_fields must be a list of strings")
+    if protected.intersection(omitted):
+        raise ValueError(f"{name}.omit_fields cannot omit model, messages or stream")
+
+    headers = _mapping(item.get("headers", {}), f"{name}.headers")
+    for key, value in headers.items():
+        if (not isinstance(key, str) or not key.strip()
+            or not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"{name}.headers must map nonempty names to strings")
+        if key.lower() in {"authorization", "content-type", "host"}:
+            raise ValueError(f"{name}.headers cannot override {key}")
+        if "\r" in key or "\n" in key or "\r" in value or "\n" in value:
+            raise ValueError(f"{name}.headers must not contain newlines")
+    return OpenAIRequestConfig(dict(extra), tuple(omitted), dict(headers))
+
+
 def _parse_openai(data: Any) -> OpenAIConfig:
     section = _mapping(data, "openai")
     _check_keys(section, "openai", {"active_profile", "profiles"})
@@ -299,7 +352,7 @@ def _parse_openai(data: Any) -> OpenAIConfig:
         raise ValueError("openai.profiles must not be empty")
 
     profiles: dict[str, OpenAIProfile] = {}
-    allowed_keys = {"base_url", "model", "reasoning_effort", "readiness"}
+    allowed_keys = {"base_url", "model", "reasoning_effort", "readiness", "api_key_env", "request"}
     allowed_reasoning = {"none", "minimal", "low", "medium", "high", "xhigh"}
     allowed_readiness = {"ollama", "openai"}
 
@@ -321,11 +374,19 @@ def _parse_openai(data: Any) -> OpenAIConfig:
                 f"{name}.readiness must be one of {sorted(allowed_readiness)}"
             )
 
+        key_env = item.get("api_key_env")
+        if key_env is not None:
+            if (not isinstance(key_env, str)
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key_env)):
+                raise ValueError(f"{name}.api_key_env must be an environment variable name")
+        request_config = _parse_openai_request(item.get("request", {}), f"{name}.request")
         profiles[profile_name] = OpenAIProfile(
             base_url=_string(item, "base_url", name).rstrip("/"),
             model=_string(item, "model", name),
             reasoning_effort=reasoning,
             readiness=readiness,
+            api_key_env=key_env,
+            request=request_config,
         )
 
     if active_profile not in profiles:
