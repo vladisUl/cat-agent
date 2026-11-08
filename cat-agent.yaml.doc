@@ -124,14 +124,15 @@ openai:
   # reasoning_effort is optional; omitted defaults to none (not sent in JSON).
   # Allowed explicit values: none, minimal, low, medium, high, xhigh.
   # Legacy/provider-neutral fields are unchanged for existing profiles.
-  # The low-cost zai-32b profile uses the 2025 GLM-4-32B-0414-128K model:
-  #   model: glm-4-32b-0414-128k
-  #   readiness: openai_api
+  # Optional zai-53 profile uses model glm-5.3-flash.
+  #   model: glm-5.3-flash
+  #   readiness: openai  # This model is listed in Z.ai's /models catalog.
   #   api_key_env: ZAI_API_KEY
   #   request: {extra_body: {max_tokens: 4096}}
-  # No thinking override: this model's documented API example omits it.
-  # Z.ai currently lists it at USD $0.10/M input and $0.10/M output.
-  # This is a paid API model, requiring a usable Z.ai account balance.
+  # No thinking override: GLM-5.3-Flash supports always-on reasoning.
+  # Z.ai publishes paid pricing of USD $0.15/M input and $0.50/M output.
+  # This model is not free on Z.ai's direct API; the /models listing does
+  # not imply account entitlement. Keep this profile inactive unless wanted.
   # API keys do NOT belong here. Keep CAT_AGENT_API_KEY / OPENAI_API_KEY and
   # OLLAMA_API_KEY in /opt/cat-agent/.env.openai. OLLAMA_API_KEY is consulted
   # only by profiles whose readiness mode is ollama.

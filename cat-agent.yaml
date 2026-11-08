@@ -73,10 +73,10 @@ openai:
             type: disabled
           max_tokens: 4096
 
-    zai-32b:
+    zai-53:
       base_url: https://api.z.ai/api/paas/v4
-      model: glm-4-32b-0414-128k
-      readiness: openai_api
+      model: glm-5.3-flash
+      readiness: openai
       api_key_env: ZAI_API_KEY
       request:
         extra_body:
