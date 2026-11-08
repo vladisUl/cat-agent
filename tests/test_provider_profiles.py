@@ -46,6 +46,22 @@ class ProviderProfilesTest(unittest.TestCase):
             },
         }
 
+    def test_optional_reasoning_effort_and_legacy_profiles(self):
+        self.source["openai"]["profiles"]["laptop-12b"]["reasoning_effort"] = "high"
+        self.source["openai"]["profiles"]["zai-32b"] = {
+            "base_url": "https://api.z.ai/api/paas/v4",
+            "model": "glm-4-32b-0414-128k",
+            "readiness": "openai_api",
+            "api_key_env": "ZAI_API_KEY",
+            "request": {"extra_body": {"max_tokens": 4096}},
+        }
+        cfg = load_app_config(self._write())
+        self.assertEqual(cfg.openai.profiles["laptop-12b"].reasoning_effort, "high")
+        older = cfg.openai.profiles["zai-32b"]
+        self.assertEqual(older.reasoning_effort, "none")
+        self.assertEqual(older.request.extra_body, {"max_tokens": 4096})
+        self.assertNotIn("thinking", older.request.extra_body)
+
     def test_existing_profile_keeps_old_defaults(self):
         config = load_app_config(self._write())
         p = config.openai.active

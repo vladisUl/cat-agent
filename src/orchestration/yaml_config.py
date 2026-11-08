@@ -363,7 +363,10 @@ def _parse_openai(data: Any) -> OpenAIConfig:
         item = _mapping(raw, name)
         _check_keys(item, name, allowed_keys)
 
-        reasoning = _string(item, "reasoning_effort", name).lower()
+        reasoning = item.get("reasoning_effort", "none")
+        if not isinstance(reasoning, str):
+            raise ValueError(f"{name}.reasoning_effort must be a string")
+        reasoning = reasoning.strip().lower()
         if reasoning not in allowed_reasoning:
             raise ValueError(
                 f"{name}.reasoning_effort must be one of {sorted(allowed_reasoning)}"

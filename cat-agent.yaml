@@ -65,13 +65,21 @@ openai:
     zai:
       base_url: https://api.z.ai/api/paas/v4
       model: glm-4.5-flash
-      reasoning_effort: none
       readiness: openai_api
       api_key_env: ZAI_API_KEY
       request:
         extra_body:
           thinking:
             type: disabled
+          max_tokens: 4096
+
+    zai-32b:
+      base_url: https://api.z.ai/api/paas/v4
+      model: glm-4-32b-0414-128k
+      readiness: openai_api
+      api_key_env: ZAI_API_KEY
+      request:
+        extra_body:
           max_tokens: 4096
 
 agent:
