@@ -32,12 +32,12 @@ class _Handler(BaseHTTPRequestHandler):
         elif payload["stream"]:
             events = [
                 {"choices": [{"delta": {"reasoning_content": "Сначала прочитаю запрос."}}]},
-                {"choices": [{"delta": {"content": "REPLY\\nОК"}}]},
+                {"choices": [{"delta": {"content": "REPLY\nОК"}}]},
                 {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 8,
                     "completion_tokens_details": {"reasoning_tokens": 5}}},
             ]
-            body = ("".join("data: " + json.dumps(e, ensure_ascii=False) + "\\n\\n"
-                            for e in events) + "data: [DONE]\\n\\n").encode()
+            body = ("".join("data: " + json.dumps(e, ensure_ascii=False) + "\n\n"
+                            for e in events) + "data: [DONE]\n\n").encode()
             status, content_type = 200, "text/event-stream"
         else:
             body = json.dumps(
@@ -45,7 +45,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "choices": [{
                         "message": {
                             "role": "assistant",
-                            "content": "REPLY\\nОК",
+                            "content": "REPLY\nОК",
                             "reasoning_content": "Сначала прочитаю запрос.",
                         },
                     }],
@@ -110,8 +110,8 @@ class OpenAICompatibleChatClientTest(unittest.TestCase):
         client = self._trace_client()
         with self.assertLogs("openai_agent.model_client", level="INFO") as logs:
             response = client.chat([{"role": "user", "content": "секретный вопрос"}])
-        self.assertEqual(response.content, "REPLY\\nОК")
-        combined = "\\n".join(logs.output)
+        self.assertEqual(response.content, "REPLY\nОК")
+        combined = "\n".join(logs.output)
         self.assertIn('"thinking": {"type": "disabled"}', combined)
         self.assertIn("секретный вопрос", combined)
         self.assertIn("Сначала прочитаю запрос.", combined)
@@ -126,8 +126,8 @@ class OpenAICompatibleChatClientTest(unittest.TestCase):
         client.set_event_handler(lambda *args: None)
         with self.assertLogs("openai_agent.model_client", level="INFO") as logs:
             response = client.chat([{"role": "user", "content": "привет"}])
-        combined = "\\n".join(logs.output)
-        self.assertEqual(response.content, "REPLY\\nОК")
+        combined = "\n".join(logs.output)
+        self.assertEqual(response.content, "REPLY\nОК")
         self.assertIn("Сначала прочитаю запрос.", combined)
         self.assertIn('"reasoning_tokens": 5', combined)
         self.assertIn("reasoning_content_present=True", combined)
@@ -140,7 +140,7 @@ class OpenAICompatibleChatClientTest(unittest.TestCase):
         with self.assertLogs("openai_agent.model_client", level="INFO") as logs:
             with self.assertRaises(ModelClientError):
                 client.chat([{"role": "user", "content": "привет"}])
-        combined = "\\n".join(logs.output)
+        combined = "\n".join(logs.output)
         self.assertIn("status=500", combined)
         self.assertIn("Operation failed", combined)
         self.assertNotIn("DO_NOT_LOG_THIS_KEY", combined)
