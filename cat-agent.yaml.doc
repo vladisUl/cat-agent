@@ -7,6 +7,16 @@
 #
 # Configuration is read when a component starts. After changing a section,
 # restart the corresponding process/service. There is no hot reload.
+#
+# OpenAI-compatible HTTP diagnostic tracing (optional; in .env.openai):
+#   CAT_AGENT_OPENAI_TRACE=1
+# Logs each full outbound JSON body, raw JSON/SSE response, HTTP status,
+# elapsed HTTP time, usage and reasoning_content presence/length under
+# OPENAI TRACE in /var/log/litertlm/cat-agent.log.
+# No HTTP Authorization header/API key is logged. Because messages and
+# responses are logged verbatim, turn it off after debugging:
+#   CAT_AGENT_OPENAI_TRACE=0
+# Restart OpenAI CORE after changing this setting.
 
 litert:
   # Selects the profile loaded by the LiteRT CORE.

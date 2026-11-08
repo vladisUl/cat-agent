@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from typing import Any, Callable
+from uuid import uuid4
 from urllib import error, request
 
 from orchestration.model_client import ChatResponse, ModelClientError
@@ -41,6 +42,7 @@ class OpenAICompatibleChatClient:
         extra_body: dict[str, Any] | None = None,
         omit_fields: tuple[str, ...] = (),
         extra_headers: dict[str, str] | None = None,
+        trace_enabled: bool | None = None,
     ) -> None:
         self.api_base_url = api_base_url.rstrip("/")
         self.model = model
@@ -56,6 +58,11 @@ class OpenAICompatibleChatClient:
         self.extra_body = dict(extra_body or {})
         self.omit_fields = tuple(omit_fields)
         self.extra_headers = dict(extra_headers or {})
+        self.trace_enabled = (
+            os.getenv("CAT_AGENT_OPENAI_TRACE", "0").strip().lower()
+            in {"1", "true", "yes", "on"}
+            if trace_enabled is None else trace_enabled
+        )
         protected = {"model", "messages", "stream"}
         if protected.intersection(self.extra_body) or protected.intersection(self.omit_fields):
             raise ValueError("request options must not override model, messages or stream")
@@ -85,6 +92,7 @@ class OpenAICompatibleChatClient:
             label=label, api_key=self.api_key,
             extra_body=self.extra_body, omit_fields=self.omit_fields,
             extra_headers=self.extra_headers,
+            trace_enabled=self.trace_enabled,
         )
 
     @property
@@ -233,10 +241,19 @@ class OpenAICompatibleChatClient:
         chunks: list[str] = []
         usage: dict[str, Any] = {}
         first_chunk_at: float | None = None
+        trace_id = uuid4().hex[:12] if self.trace_enabled else ""
+        trace_lines: list[str] = []
+        http_status: int | None = None
+        if self.trace_enabled:
+            self._trace_request(trace_id, http_request, attempt=1)
+        http_started = time.monotonic()
 
         try:
             with request.urlopen(http_request, timeout=self.timeout_seconds) as response:
+                http_status = response.status
                 for raw in response:
+                    if self.trace_enabled:
+                        trace_lines.append(raw.decode("utf-8", errors="replace"))
                     line = raw.decode("utf-8", errors="replace").strip()
                     if not line or line.startswith(":") or not line.startswith("data:"):
                         continue
@@ -268,12 +285,21 @@ class OpenAICompatibleChatClient:
                     chunks.append(chunk)
                     self._emit_event("chunk", chunk)
         except error.HTTPError as exc:
+            http_status = exc.code
             body = exc.read().decode("utf-8", errors="replace")
+            if self.trace_enabled:
+                trace_lines.append(body)
             raise ModelClientError(
                 f"HTTP {exc.code} from OpenAI-compatible endpoint: {body}"
             ) from exc
         except (error.URLError, TimeoutError) as exc:
             raise ModelClientError(f"OpenAI-compatible stream failed: {exc}") from exc
+        finally:
+            if self.trace_enabled:
+                self._trace_response(
+                    trace_id, http_status, time.monotonic() - http_started,
+                    "".join(trace_lines), stream=True,
+                )
 
         return "".join(chunks), usage, first_chunk_at
 
@@ -294,14 +320,23 @@ class OpenAICompatibleChatClient:
     def _send_json(self, http_request: request.Request) -> dict[str, Any]:
         last_error: Exception | None = None
         attempts = self.retries + 1
+        trace_id = uuid4().hex[:12] if self.trace_enabled else ""
 
         for attempt in range(1, attempts + 1):
+            if self.trace_enabled:
+                self._trace_request(trace_id, http_request, attempt=attempt)
+            http_started = time.monotonic()
             try:
                 with request.urlopen(
                     http_request,
                     timeout=self.timeout_seconds,
                 ) as response:
                     body = response.read().decode("utf-8")
+                    if self.trace_enabled:
+                        self._trace_response(
+                            trace_id, response.status, time.monotonic() - http_started,
+                            body, stream=False,
+                        )
                     decoded = json.loads(body)
                     if not isinstance(decoded, dict):
                         raise ModelClientError(
@@ -310,6 +345,11 @@ class OpenAICompatibleChatClient:
                     return decoded
             except error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
+                if self.trace_enabled:
+                    self._trace_response(
+                        trace_id, exc.code, time.monotonic() - http_started,
+                        body, stream=False,
+                    )
                 message = (
                     f"HTTP {exc.code} from OpenAI-compatible endpoint: {body}"
                 )
@@ -317,6 +357,12 @@ class OpenAICompatibleChatClient:
                     raise ModelClientError(message) from exc
                 last_error = ModelClientError(message)
             except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                if self.trace_enabled:
+                    LOGGER.info(
+                        "OPENAI TRACE id=%s role=%s transport_or_decode_error seconds=%.3f type=%s",
+                        trace_id, self.label, time.monotonic() - http_started,
+                        type(exc).__name__,
+                    )
                 last_error = exc
 
             if attempt < attempts:
@@ -331,6 +377,71 @@ class OpenAICompatibleChatClient:
                 time.sleep(delay)
 
         raise ModelClientError(f"OpenAI-compatible request failed: {last_error}")
+
+    def _trace_request(self, trace_id: str, http_request: request.Request, *, attempt: int) -> None:
+        # Only the serialized POST body is logged: never HTTP authentication headers.
+        LOGGER.info(
+            "OPENAI TRACE id=%s role=%s attempt=%d REQUEST url=%s body=%s",
+            trace_id, self.label, attempt, http_request.full_url,
+            http_request.data.decode("utf-8"),
+        )
+
+    def _trace_response(
+        self, trace_id: str, status: int | None, elapsed: float,
+        body: str, *, stream: bool,
+    ) -> None:
+        LOGGER.info(
+            "OPENAI TRACE id=%s role=%s RESPONSE status=%s seconds=%.3f stream=%s body=%s",
+            trace_id, self.label, status, elapsed, stream, body,
+        )
+        # This is diagnostic metadata, never substituted for the raw response.
+        # Absence of reasoning_content is NOT proof of zero internal reasoning.
+        events: list[dict[str, Any]] = []
+        if stream:
+            for line in body.splitlines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                try:
+                    item = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, dict):
+                    events.append(item)
+        else:
+            try:
+                item = json.loads(body)
+            except json.JSONDecodeError:
+                item = None
+            if isinstance(item, dict):
+                events.append(item)
+
+        usage: dict[str, Any] = {}
+        reasoning_chars = 0
+        reasoning_present = False
+        for item in events:
+            if isinstance(item.get("usage"), dict):
+                usage = item["usage"]
+            choices = item.get("choices")
+            if not isinstance(choices, list):
+                continue
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                part = choice.get("delta" if stream else "message")
+                if not isinstance(part, dict) or "reasoning_content" not in part:
+                    continue
+                reasoning_present = True
+                value = part["reasoning_content"]
+                if isinstance(value, str):
+                    reasoning_chars += len(value)
+        LOGGER.info(
+            "OPENAI TRACE id=%s role=%s SUMMARY usage=%s reasoning_content_present=%s reasoning_content_chars=%d",
+            trace_id, self.label, json.dumps(usage, ensure_ascii=False),
+            reasoning_present, reasoning_chars,
+        )
 
     def _emit_event(self, event: str, payload: str = "") -> None:
         handler = self._event_handler
